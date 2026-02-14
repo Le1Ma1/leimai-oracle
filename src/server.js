@@ -12,6 +12,14 @@ const { stripLockedData } = require("./denylist");
 const { MonetizationService } = require("./monetization");
 const { MinuteRateLimiter } = require("./ratelimit");
 
+const CHECKOUT_PROVIDER_ERROR_STATUS = {
+  RPC_TIMEOUT: 504,
+  RPC_RATE_LIMITED: 429,
+  RPC_BAD_RESPONSE: 502,
+  RPC_TX_NOT_FOUND: 404,
+  RPC_UNSUPPORTED_CHAIN: 400,
+};
+
 function pickIdempotencyKey(headers, body) {
   const fromHeader = headers["x-idempotency-key"];
   if (fromHeader !== undefined && String(fromHeader).trim() !== "") {
@@ -65,6 +73,21 @@ function readJsonBody(req) {
   });
 }
 
+function toCheckoutErrorEnvelope(error) {
+  const code = String(error && error.code ? error.code : "").trim();
+  if (Object.prototype.hasOwnProperty.call(CHECKOUT_PROVIDER_ERROR_STATUS, code)) {
+    return createErrorEnvelope(code, code, CHECKOUT_PROVIDER_ERROR_STATUS[code]);
+  }
+  if (code.startsWith("RPC_CONFIG_MISSING_")) {
+    return createErrorEnvelope("BAD_REQUEST", code, 400);
+  }
+  return createErrorEnvelope(
+    "BAD_REQUEST",
+    error && error.message ? error.message : "BAD_REQUEST",
+    400
+  );
+}
+
 function createAppServer(options = {}) {
   const limiter = options.limiter || new MinuteRateLimiter(10);
   const checkoutLimiter =
@@ -94,6 +117,12 @@ function createAppServer(options = {}) {
       ethereum_rpc_url: options.ethereumRpcUrl,
       rpc_fetch_impl: options.rpcFetchImpl,
       tron_api_key: options.tronApiKey,
+      rpc_request_timeout_ms: options.rpcRequestTimeoutMs,
+      rpc_max_attempts: options.rpcMaxAttempts,
+      rpc_base_backoff_ms: options.rpcBaseBackoffMs,
+      rpc_rate_limit_per_minute: options.rpcRateLimitPerMinute,
+      rpc_sleep_impl: options.rpcSleepImpl,
+      rpc_now_fn: options.rpcNowFn,
     });
 
   return http.createServer(async (req, res) => {
@@ -243,7 +272,7 @@ function createAppServer(options = {}) {
         });
         return sendJson(res, wrapped.status_code, wrapped.response);
       } catch (error) {
-        const err = createErrorEnvelope("BAD_REQUEST", error.message, 400);
+        const err = toCheckoutErrorEnvelope(error);
         return sendJson(res, err.status, err.payload);
       }
     }

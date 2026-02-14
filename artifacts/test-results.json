@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 79,
-    "pass": 79,
+    "total": 83,
+    "pass": 83,
     "fail": 0,
-    "generated_at": "2026-02-14T23:35:49.868Z"
+    "generated_at": "2026-02-14T23:53:55.392Z"
   },
   "results": [
     {
@@ -400,6 +400,26 @@
       "name": "V5-004 rpc-mode rejects recipient mismatch even when tx otherwise matches",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V5-004"
+    },
+    {
+      "name": "V6-001 timeout path returns deterministic error and order remains non-ACTIVE",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V6-001"
+    },
+    {
+      "name": "V6-002 rpc retry bounded by configured max attempts",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V6-002"
+    },
+    {
+      "name": "V6-003 rpc rate-limit guard triggers deterministic error",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V6-003"
+    },
+    {
+      "name": "V6-004 provider error mapping does not mutate order state",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V6-004"
     }
   ]
 }

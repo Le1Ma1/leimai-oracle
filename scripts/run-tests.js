@@ -2436,7 +2436,7 @@ async function run() {
                       transactionHash: "0xv5arbtx",
                       logIndex: "0x3",
                       topics: [
-                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55aeb00000000",
+                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
                         "0x0000000000000000000000001111111111111111111111111111111111111111",
                         `0x000000000000000000000000${arbRecipient
                           .toLowerCase()
@@ -2540,7 +2540,7 @@ async function run() {
                     transactionHash: "0xv5reject",
                     logIndex: "0x0",
                     topics: [
-                      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55aeb00000000",
+                      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
                       "0x0000000000000000000000001111111111111111111111111111111111111111",
                       `0x000000000000000000000000${wrongRecipient.slice(2)}`,
                     ],
@@ -2583,6 +2583,252 @@ async function run() {
       assert.equal(result.match_status, "UNMATCHED");
     },
     "scripts/run-tests.js#V5-004"
+  );
+
+  await runTest(
+    "V6-001 timeout path returns deterministic error and order remains non-ACTIVE",
+    async () => {
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v6-timeout-member",
+              "x-idempotency-key": "v6-timeout-create",
+              "x-now-ms": "1700000270000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "11.000000",
+              order_id: "v6-timeout-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v6-timeout-member",
+              "x-idempotency-key": "v6-timeout-confirm",
+              "x-now-ms": "1700000271000",
+            },
+            body: JSON.stringify({
+              order_id: "v6-timeout-order",
+              chain: "arbitrum",
+              tx_id: "0xv6timeout",
+            }),
+          });
+          assert.equal(confirm.status, 504);
+          assert.equal(confirm.json.error_code, "RPC_TIMEOUT");
+          assert.equal(confirm.json.message, "RPC_TIMEOUT");
+
+          const checkout = await fetchJson(
+            `${baseUrl}/checkout?order_id=v6-timeout-order`,
+            {
+              headers: {
+                "x-member-id": "v6-timeout-member",
+                "x-now-ms": "1700000272000",
+              },
+            }
+          );
+          assert.equal(checkout.status, 200);
+          assert.equal(checkout.json.state, ORDER_STATES.AWAITING_PAYMENT);
+          assert.equal(checkout.json.credited_unique_id, null);
+        },
+        {
+          chainMode: "rpc",
+          arbitrumRpcUrl: "http://arb.rpc.local",
+          tronRpcUrl: "http://tron.rpc.local",
+          ethereumRpcUrl: "http://eth.rpc.local",
+          rpcFetchImpl: () => {
+            throw new Error("request timed out");
+          },
+        }
+      );
+    },
+    "scripts/run-tests.js#V6-001"
+  );
+
+  await runTest(
+    "V6-002 rpc retry bounded by configured max attempts",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      let attempts = 0;
+      const backoffCalls = [];
+      const provider = createChainProvider({
+        mode: "rpc",
+        urls: {
+          tron: "http://tron.rpc.local",
+          arbitrum: "http://arb.rpc.local",
+          ethereum: "http://eth.rpc.local",
+        },
+        max_attempts: 3,
+        base_backoff_ms: 7,
+        sleep_impl: (ms) => {
+          backoffCalls.push(ms);
+        },
+        fetchImpl: () => {
+          attempts += 1;
+          throw new Error("request timed out");
+        },
+      });
+
+      assert.throws(
+        () =>
+          provider.getTransferEvidence({
+            chain: "arbitrum",
+            asset: "usdc",
+            tx_hash_or_id: "0xv6retry",
+            recipient_address: railsMap["USDC-L2"].recipient_address,
+            amount_expected_micro: 1000000,
+          }),
+        (error) => {
+          assert.equal(error.code, "RPC_TIMEOUT");
+          return true;
+        }
+      );
+      assert.equal(attempts, 3);
+      assert.deepEqual(backoffCalls, [7, 14]);
+    },
+    "scripts/run-tests.js#V6-002"
+  );
+
+  await runTest(
+    "V6-003 rpc rate-limit guard triggers deterministic error",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      let fetchCalls = 0;
+      const provider = createChainProvider({
+        mode: "rpc",
+        urls: {
+          tron: "http://tron.rpc.local",
+          arbitrum: "http://arb.rpc.local",
+          ethereum: "http://eth.rpc.local",
+        },
+        rate_limit_per_minute: 1,
+        now_fn: () => 1700000280000,
+        fetchImpl: (request) => {
+          fetchCalls += 1;
+          if (
+            request.transport === "jsonrpc" &&
+            request.body &&
+            request.body.method === "eth_getTransactionReceipt"
+          ) {
+            return {
+              jsonrpc: "2.0",
+              id: 1,
+              result: null,
+            };
+          }
+          throw new Error(`unexpected request ${JSON.stringify(request)}`);
+        },
+      });
+
+      assert.throws(
+        () =>
+          provider.getTransferEvidence({
+            chain: "arbitrum",
+            asset: "usdc",
+            tx_hash_or_id: "0xv6rate",
+            recipient_address: railsMap["USDC-L2"].recipient_address,
+            amount_expected_micro: 1200000,
+          }),
+        (error) => {
+          assert.equal(error.code, "RPC_TX_NOT_FOUND");
+          return true;
+        }
+      );
+
+      assert.throws(
+        () =>
+          provider.getTransferEvidence({
+            chain: "arbitrum",
+            asset: "usdc",
+            tx_hash_or_id: "0xv6rate",
+            recipient_address: railsMap["USDC-L2"].recipient_address,
+            amount_expected_micro: 1200000,
+          }),
+        (error) => {
+          assert.equal(error.code, "RPC_RATE_LIMITED");
+          return true;
+        }
+      );
+      assert.equal(fetchCalls, 1);
+    },
+    "scripts/run-tests.js#V6-003"
+  );
+
+  await runTest(
+    "V6-004 provider error mapping does not mutate order state",
+    async () => {
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v6-bad-response-member",
+              "x-idempotency-key": "v6-bad-create",
+              "x-now-ms": "1700000290000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "12.000000",
+              order_id: "v6-bad-response-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v6-bad-response-member",
+              "x-idempotency-key": "v6-bad-confirm",
+              "x-now-ms": "1700000291000",
+            },
+            body: JSON.stringify({
+              order_id: "v6-bad-response-order",
+              chain: "arbitrum",
+              tx_id: "0xv6bad",
+            }),
+          });
+          assert.equal(confirm.status, 502);
+          assert.equal(confirm.json.error_code, "RPC_BAD_RESPONSE");
+          assert.equal(confirm.json.message, "RPC_BAD_RESPONSE");
+
+          const checkout = await fetchJson(
+            `${baseUrl}/checkout?order_id=v6-bad-response-order`,
+            {
+              headers: {
+                "x-member-id": "v6-bad-response-member",
+                "x-now-ms": "1700000292000",
+              },
+            }
+          );
+          assert.equal(checkout.status, 200);
+          assert.equal(checkout.json.state, ORDER_STATES.AWAITING_PAYMENT);
+          assert.equal(checkout.json.credited_unique_id, null);
+          assert.equal(checkout.json.match_status, "UNPAID");
+        },
+        {
+          chainMode: "rpc",
+          arbitrumRpcUrl: "http://arb.rpc.local",
+          tronRpcUrl: "http://tron.rpc.local",
+          ethereumRpcUrl: "http://eth.rpc.local",
+          rpcFetchImpl: () => {
+            throw new Error("invalid rpc payload");
+          },
+        }
+      );
+    },
+    "scripts/run-tests.js#V6-004"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

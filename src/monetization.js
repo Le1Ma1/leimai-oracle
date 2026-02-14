@@ -16,7 +16,10 @@ const {
   normalizePaymentChain,
   resolveOrderRail,
 } = require("./payment_rails");
-const { createChainProviderFromEnv } = require("./chain_provider");
+const {
+  createChainProviderFromEnv,
+  normalizeProviderError,
+} = require("./chain_provider");
 const { buildChainUniqueId, computeExpectedAmount } = require("./settlement");
 
 const ORDER_STATES = {
@@ -27,6 +30,27 @@ const ORDER_STATES = {
 };
 
 const DEFAULT_STATE_VERSION = 1;
+const DETERMINISTIC_PROVIDER_ERROR_CODES = new Set([
+  "RPC_TIMEOUT",
+  "RPC_RATE_LIMITED",
+  "RPC_BAD_RESPONSE",
+  "RPC_TX_NOT_FOUND",
+  "RPC_UNSUPPORTED_CHAIN",
+]);
+
+function mapProviderError(error) {
+  const normalized = normalizeProviderError(error);
+  const normalizedCode = String(normalized.code || "").trim();
+  const code =
+    normalizedCode.startsWith("RPC_CONFIG_MISSING_") ||
+    DETERMINISTIC_PROVIDER_ERROR_CODES.has(normalizedCode)
+      ? normalizedCode
+      : "RPC_BAD_RESPONSE";
+  const mapped = new Error(code);
+  mapped.code = code;
+  mapped.details = normalized.details || null;
+  return mapped;
+}
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -527,13 +551,18 @@ class MonetizationService {
       throw new Error("chain provider does not implement getTransferEvidence");
     }
 
-    const evidence = this.chain_provider.getTransferEvidence({
-      chain,
-      asset: rail.payment_asset,
-      tx_hash_or_id: txId,
-      recipient_address: rail.recipient_address,
-      amount_expected_micro: order.amount_expected_micro,
-    });
+    let evidence = null;
+    try {
+      evidence = this.chain_provider.getTransferEvidence({
+        chain,
+        asset: rail.payment_asset,
+        tx_hash_or_id: txId,
+        recipient_address: rail.recipient_address,
+        amount_expected_micro: order.amount_expected_micro,
+      });
+    } catch (error) {
+      throw mapProviderError(error);
+    }
     if (!evidence) {
       order.match_status = "UNMATCHED";
       this.#saveState();
@@ -587,6 +616,7 @@ class MonetizationService {
     let checked = 0;
     let activated = 0;
     let updated_confirmations = 0;
+    const provider_errors = {};
     for (const order of this.orders.values()) {
       if (order.state !== ORDER_STATES.CONFIRMED || !order.credited_unique_id) {
         continue;
@@ -626,7 +656,9 @@ class MonetizationService {
             }
           }
         } catch (error) {
-          // Keep reconcile robust for partial provider outages/misconfig.
+          const mapped = mapProviderError(error);
+          provider_errors[mapped.code] =
+            (provider_errors[mapped.code] || 0) + 1;
         }
       }
 
@@ -646,6 +678,7 @@ class MonetizationService {
       checked,
       activated,
       updated_confirmations,
+      provider_errors,
     };
   }
 

@@ -36,6 +36,7 @@ function loadTestCoverage() {
       v3Coverage: new Map(),
       v4Coverage: new Map(),
       v5Coverage: new Map(),
+      v6Coverage: new Map(),
     };
   }
 
@@ -45,6 +46,7 @@ function loadTestCoverage() {
   const v3Coverage = new Map();
   const v4Coverage = new Map();
   const v5Coverage = new Map();
+  const v6Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -90,6 +92,15 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v6Match = result.name.match(/\b(V6-\d+)\b/);
+    if (v6Match) {
+      v6Coverage.set(v6Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
@@ -97,6 +108,7 @@ function loadTestCoverage() {
     v3Coverage,
     v4Coverage,
     v5Coverage,
+    v6Coverage,
   };
 }
 
@@ -232,6 +244,28 @@ function main() {
     );
   }
 
+  const v6Ids = Array.from(coverage.v6Coverage.keys()).sort();
+  const v6Rows = [];
+  let v6Pass = 0;
+  let v6Fail = 0;
+  for (const v6Id of v6Ids) {
+    const item = coverage.v6Coverage.get(v6Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v6Pass += 1;
+    } else {
+      v6Fail += 1;
+    }
+    v6Rows.push(
+      toRow([
+        v6Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -308,6 +342,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.5 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.6 RPC Hardening Checkpoint",
+    "",
+    `Summary: ${v6Pass} PASS / ${v6Fail} FAIL / ${v6Pass + v6Fail} TOTAL`,
+    "",
+    toRow(["V6_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v6Rows.length > 0
+      ? v6Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.6 evidence in test-results.json",
           ]),
         ]),
     "",
