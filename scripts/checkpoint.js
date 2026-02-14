@@ -34,6 +34,7 @@ function loadTestCoverage() {
       acCoverage: new Map(),
       v2Coverage: new Map(),
       v3Coverage: new Map(),
+      v4Coverage: new Map(),
     };
   }
 
@@ -41,6 +42,7 @@ function loadTestCoverage() {
   const acCoverage = new Map();
   const v2Coverage = new Map();
   const v3Coverage = new Map();
+  const v4Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -68,11 +70,21 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v4Match = result.name.match(/\b(V4-\d+)\b/);
+    if (v4Match) {
+      v4Coverage.set(v4Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
     v2Coverage,
     v3Coverage,
+    v4Coverage,
   };
 }
 
@@ -164,6 +176,28 @@ function main() {
     );
   }
 
+  const v4Ids = Array.from(coverage.v4Coverage.keys()).sort();
+  const v4Rows = [];
+  let v4Pass = 0;
+  let v4Fail = 0;
+  for (const v4Id of v4Ids) {
+    const item = coverage.v4Coverage.get(v4Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v4Pass += 1;
+    } else {
+      v4Fail += 1;
+    }
+    v4Rows.push(
+      toRow([
+        v4Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -206,6 +240,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.3 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.4 Chain-Reconcile Checkpoint",
+    "",
+    `Summary: ${v4Pass} PASS / ${v4Fail} FAIL / ${v4Pass + v4Fail} TOTAL`,
+    "",
+    toRow(["V4_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v4Rows.length > 0
+      ? v4Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.4 evidence in test-results.json",
           ]),
         ]),
     "",

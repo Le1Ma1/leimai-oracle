@@ -85,6 +85,9 @@ function createAppServer(options = {}) {
       enable_reconcile_timer: options.enableReconcileTimer || false,
       reconcile_interval_ms: options.reconcileIntervalMs || 15_000,
       getConfirmationsByUniqueId: options.getConfirmationsByUniqueId,
+      chain_provider: options.chainProvider,
+      chain_mock: options.chainMock,
+      chain_fixtures_dir: options.chainFixturesDir,
     });
 
   return http.createServer(async (req, res) => {

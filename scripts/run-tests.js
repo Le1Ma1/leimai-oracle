@@ -53,6 +53,7 @@ const { hasLockedData, stripLockedData } = require("../src/denylist");
 const { isValidPaymentRail } = require("../src/validators");
 const { chooseBestVariant, getVariantSet } = require("../src/variant");
 const { getPaymentRailsMap } = require("../src/payment_rails");
+const { FixtureChainProvider } = require("../src/chain_provider");
 const { renderArtifacts } = require("./render-artifacts");
 
 const RESULTS = [];
@@ -141,6 +142,15 @@ function mkOrder(engine, overrides = {}) {
     created_at_ms: 1_700_000_000_000,
   };
   return engine.createOrder({ ...base, ...overrides });
+}
+
+function deriveBaseAmountForExpected(orderId, expectedAmountMicro) {
+  const target = BigInt(expectedAmountMicro);
+  const jitter = jitterMicroFromOrderId(orderId);
+  if (target <= jitter) {
+    throw new Error(`target amount must be greater than jitter for order ${orderId}`);
+  }
+  return microToAmountString(target - jitter);
 }
 
 function mkTempStatePath(prefix) {
@@ -1995,6 +2005,275 @@ async function run() {
       assert.equal(paid.order.state, ORDER_STATES.ACTIVE);
     },
     "scripts/run-tests.js#V3-009"
+  );
+
+  await runTest(
+    "V4-001 TRON chain proof via /checkout/confirm activates order when confirmations are sufficient",
+    async () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const orderId = "v4-tron-endpoint-order";
+      const baseAmount = deriveBaseAmountForExpected(orderId, "25000000");
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v4-tron-member",
+              "x-idempotency-key": "v4-tron-create-key",
+              "x-now-ms": "1700000190000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDT-TRON",
+              base_amount: baseAmount,
+              order_id: orderId,
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v4-tron-member",
+              "x-idempotency-key": "v4-tron-confirm-key",
+              "x-now-ms": "1700000191000",
+            },
+            body: JSON.stringify({
+              order_id: orderId,
+              chain: "tron",
+              tx_id: "v4_tron_ok_tx",
+            }),
+          });
+          assert.equal(confirm.status, 200);
+          assert.equal(confirm.json.state, ORDER_STATES.ACTIVE);
+
+          const checkout = await fetchJson(`${baseUrl}/checkout?order_id=${orderId}`, {
+            headers: {
+              "x-member-id": "v4-tron-member",
+              "x-now-ms": "1700000192000",
+            },
+          });
+          assert.equal(checkout.status, 200);
+          assert.equal(checkout.json.state, ORDER_STATES.ACTIVE);
+        },
+        {
+          chainMock: true,
+          chainFixturesDir: fixturesDir,
+        }
+      );
+    },
+    "scripts/run-tests.js#V4-001"
+  );
+
+  await runTest(
+    "V4-002 Arbitrum chain proof activates USDC-L2 order when confirmations are sufficient",
+    () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const service = new MonetizationService({
+        chain_provider: new FixtureChainProvider({ fixtures_dir: fixturesDir }),
+      });
+      const orderId = "v4-arb-order";
+      const baseAmount = deriveBaseAmountForExpected(orderId, "35000000");
+      const order = service.createOrder({
+        member_id: "v4-arb-member",
+        requested_tier: "elite",
+        asset: "USDC-L2",
+        base_amount: baseAmount,
+        order_id: orderId,
+        created_at_ms: 1700000200000,
+      });
+      assert.equal(order.state, ORDER_STATES.AWAITING_PAYMENT);
+
+      const confirmed = service.confirmOrder({
+        order_id: orderId,
+        chain: "arbitrum",
+        tx_id: "v4_arb_ok_tx",
+      });
+      assert.equal(confirmed.state, ORDER_STATES.ACTIVE);
+      const unlocked = service.isFeatureUnlocked("v4-arb-member", "advanced_features");
+      assert.equal(unlocked.allowed, true);
+      assert.equal(unlocked.tier, "elite");
+    },
+    "scripts/run-tests.js#V4-002"
+  );
+
+  await runTest(
+    "V4-003 insufficient confirmations stay non-ACTIVE until reconcile updates same tx confirmations",
+    () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const service = new MonetizationService({
+        chain_provider: new FixtureChainProvider({ fixtures_dir: fixturesDir }),
+      });
+      const orderId = "v4-low-conf-order";
+      const baseAmount = deriveBaseAmountForExpected(orderId, "26000000");
+      service.createOrder({
+        member_id: "v4-low-conf-member",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: baseAmount,
+        order_id: orderId,
+        created_at_ms: 1700000210000,
+      });
+
+      const first = service.confirmOrder({
+        order_id: orderId,
+        chain: "tron",
+        tx_id: "v4_tron_low_conf_tx",
+      });
+      assert.equal(first.state, ORDER_STATES.CONFIRMED);
+
+      const beforeReconcile = service.getOrder(orderId);
+      assert.ok(beforeReconcile.credited_unique_id);
+      const reconcile = service.runReconcile({
+        now_ms: 1700000211000,
+        confirmations_by_unique_id: {
+          [beforeReconcile.credited_unique_id]: 20,
+        },
+      });
+      assert.equal(reconcile.activated, 1);
+
+      const second = service.confirmOrder({
+        order_id: orderId,
+        chain: "tron",
+        tx_id: "v4_tron_low_conf_tx",
+      });
+      assert.equal(second.state, ORDER_STATES.ACTIVE);
+
+      const activeTransitions = service
+        .getAuditTrail()
+        .filter(
+          (item) =>
+            item.kind === "ORDER_STATE_TRANSITION" &&
+            item.order_id === orderId &&
+            item.to_state === ORDER_STATES.ACTIVE
+        );
+      assert.equal(activeTransitions.length, 1);
+    },
+    "scripts/run-tests.js#V4-003"
+  );
+
+  await runTest(
+    "V4-004 wrong recipient transfer cannot activate order",
+    () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const service = new MonetizationService({
+        chain_provider: new FixtureChainProvider({ fixtures_dir: fixturesDir }),
+      });
+      const orderId = "v4-wrong-recipient-order";
+      const baseAmount = deriveBaseAmountForExpected(orderId, "27000000");
+      service.createOrder({
+        member_id: "v4-wrong-recipient-member",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: baseAmount,
+        order_id: orderId,
+        created_at_ms: 1700000220000,
+      });
+
+      const result = service.confirmOrder({
+        order_id: orderId,
+        chain: "tron",
+        tx_id: "v4_tron_wrong_recipient_tx",
+      });
+      assert.equal(result.state, ORDER_STATES.AWAITING_PAYMENT);
+      assert.equal(result.match_status, "UNMATCHED");
+    },
+    "scripts/run-tests.js#V4-004"
+  );
+
+  await runTest(
+    "V4-005 non-exact onchain amount (1 micro off) remains UNMATCHED",
+    () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const service = new MonetizationService({
+        chain_provider: new FixtureChainProvider({ fixtures_dir: fixturesDir }),
+      });
+      const orderId = "v4-non-exact-order";
+      const baseAmount = deriveBaseAmountForExpected(orderId, "28000000");
+      service.createOrder({
+        member_id: "v4-non-exact-member",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: baseAmount,
+        order_id: orderId,
+        created_at_ms: 1700000230000,
+      });
+
+      const result = service.confirmOrder({
+        order_id: orderId,
+        chain: "tron",
+        tx_id: "v4_tron_non_exact_tx",
+      });
+      assert.equal(result.state, ORDER_STATES.AWAITING_PAYMENT);
+      assert.equal(result.match_status, "UNMATCHED");
+      const unlocked = service.isFeatureUnlocked("v4-non-exact-member", "realtime_signal");
+      assert.equal(unlocked.allowed, false);
+    },
+    "scripts/run-tests.js#V4-005"
+  );
+
+  await runTest(
+    "V4-006 same unique_id replay cannot credit twice",
+    () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      const service = new MonetizationService({
+        chain_provider: new FixtureChainProvider({ fixtures_dir: fixturesDir }),
+      });
+
+      const firstOrderId = "v4-replay-first-order";
+      const firstBase = deriveBaseAmountForExpected(firstOrderId, "25000000");
+      service.createOrder({
+        member_id: "v4-replay-member-a",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: firstBase,
+        order_id: firstOrderId,
+        created_at_ms: 1700000240000,
+      });
+      const first = service.confirmOrder({
+        order_id: firstOrderId,
+        chain: "tron",
+        tx_id: "v4_tron_ok_tx",
+      });
+      assert.equal(first.state, ORDER_STATES.ACTIVE);
+
+      const secondOrderId = "v4-replay-second-order";
+      const secondBase = deriveBaseAmountForExpected(secondOrderId, "25000000");
+      service.createOrder({
+        member_id: "v4-replay-member-b",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: secondBase,
+        order_id: secondOrderId,
+        created_at_ms: 1700000241000,
+      });
+      const replay = service.confirmOrder({
+        order_id: secondOrderId,
+        chain: "tron",
+        tx_id: "v4_tron_ok_tx",
+      });
+      assert.equal(replay.state, ORDER_STATES.AWAITING_PAYMENT);
+
+      const activeTransitions = service
+        .getAuditTrail()
+        .filter(
+          (item) =>
+            item.kind === "ORDER_STATE_TRANSITION" &&
+            item.to_state === ORDER_STATES.ACTIVE
+        );
+      assert.equal(activeTransitions.length, 1);
+      assert.equal(activeTransitions[0].order_id, firstOrderId);
+
+      const secondUnlocked = service.isFeatureUnlocked(
+        "v4-replay-member-b",
+        "realtime_signal"
+      );
+      assert.equal(secondUnlocked.allowed, false);
+    },
+    "scripts/run-tests.js#V4-006"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

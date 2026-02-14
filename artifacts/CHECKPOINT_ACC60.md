@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-14T22:43:25.572Z
+Generated: 2026-02-14T23:04:37.819Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -89,3 +89,16 @@ Summary: 9 PASS / 0 FAIL / 9 TOTAL
 | V3-007 | PASS | scripts/run-tests.js#V3-007 | Automated check passed |
 | V3-008 | PASS | scripts/run-tests.js#V3-008 | Automated check passed |
 | V3-009 | PASS | scripts/run-tests.js#V3-009 | Automated check passed |
+
+# v0.4 Chain-Reconcile Checkpoint
+
+Summary: 6 PASS / 0 FAIL / 6 TOTAL
+
+| V4_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V4-001 | PASS | scripts/run-tests.js#V4-001 | Automated check passed |
+| V4-002 | PASS | scripts/run-tests.js#V4-002 | Automated check passed |
+| V4-003 | PASS | scripts/run-tests.js#V4-003 | Automated check passed |
+| V4-004 | PASS | scripts/run-tests.js#V4-004 | Automated check passed |
+| V4-005 | PASS | scripts/run-tests.js#V4-005 | Automated check passed |
+| V4-006 | PASS | scripts/run-tests.js#V4-006 | Automated check passed |

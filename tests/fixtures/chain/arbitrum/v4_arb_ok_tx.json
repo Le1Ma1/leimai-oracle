@@ -1,0 +1,14 @@
+{
+  "chain": "arbitrum",
+  "tx_id": "0xv4_arb_ok_tx",
+  "confirmations": 15,
+  "events": [
+    {
+      "log_index": 0,
+      "asset": "usdc",
+      "recipient_address": "0x1E90d2675915F4510eEEb6Bb9eecEECC2E320179",
+      "amount_micro": "35000000",
+      "timestamp": "2026-02-14T00:20:00.000Z"
+    }
+  ]
+}

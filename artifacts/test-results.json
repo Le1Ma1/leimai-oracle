@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 69,
-    "pass": 69,
+    "total": 75,
+    "pass": 75,
     "fail": 0,
-    "generated_at": "2026-02-14T22:43:25.491Z"
+    "generated_at": "2026-02-14T23:04:37.777Z"
   },
   "results": [
     {
@@ -350,6 +350,36 @@
       "name": "V3-009 payment verification enforces strict chain/asset allowlist pairs",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V3-009"
+    },
+    {
+      "name": "V4-001 TRON chain proof via /checkout/confirm activates order when confirmations are sufficient",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-001"
+    },
+    {
+      "name": "V4-002 Arbitrum chain proof activates USDC-L2 order when confirmations are sufficient",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-002"
+    },
+    {
+      "name": "V4-003 insufficient confirmations stay non-ACTIVE until reconcile updates same tx confirmations",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-003"
+    },
+    {
+      "name": "V4-004 wrong recipient transfer cannot activate order",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-004"
+    },
+    {
+      "name": "V4-005 non-exact onchain amount (1 micro off) remains UNMATCHED",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-005"
+    },
+    {
+      "name": "V4-006 same unique_id replay cannot credit twice",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V4-006"
     }
   ]
 }

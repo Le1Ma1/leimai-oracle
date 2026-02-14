@@ -1,0 +1,14 @@
+{
+  "chain": "tron",
+  "tx_id": "v4_tron_low_conf_tx",
+  "confirmations": 5,
+  "events": [
+    {
+      "event_index": 0,
+      "asset": "usdt",
+      "recipient_address": "TUmegztKiXNjhmifi7wJ8SdMkowY2s7Avw",
+      "amount_micro": "26000000",
+      "timestamp": "2026-02-14T00:05:00.000Z"
+    }
+  ]
+}
