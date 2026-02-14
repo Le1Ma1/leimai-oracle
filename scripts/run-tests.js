@@ -52,6 +52,7 @@ const { parseTf } = require("../src/validators");
 const { hasLockedData, stripLockedData } = require("../src/denylist");
 const { isValidPaymentRail } = require("../src/validators");
 const { chooseBestVariant, getVariantSet } = require("../src/variant");
+const { getPaymentRailsMap } = require("../src/payment_rails");
 const { renderArtifacts } = require("./render-artifacts");
 
 const RESULTS = [];
@@ -1881,6 +1882,119 @@ async function run() {
       assert.equal(activeTransitions.length, 1);
     },
     "scripts/run-tests.js#V3-007"
+  );
+
+  await runTest(
+    "V3-008 GET /checkout recipient_address is always sourced from rail SoT",
+    async () => {
+      const railsMap = getPaymentRailsMap();
+      const expectedRecipient = railsMap["USDT-TRON"].recipient_address;
+      await withServer(async (baseUrl) => {
+        const created = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-recipient",
+            "x-idempotency-key": "v3-recipient-create-1",
+            "x-now-ms": "1700000170000",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "4.500000",
+            order_id: "v3-recipient-order-1",
+            recipient_address: "ATTACKER_ADDRESS_OVERRIDE",
+          }),
+        });
+        assert.equal(created.status, 200);
+        assert.equal(created.json.recipient_address, expectedRecipient);
+        assert.notEqual(created.json.recipient_address, "ATTACKER_ADDRESS_OVERRIDE");
+
+        const checkout = await fetchJson(
+          `${baseUrl}/checkout?order_id=v3-recipient-order-1`,
+          {
+            headers: {
+              "x-member-id": "v3-recipient",
+              "x-now-ms": "1700000170100",
+            },
+          }
+        );
+        assert.equal(checkout.status, 200);
+        assert.equal(checkout.json.recipient_address, expectedRecipient);
+      });
+    },
+    "scripts/run-tests.js#V3-008"
+  );
+
+  await runTest(
+    "V3-009 payment verification enforces strict chain/asset allowlist pairs",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      const service = new MonetizationService();
+      const tronOrder = service.createOrder({
+        member_id: "v3-pair-member",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: "10.500000",
+        order_id: "v3-pair-tron-order",
+        created_at_ms: 1700000180000,
+      });
+
+      assert.throws(() =>
+        service.submitPayment({
+          order_id: tronOrder.order_id,
+          chain: "ethereum",
+          asset_symbol: "usdt",
+          transaction_id: "v3pairtxbad1",
+          event_index: 0,
+          onchain_amount_micro: tronOrder.amount_expected_micro,
+          confirmations: 20,
+          occurred_at_ms: 1700000181000,
+        })
+      );
+
+      assert.throws(() =>
+        service.submitPayment({
+          order_id: tronOrder.order_id,
+          chain: "tron",
+          asset_symbol: "usdc",
+          transaction_id: "v3pairtxbad2",
+          event_index: 1,
+          onchain_amount_micro: tronOrder.amount_expected_micro,
+          confirmations: 20,
+          occurred_at_ms: 1700000182000,
+        })
+      );
+
+      const l1Order = service.createOrder({
+        member_id: "v3-pair-member-2",
+        requested_tier: "elite",
+        asset: "ERC20",
+        payment_asset: "usdc",
+        base_amount: "11.000000",
+        order_id: "v3-pair-erc20-order",
+        created_at_ms: 1700000183000,
+      });
+      assert.equal(l1Order.payment_chain, "ethereum");
+      assert.equal(l1Order.payment_asset, "usdc");
+      assert.equal(
+        l1Order.recipient_address,
+        railsMap.ERC20.recipient_address
+      );
+
+      const paid = service.submitPayment({
+        order_id: l1Order.order_id,
+        chain: "ethereum",
+        asset_symbol: "usdc",
+        tx_hash: "0xv3pairgood",
+        log_index: 3,
+        onchain_amount_micro: l1Order.amount_expected_micro,
+        confirmations: 12,
+        occurred_at_ms: 1700000184000,
+      });
+      assert.equal(paid.order.state, ORDER_STATES.ACTIVE);
+    },
+    "scripts/run-tests.js#V3-009"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

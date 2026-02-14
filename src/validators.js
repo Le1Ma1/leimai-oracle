@@ -4,8 +4,15 @@ const {
   VARIANTS,
   WINDOWS,
 } = require("./constants");
+const {
+  getPaymentRailKeys,
+  isAllowedChainAssetPair,
+  isValidPaymentRail: isValidPaymentRailFromMap,
+  normalizePaymentAsset,
+  normalizePaymentChain,
+} = require("./payment_rails");
 
-const PAYMENT_RAILS = ["USDT-TRON", "USDC-L2", "ERC20"];
+const PAYMENT_RAILS = getPaymentRailKeys();
 const LOCALES = ["zh-Hant", "en", "zh-Hans"];
 const CHANNELS = ["email", "telegram", "webhook"];
 
@@ -38,7 +45,7 @@ function parseModality(rawValue) {
 }
 
 function isValidPaymentRail(value) {
-  return PAYMENT_RAILS.includes(value);
+  return isValidPaymentRailFromMap(value);
 }
 
 function normalizeLocale(rawValue) {
@@ -74,4 +81,7 @@ module.exports = {
   parseTf,
   parseVariant,
   parseWindow,
+  normalizePaymentAsset,
+  normalizePaymentChain,
+  isAllowedChainAssetPair,
 };

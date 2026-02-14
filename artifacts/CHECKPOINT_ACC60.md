@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-14T21:44:22.893Z
+Generated: 2026-02-14T22:43:25.572Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -76,7 +76,7 @@ Summary: 7 PASS / 0 FAIL / 7 TOTAL
 
 # v0.3 Hardening Checkpoint
 
-Summary: 7 PASS / 0 FAIL / 7 TOTAL
+Summary: 9 PASS / 0 FAIL / 9 TOTAL
 
 | V3_ID | Status | Evidence Artifact | Note |
 | --- | --- | --- | --- |
@@ -87,3 +87,5 @@ Summary: 7 PASS / 0 FAIL / 7 TOTAL
 | V3-005 | PASS | scripts/run-tests.js#V3-005 | Automated check passed |
 | V3-006 | PASS | scripts/run-tests.js#V3-006 | Automated check passed |
 | V3-007 | PASS | scripts/run-tests.js#V3-007 | Automated check passed |
+| V3-008 | PASS | scripts/run-tests.js#V3-008 | Automated check passed |
+| V3-009 | PASS | scripts/run-tests.js#V3-009 | Automated check passed |

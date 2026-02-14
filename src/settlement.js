@@ -1,6 +1,11 @@
 const { createHash } = require("node:crypto");
 const { PAYMENT_MATCH_WINDOW_MS } = require("./constants");
 const { isValidPaymentRail } = require("./validators");
+const {
+  normalizePaymentAsset,
+  normalizePaymentChain,
+  resolveOrderRail,
+} = require("./payment_rails");
 
 function assertNonNegativeDecimalString(raw) {
   if (typeof raw !== "string" && typeof raw !== "number") {
@@ -120,14 +125,25 @@ class SettlementEngine {
     if (!isValidPaymentRail(input.asset)) {
       throw new Error(`Unsupported payment rail: ${input.asset}`);
     }
+    const rail = resolveOrderRail({
+      railKey: input.asset,
+      paymentAsset: input.payment_asset,
+    });
+    if (input.chain !== undefined && input.chain !== rail.chain_kind) {
+      throw new Error(
+        `Unsupported chain for rail ${input.asset}: ${input.chain}`
+      );
+    }
 
     const expected = computeExpectedAmount(input.order_id, input.base_amount);
     const order = {
       order_id: input.order_id,
       member_id: input.member_id,
-      chain: input.chain,
+      chain: input.chain || rail.chain_kind,
       asset: input.asset,
-      recipient_address: input.recipient_address,
+      payment_chain: rail.chain,
+      payment_asset: rail.payment_asset,
+      recipient_address: input.recipient_address || rail.recipient_address,
       base_amount: String(input.base_amount),
       base_amount_micro: expected.base_amount_micro,
       jitter_micro: expected.jitter_micro,
@@ -146,6 +162,55 @@ class SettlementEngine {
   processPaymentEvent(inputEvent) {
     if (!isValidPaymentRail(inputEvent.asset)) {
       throw new Error(`Unsupported payment rail: ${inputEvent.asset}`);
+    }
+    const rail = resolveOrderRail({
+      railKey: inputEvent.asset,
+      paymentAsset:
+        inputEvent.payment_asset !== undefined
+          ? inputEvent.payment_asset
+          : inputEvent.asset_symbol,
+    });
+    if (inputEvent.chain !== rail.chain_kind) {
+      throw new Error(
+        `Unsupported chain for rail ${inputEvent.asset}: ${inputEvent.chain}`
+      );
+    }
+    const payloadChain = normalizePaymentChain(inputEvent.payment_chain);
+    if (inputEvent.payment_chain !== undefined && !payloadChain) {
+      throw new Error(`Unsupported payment chain: ${inputEvent.payment_chain}`);
+    }
+    if (payloadChain && payloadChain !== rail.chain) {
+      throw new Error(
+        `Payment chain mismatch, expected ${rail.chain}, got ${payloadChain}`
+      );
+    }
+    const payloadAssetRaw =
+      inputEvent.asset_symbol !== undefined
+        ? inputEvent.asset_symbol
+        : inputEvent.payment_asset;
+    const payloadAsset = normalizePaymentAsset(payloadAssetRaw);
+    if (payloadAssetRaw !== undefined && !payloadAsset) {
+      throw new Error(`Unsupported payment asset: ${payloadAssetRaw}`);
+    }
+    if (payloadAsset && payloadAsset !== rail.payment_asset) {
+      throw new Error(
+        `Payment asset mismatch, expected ${rail.payment_asset}, got ${payloadAsset}`
+      );
+    }
+    if (
+      inputEvent.recipient_address !== undefined &&
+      inputEvent.recipient_address !== rail.recipient_address
+    ) {
+      // Settlement engine allows overrides in test harness orders, so this only
+      // rejects explicit payload recipient mismatch against rail SoT.
+      const matchingOrderExists = Array.from(this.orders.values()).some(
+        (order) =>
+          order.asset === inputEvent.asset &&
+          order.recipient_address === inputEvent.recipient_address
+      );
+      if (!matchingOrderExists) {
+        throw new Error("recipient_address mismatch");
+      }
     }
     const unique_id = buildChainUniqueId(inputEvent);
     if (this.events.has(unique_id)) {

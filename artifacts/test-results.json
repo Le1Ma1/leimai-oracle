@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 67,
-    "pass": 67,
+    "total": 69,
+    "pass": 69,
     "fail": 0,
-    "generated_at": "2026-02-14T21:44:22.851Z"
+    "generated_at": "2026-02-14T22:43:25.491Z"
   },
   "results": [
     {
@@ -340,6 +340,16 @@
       "name": "V3-007 reconcile activates missed confirmations and remains deduped on rerun",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V3-007"
+    },
+    {
+      "name": "V3-008 GET /checkout recipient_address is always sourced from rail SoT",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-008"
+    },
+    {
+      "name": "V3-009 payment verification enforces strict chain/asset allowlist pairs",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-009"
     }
   ]
 }

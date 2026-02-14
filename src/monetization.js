@@ -7,10 +7,15 @@ const { buildPageMeta } = require("./i18n_meta");
 const { PAYMENT_MATCH_WINDOW_MS } = require("./constants");
 const { isConfirmationSufficient } = require("./confirmations");
 const {
-  PAYMENT_RAILS,
-  isValidPaymentRail,
   normalizeLocale,
 } = require("./validators");
+const {
+  getPaymentRailKeys,
+  getPublicRails,
+  normalizePaymentAsset,
+  normalizePaymentChain,
+  resolveOrderRail,
+} = require("./payment_rails");
 const { buildChainUniqueId, computeExpectedAmount } = require("./settlement");
 
 const ORDER_STATES = {
@@ -18,24 +23,6 @@ const ORDER_STATES = {
   AWAITING_PAYMENT: "AWAITING_PAYMENT",
   CONFIRMED: "CONFIRMED",
   ACTIVE: "ACTIVE",
-};
-
-const RAIL_CONFIG = {
-  "USDT-TRON": {
-    chain: "TRON",
-    chain_profile: "TRON",
-    recipient_address: "TRON_WALLET_1",
-  },
-  "USDC-L2": {
-    chain: "EVM",
-    chain_profile: "L2",
-    recipient_address: "EVM_WALLET_1",
-  },
-  ERC20: {
-    chain: "EVM",
-    chain_profile: "ERC20",
-    recipient_address: "EVM_WALLET_L1",
-  },
 };
 
 const DEFAULT_STATE_VERSION = 1;
@@ -107,17 +94,6 @@ function normalizeRequestedTier(rawTier) {
     throw new Error("requested_tier must be pro|elite|buyout");
   }
   return normalized;
-}
-
-function normalizeRail(rawAsset) {
-  if (!isValidPaymentRail(rawAsset)) {
-    throw new Error(`Unsupported payment rail: ${rawAsset}`);
-  }
-  return rawAsset;
-}
-
-function resolveRailConfig(asset) {
-  return RAIL_CONFIG[asset];
 }
 
 class MonetizationService {
@@ -210,7 +186,8 @@ class MonetizationService {
     return {
       page: "plan",
       locale: normalizedLocale,
-      rails: [...PAYMENT_RAILS],
+      rails: getPaymentRailKeys(),
+      rail_options: getPublicRails(),
       plans: [
         {
           tier: "free",
@@ -242,8 +219,22 @@ class MonetizationService {
       throw new Error("member_id is required");
     }
     const requested_tier = normalizeRequestedTier(input.requested_tier);
-    const asset = normalizeRail(input.asset);
-    const config = resolveRailConfig(asset);
+    const rail = resolveOrderRail({
+      railKey: input.asset,
+      paymentAsset:
+        input.payment_asset !== undefined
+          ? input.payment_asset
+          : input.asset_symbol,
+    });
+    const requestedChain = normalizePaymentChain(input.chain);
+    if (input.chain !== undefined && !requestedChain) {
+      throw new Error(`Unsupported payment chain: ${input.chain}`);
+    }
+    if (requestedChain && requestedChain !== rail.chain) {
+      throw new Error(
+        `Payment chain mismatch, expected ${rail.chain}, got ${requestedChain}`
+      );
+    }
     const base_amount = String(input.base_amount ?? "");
     if (!base_amount || !/^\d+(\.\d+)?$/.test(base_amount)) {
       throw new Error("base_amount must be a non-negative decimal");
@@ -256,10 +247,12 @@ class MonetizationService {
       member_id,
       requested_tier,
       unlocked_tier: "free",
-      asset,
-      chain: config.chain,
-      chain_profile: config.chain_profile,
-      recipient_address: input.recipient_address || config.recipient_address,
+      asset: rail.rail_key,
+      payment_chain: rail.chain,
+      payment_asset: rail.payment_asset,
+      chain: rail.chain_kind,
+      chain_profile: rail.chain_profile,
+      recipient_address: rail.recipient_address,
       base_amount,
       base_amount_micro: expected.base_amount_micro.toString(),
       jitter_micro: expected.jitter_micro.toString(),
@@ -285,7 +278,18 @@ class MonetizationService {
 
   getOrder(order_id) {
     const order = this.orders.get(order_id);
-    return order ? this.#serializeOrder(order) : null;
+    if (!order) {
+      return null;
+    }
+    const rail = resolveOrderRail({
+      railKey: order.asset,
+      paymentAsset: order.payment_asset,
+    });
+    const serialized = this.#serializeOrder(order);
+    serialized.recipient_address = rail.recipient_address;
+    serialized.payment_chain = rail.chain;
+    serialized.payment_asset = rail.payment_asset;
+    return serialized;
   }
 
   submitPayment(input) {
@@ -296,6 +300,41 @@ class MonetizationService {
     if (!order) {
       throw new Error("order not found");
     }
+    const rail = resolveOrderRail({
+      railKey: order.asset,
+      paymentAsset: order.payment_asset,
+    });
+    const payloadChain = normalizePaymentChain(input.chain);
+    if (input.chain !== undefined && !payloadChain) {
+      throw new Error(`Unsupported payment chain: ${input.chain}`);
+    }
+    if (payloadChain && payloadChain !== rail.chain) {
+      throw new Error(
+        `Payment chain mismatch, expected ${rail.chain}, got ${payloadChain}`
+      );
+    }
+    const payloadAssetRaw =
+      input.asset_symbol !== undefined
+        ? input.asset_symbol
+        : input.payment_asset !== undefined
+          ? input.payment_asset
+          : undefined;
+    const payloadAsset = normalizePaymentAsset(payloadAssetRaw);
+    if (payloadAssetRaw !== undefined && !payloadAsset) {
+      throw new Error(`Unsupported payment asset: ${payloadAssetRaw}`);
+    }
+    if (payloadAsset && payloadAsset !== rail.payment_asset) {
+      throw new Error(
+        `Payment asset mismatch, expected ${rail.payment_asset}, got ${payloadAsset}`
+      );
+    }
+    if (
+      input.recipient_address !== undefined &&
+      input.recipient_address !== rail.recipient_address
+    ) {
+      throw new Error("recipient_address mismatch");
+    }
+
     const occurred_at_ms = toMs(input.occurred_at_ms ?? Date.now(), "occurred_at_ms");
 
     const unique_id = buildChainUniqueId({
@@ -325,7 +364,7 @@ class MonetizationService {
       order_id: order.order_id,
       chain: order.chain,
       asset: order.asset,
-      recipient_address: order.recipient_address,
+      recipient_address: rail.recipient_address,
       occurred_at_ms,
       onchain_amount_micro: onchain_amount_micro.toString(),
       confirmations,
@@ -621,6 +660,19 @@ class MonetizationService {
     }
 
     for (const order of parsed.orders || []) {
+      try {
+        const rail = resolveOrderRail({
+          railKey: order.asset,
+          paymentAsset: order.payment_asset,
+        });
+        order.recipient_address = rail.recipient_address;
+        order.payment_chain = rail.chain;
+        order.payment_asset = rail.payment_asset;
+        order.chain = rail.chain_kind;
+        order.chain_profile = rail.chain_profile;
+      } catch (error) {
+        // Keep backward compatibility for legacy records while still loading state.
+      }
       this.orders.set(order.order_id, order);
     }
     for (const entry of parsed.entitlements || []) {
