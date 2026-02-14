@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 75,
-    "pass": 75,
+    "total": 79,
+    "pass": 79,
     "fail": 0,
-    "generated_at": "2026-02-14T23:04:37.777Z"
+    "generated_at": "2026-02-14T23:35:49.868Z"
   },
   "results": [
     {
@@ -380,6 +380,26 @@
       "name": "V4-006 same unique_id replay cannot credit twice",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V4-006"
+    },
+    {
+      "name": "V5-001 CHAIN_MODE=mock never attempts network calls",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V5-001"
+    },
+    {
+      "name": "V5-002 CHAIN_MODE=rpc missing RPC URL returns deterministic error and preserves order state",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V5-002"
+    },
+    {
+      "name": "V5-003 rpc-mode evidence normalization shape and unique_id formats",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V5-003"
+    },
+    {
+      "name": "V5-004 rpc-mode rejects recipient mismatch even when tx otherwise matches",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V5-004"
     }
   ]
 }

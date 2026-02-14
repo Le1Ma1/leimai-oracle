@@ -35,6 +35,7 @@ function loadTestCoverage() {
       v2Coverage: new Map(),
       v3Coverage: new Map(),
       v4Coverage: new Map(),
+      v5Coverage: new Map(),
     };
   }
 
@@ -43,6 +44,7 @@ function loadTestCoverage() {
   const v2Coverage = new Map();
   const v3Coverage = new Map();
   const v4Coverage = new Map();
+  const v5Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -79,12 +81,22 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v5Match = result.name.match(/\b(V5-\d+)\b/);
+    if (v5Match) {
+      v5Coverage.set(v5Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
     v2Coverage,
     v3Coverage,
     v4Coverage,
+    v5Coverage,
   };
 }
 
@@ -198,6 +210,28 @@ function main() {
     );
   }
 
+  const v5Ids = Array.from(coverage.v5Coverage.keys()).sort();
+  const v5Rows = [];
+  let v5Pass = 0;
+  let v5Fail = 0;
+  for (const v5Id of v5Ids) {
+    const item = coverage.v5Coverage.get(v5Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v5Pass += 1;
+    } else {
+      v5Fail += 1;
+    }
+    v5Rows.push(
+      toRow([
+        v5Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -257,6 +291,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.4 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.5 RPC Mode Checkpoint",
+    "",
+    `Summary: ${v5Pass} PASS / ${v5Fail} FAIL / ${v5Pass + v5Fail} TOTAL`,
+    "",
+    toRow(["V5_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v5Rows.length > 0
+      ? v5Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.5 evidence in test-results.json",
           ]),
         ]),
     "",

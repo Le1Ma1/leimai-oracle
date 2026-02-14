@@ -87,7 +87,13 @@ function createAppServer(options = {}) {
       getConfirmationsByUniqueId: options.getConfirmationsByUniqueId,
       chain_provider: options.chainProvider,
       chain_mock: options.chainMock,
+      chain_mode: options.chainMode,
       chain_fixtures_dir: options.chainFixturesDir,
+      tron_rpc_url: options.tronRpcUrl,
+      arbitrum_rpc_url: options.arbitrumRpcUrl,
+      ethereum_rpc_url: options.ethereumRpcUrl,
+      rpc_fetch_impl: options.rpcFetchImpl,
+      tron_api_key: options.tronApiKey,
     });
 
   return http.createServer(async (req, res) => {

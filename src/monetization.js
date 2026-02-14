@@ -86,13 +86,6 @@ function parseMicro(rawValue) {
   throw new Error("onchain_amount_micro must be a non-negative integer");
 }
 
-function sameRecipient(chain, left, right) {
-  if (chain === "arbitrum" || chain === "ethereum") {
-    return String(left || "").toLowerCase() === String(right || "").toLowerCase();
-  }
-  return String(left || "") === String(right || "");
-}
-
 function hasChainProofInput(input) {
   return (
     input.chain !== undefined ||
@@ -401,6 +394,14 @@ class MonetizationService {
       outcome: "RECEIVED",
       candidate_order_ids: [],
       payer_wallet: input.payer_wallet || null,
+      transaction_id: input.transaction_id || null,
+      tx_hash: input.tx_hash || null,
+      event_index:
+        input.event_index !== undefined
+          ? toConfirmations(input.event_index)
+          : input.log_index !== undefined
+            ? toConfirmations(input.log_index)
+            : null,
     };
 
     if (onchain_amount_micro !== BigInt(order.amount_expected_micro)) {
@@ -522,61 +523,53 @@ class MonetizationService {
     if (!this.chain_provider) {
       throw new Error("chain provider is not configured");
     }
+    if (typeof this.chain_provider.getTransferEvidence !== "function") {
+      throw new Error("chain provider does not implement getTransferEvidence");
+    }
 
-    const transfers = this.chain_provider.getTransfersByTx({
+    const evidence = this.chain_provider.getTransferEvidence({
       chain,
-      tx_id: txId,
+      asset: rail.payment_asset,
+      tx_hash_or_id: txId,
+      recipient_address: rail.recipient_address,
+      amount_expected_micro: order.amount_expected_micro,
     });
-    if (!Array.isArray(transfers) || transfers.length === 0) {
+    if (!evidence) {
       order.match_status = "UNMATCHED";
       this.#saveState();
       return this.#serializeOrder(order);
     }
-
-    const exactMatches = transfers.filter((event) => {
-      if (normalizePaymentAsset(event.asset) !== rail.payment_asset) {
-        return false;
-      }
-      if (!sameRecipient(chain, event.recipient_address, rail.recipient_address)) {
-        return false;
-      }
-      return String(event.amount_micro) === String(order.amount_expected_micro);
-    });
-
-    if (exactMatches.length === 0) {
+    if (normalizePaymentAsset(evidence.asset) !== rail.payment_asset) {
       order.match_status = "UNMATCHED";
       this.#saveState();
       return this.#serializeOrder(order);
     }
-
-    const event = exactMatches
-      .slice()
-      .sort((a, b) => String(a.unique_id).localeCompare(String(b.unique_id)))[0];
-    const occurredAtMs = event.timestamp
-      ? Date.parse(event.timestamp)
+    const occurredAtMs = Number.isFinite(Number(evidence.observed_at_epoch))
+      ? Number(evidence.observed_at_epoch)
       : Date.now();
     const paymentInput = {
       order_id: order.order_id,
       chain,
       asset_symbol: rail.payment_asset,
       recipient_address: rail.recipient_address,
-      onchain_amount_micro: String(event.amount_micro),
+      onchain_amount_micro: String(evidence.amount_micro),
       confirmations:
-        event.confirmations !== undefined
-          ? toConfirmations(event.confirmations)
+        evidence.confirmations !== undefined
+          ? toConfirmations(evidence.confirmations)
           : toConfirmations(input.confirmations),
       occurred_at_ms: Number.isFinite(occurredAtMs) ? occurredAtMs : Date.now(),
       tx_id: txId,
     };
     if (chain === "tron") {
-      paymentInput.transaction_id = txId;
+      paymentInput.transaction_id =
+        evidence.transaction_id || evidence.tx_hash || txId;
       paymentInput.event_index = toConfirmations(
-        event.event_index !== undefined ? event.event_index : event.log_index
+        evidence.event_index
       );
     } else {
-      paymentInput.tx_hash = txId;
+      paymentInput.tx_hash = evidence.tx_hash || evidence.transaction_id || txId;
       paymentInput.log_index = toConfirmations(
-        event.log_index !== undefined ? event.log_index : event.event_index
+        evidence.event_index
       );
     }
 
@@ -611,6 +604,29 @@ class MonetizationService {
           payment.confirmations = nextConfirmations;
           order.confirmations = nextConfirmations;
           updated_confirmations += 1;
+        }
+      } else if (this.chain_provider && typeof this.chain_provider.getTransferEvidence === "function") {
+        try {
+          const txId = payment.transaction_id || payment.tx_hash;
+          if (txId) {
+            const evidence = this.chain_provider.getTransferEvidence({
+              chain: order.payment_chain,
+              asset: order.payment_asset,
+              tx_hash_or_id: txId,
+              recipient_address: order.recipient_address,
+              amount_expected_micro: order.amount_expected_micro,
+            });
+            if (evidence) {
+              const nextConfirmations = toConfirmations(evidence.confirmations);
+              if (nextConfirmations > payment.confirmations) {
+                payment.confirmations = nextConfirmations;
+                order.confirmations = nextConfirmations;
+                updated_confirmations += 1;
+              }
+            }
+          }
+        } catch (error) {
+          // Keep reconcile robust for partial provider outages/misconfig.
         }
       }
 

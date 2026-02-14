@@ -53,7 +53,11 @@ const { hasLockedData, stripLockedData } = require("../src/denylist");
 const { isValidPaymentRail } = require("../src/validators");
 const { chooseBestVariant, getVariantSet } = require("../src/variant");
 const { getPaymentRailsMap } = require("../src/payment_rails");
-const { FixtureChainProvider } = require("../src/chain_provider");
+const {
+  FixtureChainProvider,
+  createChainProvider,
+  createChainProviderFromEnv,
+} = require("../src/chain_provider");
 const { renderArtifacts } = require("./render-artifacts");
 
 const RESULTS = [];
@@ -161,6 +165,30 @@ function mkTempStatePath(prefix) {
     filePath: path.join(tempDir, "state.json"),
     cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
   };
+}
+
+function withTempEnv(pairs, fn) {
+  const backup = new Map();
+  for (const key of Object.keys(pairs)) {
+    backup.set(key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined);
+    const value = pairs[key];
+    if (value === undefined || value === null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = String(value);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of backup.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 async function withServer(fn, serverOptions = {}) {
@@ -2274,6 +2302,287 @@ async function run() {
       assert.equal(secondUnlocked.allowed, false);
     },
     "scripts/run-tests.js#V4-006"
+  );
+
+  await runTest(
+    "V5-001 CHAIN_MODE=mock never attempts network calls",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      let rpcCalls = 0;
+      withTempEnv(
+        {
+          CHAIN_MODE: "mock",
+          TRON_RPC_URL: "http://invalid-tron-rpc.local",
+          ARBITRUM_RPC_URL: "http://invalid-arb-rpc.local",
+        },
+        () => {
+          const provider = createChainProviderFromEnv({
+            rpc_fetch_impl: () => {
+              rpcCalls += 1;
+              throw new Error("network should not be called in mock mode");
+            },
+            chain_fixtures_dir: path.join(process.cwd(), "tests", "fixtures", "chain"),
+          });
+          const evidence = provider.getTransferEvidence({
+            chain: "tron",
+            asset: "usdt",
+            tx_hash_or_id: "v4_tron_ok_tx",
+            recipient_address: railsMap["USDT-TRON"].recipient_address,
+            amount_expected_micro: 25000000,
+          });
+          assert.ok(evidence);
+          assert.equal(evidence.unique_id, "v4_tron_ok_tx:0");
+        }
+      );
+      assert.equal(rpcCalls, 0);
+    },
+    "scripts/run-tests.js#V5-001"
+  );
+
+  await runTest(
+    "V5-002 CHAIN_MODE=rpc missing RPC URL returns deterministic error and preserves order state",
+    async () => {
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v5-missing-url",
+              "x-idempotency-key": "v5-create-1",
+              "x-now-ms": "1700000250000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "10.000000",
+              order_id: "v5-missing-url-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v5-missing-url",
+              "x-idempotency-key": "v5-confirm-1",
+              "x-now-ms": "1700000251000",
+            },
+            body: JSON.stringify({
+              order_id: "v5-missing-url-order",
+              chain: "arbitrum",
+              tx_id: "0xv5missing",
+            }),
+          });
+          assert.equal(confirm.status, 400);
+          assert.equal(confirm.json.error_code, "BAD_REQUEST");
+          assert.equal(
+            String(confirm.json.message).includes("RPC_CONFIG_MISSING_ARBITRUM_RPC_URL"),
+            true
+          );
+
+          const checkout = await fetchJson(
+            `${baseUrl}/checkout?order_id=v5-missing-url-order`,
+            {
+              headers: {
+                "x-member-id": "v5-missing-url",
+                "x-now-ms": "1700000252000",
+              },
+            }
+          );
+          assert.equal(checkout.status, 200);
+          assert.equal(checkout.json.state, ORDER_STATES.AWAITING_PAYMENT);
+        },
+        {
+          chainMode: "rpc",
+          tronRpcUrl: null,
+          arbitrumRpcUrl: null,
+          ethereumRpcUrl: null,
+        }
+      );
+    },
+    "scripts/run-tests.js#V5-002"
+  );
+
+  await runTest(
+    "V5-003 rpc-mode evidence normalization shape and unique_id formats",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      const arbRecipient = railsMap["USDC-L2"].recipient_address;
+      const tronRecipient = railsMap["USDT-TRON"].recipient_address;
+      const arbAmount = 1234500;
+      const tronAmount = 2500000;
+      const arbAmountHex = `0x${arbAmount.toString(16).padStart(64, "0")}`;
+      const provider = createChainProvider({
+        mode: "rpc",
+        urls: {
+          tron: "http://tron.rpc.local",
+          arbitrum: "http://arb.rpc.local",
+          ethereum: "http://eth.rpc.local",
+        },
+        fetchImpl: (request) => {
+          if (request.transport === "jsonrpc") {
+            const method = request.body.method;
+            if (method === "eth_getTransactionReceipt") {
+              return {
+                jsonrpc: "2.0",
+                id: 1,
+                result: {
+                  blockNumber: "0x64",
+                  logs: [
+                    {
+                      transactionHash: "0xv5arbtx",
+                      logIndex: "0x3",
+                      topics: [
+                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55aeb00000000",
+                        "0x0000000000000000000000001111111111111111111111111111111111111111",
+                        `0x000000000000000000000000${arbRecipient
+                          .toLowerCase()
+                          .slice(2)}`,
+                      ],
+                      data: arbAmountHex,
+                    },
+                  ],
+                },
+              };
+            }
+            if (method === "eth_blockNumber") {
+              return {
+                jsonrpc: "2.0",
+                id: 1,
+                result: "0x6f",
+              };
+            }
+          }
+          if (request.transport === "http" && String(request.url).includes("/v1/transactions/v5trontx/events")) {
+            return {
+              confirmations: 21,
+              data: [
+                {
+                  event_index: 2,
+                  asset: "usdt",
+                  recipient_address: tronRecipient,
+                  amount_micro: tronAmount,
+                  timestamp: "2026-02-14T00:00:00.000Z",
+                },
+              ],
+            };
+          }
+          throw new Error(`unexpected request ${JSON.stringify(request)}`);
+        },
+      });
+
+      const arbEvidence = provider.getTransferEvidence({
+        chain: "arbitrum",
+        asset: "usdc",
+        tx_hash_or_id: "0xv5arbtx",
+        recipient_address: arbRecipient,
+        amount_expected_micro: arbAmount,
+      });
+      assert.ok(arbEvidence);
+      assert.equal(arbEvidence.chain, "arbitrum");
+      assert.equal(arbEvidence.asset, "usdc");
+      assert.equal(arbEvidence.unique_id, "0xv5arbtx:3");
+      assert.equal(arbEvidence.tx_hash, "0xv5arbtx");
+      assert.equal(arbEvidence.transaction_id, null);
+      assert.equal(Number.isInteger(arbEvidence.amount_micro), true);
+      assert.equal(Number.isInteger(arbEvidence.confirmations), true);
+      assert.equal(Number.isInteger(arbEvidence.event_index), true);
+      assert.equal(Number.isInteger(arbEvidence.observed_at_epoch), true);
+
+      const tronEvidence = provider.getTransferEvidence({
+        chain: "tron",
+        asset: "usdt",
+        tx_hash_or_id: "v5trontx",
+        recipient_address: tronRecipient,
+        amount_expected_micro: tronAmount,
+      });
+      assert.ok(tronEvidence);
+      assert.equal(tronEvidence.chain, "tron");
+      assert.equal(tronEvidence.asset, "usdt");
+      assert.equal(tronEvidence.unique_id, "v5trontx:2");
+      assert.equal(tronEvidence.transaction_id, "v5trontx");
+      assert.equal(tronEvidence.tx_hash, null);
+      assert.equal(Number.isInteger(tronEvidence.amount_micro), true);
+      assert.equal(Number.isInteger(tronEvidence.confirmations), true);
+      assert.equal(Number.isInteger(tronEvidence.event_index), true);
+      assert.equal(Number.isInteger(tronEvidence.observed_at_epoch), true);
+    },
+    "scripts/run-tests.js#V5-003"
+  );
+
+  await runTest(
+    "V5-004 rpc-mode rejects recipient mismatch even when tx otherwise matches",
+    () => {
+      const railsMap = getPaymentRailsMap();
+      const orderId = "v5-rpc-recipient-order";
+      const expectedAmount = 4200000;
+      const baseAmount = deriveBaseAmountForExpected(orderId, String(expectedAmount));
+      const wrongRecipient = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const provider = createChainProvider({
+        mode: "rpc",
+        urls: {
+          arbitrum: "http://arb.rpc.local",
+          tron: "http://tron.rpc.local",
+          ethereum: "http://eth.rpc.local",
+        },
+        fetchImpl: (request) => {
+          if (request.transport === "jsonrpc" && request.body.method === "eth_getTransactionReceipt") {
+            return {
+              jsonrpc: "2.0",
+              id: 1,
+              result: {
+                blockNumber: "0x64",
+                logs: [
+                  {
+                    transactionHash: "0xv5reject",
+                    logIndex: "0x0",
+                    topics: [
+                      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55aeb00000000",
+                      "0x0000000000000000000000001111111111111111111111111111111111111111",
+                      `0x000000000000000000000000${wrongRecipient.slice(2)}`,
+                    ],
+                    data: `0x${expectedAmount.toString(16).padStart(64, "0")}`,
+                  },
+                ],
+              },
+            };
+          }
+          if (request.transport === "jsonrpc" && request.body.method === "eth_blockNumber") {
+            return {
+              jsonrpc: "2.0",
+              id: 1,
+              result: "0x70",
+            };
+          }
+          throw new Error("unexpected rpc call");
+        },
+      });
+
+      const service = new MonetizationService({
+        chain_provider: provider,
+      });
+      const created = service.createOrder({
+        member_id: "v5-rpc-reject-member",
+        requested_tier: "pro",
+        asset: "USDC-L2",
+        base_amount: baseAmount,
+        order_id: orderId,
+        created_at_ms: 1700000260000,
+      });
+      assert.equal(created.recipient_address, railsMap["USDC-L2"].recipient_address);
+
+      const result = service.confirmOrder({
+        order_id: orderId,
+        chain: "arbitrum",
+        tx_id: "0xv5reject",
+      });
+      assert.equal(result.state, ORDER_STATES.AWAITING_PAYMENT);
+      assert.equal(result.match_status, "UNMATCHED");
+    },
+    "scripts/run-tests.js#V5-004"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

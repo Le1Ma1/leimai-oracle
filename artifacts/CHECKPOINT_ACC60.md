@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-14T23:04:37.819Z
+Generated: 2026-02-14T23:35:49.934Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -102,3 +102,14 @@ Summary: 6 PASS / 0 FAIL / 6 TOTAL
 | V4-004 | PASS | scripts/run-tests.js#V4-004 | Automated check passed |
 | V4-005 | PASS | scripts/run-tests.js#V4-005 | Automated check passed |
 | V4-006 | PASS | scripts/run-tests.js#V4-006 | Automated check passed |
+
+# v0.5 RPC Mode Checkpoint
+
+Summary: 4 PASS / 0 FAIL / 4 TOTAL
+
+| V5_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V5-001 | PASS | scripts/run-tests.js#V5-001 | Automated check passed |
+| V5-002 | PASS | scripts/run-tests.js#V5-002 | Automated check passed |
+| V5-003 | PASS | scripts/run-tests.js#V5-003 | Automated check passed |
+| V5-004 | PASS | scripts/run-tests.js#V5-004 | Automated check passed |
