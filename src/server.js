@@ -1,4 +1,5 @@
 const http = require("node:http");
+const path = require("node:path");
 const { URL } = require("node:url");
 
 const {
@@ -11,8 +12,21 @@ const { stripLockedData } = require("./denylist");
 const { MonetizationService } = require("./monetization");
 const { MinuteRateLimiter } = require("./ratelimit");
 
-const limiter = new MinuteRateLimiter(10);
-const monetization = new MonetizationService();
+function pickIdempotencyKey(headers, body) {
+  const fromHeader = headers["x-idempotency-key"];
+  if (fromHeader !== undefined && String(fromHeader).trim() !== "") {
+    return String(fromHeader).trim();
+  }
+  if (
+    body &&
+    typeof body === "object" &&
+    body.idempotency_key !== undefined &&
+    String(body.idempotency_key).trim() !== ""
+  ) {
+    return String(body.idempotency_key).trim();
+  }
+  return "";
+}
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(stripLockedData(payload));
@@ -51,7 +65,28 @@ function readJsonBody(req) {
   });
 }
 
-function createAppServer() {
+function createAppServer(options = {}) {
+  const limiter = options.limiter || new MinuteRateLimiter(10);
+  const checkoutLimiter =
+    options.checkoutLimiter || new MinuteRateLimiter(10);
+  const monetization =
+    options.monetization ||
+    new MonetizationService({
+      persistence_path:
+        options.persistencePath ||
+        (options.enablePersistence
+          ? path.join(
+              process.cwd(),
+              "artifacts",
+              "state",
+              "monetization_state.json"
+            )
+          : null),
+      enable_reconcile_timer: options.enableReconcileTimer || false,
+      reconcile_interval_ms: options.reconcileIntervalMs || 15_000,
+      getConfirmationsByUniqueId: options.getConfirmationsByUniqueId,
+    });
+
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const query = queryToObject(url.searchParams);
@@ -75,6 +110,18 @@ function createAppServer() {
 
     if (!query.tier && req.headers["x-tier"]) {
       query.tier = req.headers["x-tier"];
+    }
+
+    if (url.pathname.startsWith("/checkout")) {
+      const checkoutRate = checkoutLimiter.check(memberId, nowMs);
+      if (!checkoutRate.allowed) {
+        const limited = createErrorEnvelope(
+          "RATE_LIMITED",
+          "checkout per-member per-minute limit exceeded",
+          429
+        );
+        return sendJson(res, limited.status, limited.payload);
+      }
     }
 
     const authError = maybeRequireAuth(query, req.headers);
@@ -126,12 +173,24 @@ function createAppServer() {
     if (req.method === "POST" && url.pathname === "/checkout/create") {
       try {
         const body = await readJsonBody(req);
-        const created = monetization.createOrder({
-          ...body,
-          member_id: body.member_id || req.headers["x-member-id"] || "anon",
-          created_at_ms: nowMs,
+        const idempotencyKey = pickIdempotencyKey(req.headers, body);
+        const memberIdForCheckout = body.member_id || req.headers["x-member-id"] || "anon";
+        const wrapped = monetization.executeIdempotent({
+          scope: "checkout/create",
+          member_id: memberIdForCheckout,
+          idempotency_key: idempotencyKey,
+          request_body: {
+            ...body,
+            member_id: memberIdForCheckout,
+          },
+          handler: () =>
+            monetization.createOrder({
+              ...body,
+              member_id: memberIdForCheckout,
+              created_at_ms: nowMs,
+            }),
         });
-        return sendJson(res, 200, created);
+        return sendJson(res, wrapped.status_code, wrapped.response);
       } catch (error) {
         const err = createErrorEnvelope("BAD_REQUEST", error.message, 400);
         return sendJson(res, err.status, err.payload);
@@ -141,11 +200,20 @@ function createAppServer() {
     if (req.method === "POST" && url.pathname === "/checkout/pay") {
       try {
         const body = await readJsonBody(req);
-        const result = monetization.submitPayment({
-          ...body,
-          occurred_at_ms: body.occurred_at_ms || nowMs,
+        const idempotencyKey = pickIdempotencyKey(req.headers, body);
+        const memberIdForCheckout = req.headers["x-member-id"] || "anon";
+        const wrapped = monetization.executeIdempotent({
+          scope: "checkout/pay",
+          member_id: memberIdForCheckout,
+          idempotency_key: idempotencyKey,
+          request_body: body,
+          handler: () =>
+            monetization.submitPayment({
+              ...body,
+              occurred_at_ms: body.occurred_at_ms || nowMs,
+            }),
         });
-        return sendJson(res, 200, result);
+        return sendJson(res, wrapped.status_code, wrapped.response);
       } catch (error) {
         const err = createErrorEnvelope("BAD_REQUEST", error.message, 400);
         return sendJson(res, err.status, err.payload);
@@ -155,8 +223,16 @@ function createAppServer() {
     if (req.method === "POST" && url.pathname === "/checkout/confirm") {
       try {
         const body = await readJsonBody(req);
-        const result = monetization.confirmOrder(body);
-        return sendJson(res, 200, result);
+        const idempotencyKey = pickIdempotencyKey(req.headers, body);
+        const memberIdForCheckout = req.headers["x-member-id"] || "anon";
+        const wrapped = monetization.executeIdempotent({
+          scope: "checkout/confirm",
+          member_id: memberIdForCheckout,
+          idempotency_key: idempotencyKey,
+          request_body: body,
+          handler: () => monetization.confirmOrder(body),
+        });
+        return sendJson(res, wrapped.status_code, wrapped.response);
       } catch (error) {
         const err = createErrorEnvelope("BAD_REQUEST", error.message, 400);
         return sendJson(res, err.status, err.payload);
@@ -170,7 +246,10 @@ function createAppServer() {
 
 if (require.main === module) {
   const port = Number(process.env.PORT || "3000");
-  const server = createAppServer();
+  const server = createAppServer({
+    enablePersistence: true,
+    enableReconcileTimer: true,
+  });
   server.listen(port, () => {
     // Keep stdout minimal for automation.
     process.stdout.write(`mdp server listening on ${port}\n`);
@@ -179,5 +258,4 @@ if (require.main === module) {
 
 module.exports = {
   createAppServer,
-  monetization,
 };

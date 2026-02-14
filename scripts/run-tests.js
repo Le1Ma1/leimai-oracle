@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const { buildRankingsLikePayload, maybeRequireAuth } = require("../src/api");
@@ -141,8 +142,18 @@ function mkOrder(engine, overrides = {}) {
   return engine.createOrder({ ...base, ...overrides });
 }
 
-async function withServer(fn) {
-  const server = createAppServer();
+function mkTempStatePath(prefix) {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `mdp-${prefix}-`)
+  );
+  return {
+    filePath: path.join(tempDir, "state.json"),
+    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+  };
+}
+
+async function withServer(fn, serverOptions = {}) {
+  const server = createAppServer(serverOptions);
   await new Promise((resolve) => server.listen(0, resolve));
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -1468,6 +1479,7 @@ async function run() {
             "content-type": "application/json",
             "x-member-id": "v2-endpoint",
             "x-now-ms": "1700000010000",
+            "x-idempotency-key": "v2-create-1",
           },
           body: JSON.stringify({
             requested_tier: "pro",
@@ -1486,6 +1498,7 @@ async function run() {
             "content-type": "application/json",
             "x-member-id": "v2-endpoint",
             "x-now-ms": "1700000011000",
+            "x-idempotency-key": "v2-pay-1",
           },
           body: JSON.stringify({
             order_id: "v2-endpoint-order",
@@ -1514,6 +1527,360 @@ async function run() {
       });
     },
     "scripts/run-tests.js#V2-007"
+  );
+
+  await runTest(
+    "V3-001 idempotency on /checkout/create replays same response and no duplicate order",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const first = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-create",
+            "x-idempotency-key": "v3-create-key-1",
+            "x-now-ms": "1700000100000",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "13.000000",
+            order_id: "v3-idem-order-1",
+          }),
+        });
+        const replay = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-create",
+            "x-idempotency-key": "v3-create-key-1",
+            "x-now-ms": "1700000100001",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "13.000000",
+            order_id: "v3-idem-order-1",
+          }),
+        });
+        assert.equal(first.status, 200);
+        assert.equal(replay.status, 200);
+        assert.deepEqual(replay.json, first.json);
+      });
+    },
+    "scripts/run-tests.js#V3-001"
+  );
+
+  await runTest(
+    "V3-002 idempotency keys apply on /checkout/pay and /checkout/confirm",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const create = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-pay",
+            "x-idempotency-key": "v3-create-key-2",
+            "x-now-ms": "1700000110000",
+          },
+          body: JSON.stringify({
+            requested_tier: "elite",
+            asset: "USDC-L2",
+            base_amount: "20.000000",
+            order_id: "v3-idem-order-2",
+          }),
+        });
+        assert.equal(create.status, 200);
+
+        const payBody = {
+          order_id: "v3-idem-order-2",
+          tx_hash: "0xv3idem2",
+          log_index: 1,
+          onchain_amount_micro: create.json.amount_expected_micro,
+          confirmations: 11,
+        };
+        const payA = await fetchJson(`${baseUrl}/checkout/pay`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-pay",
+            "x-idempotency-key": "v3-pay-key-2",
+            "x-now-ms": "1700000110100",
+          },
+          body: JSON.stringify(payBody),
+        });
+        const payB = await fetchJson(`${baseUrl}/checkout/pay`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-pay",
+            "x-idempotency-key": "v3-pay-key-2",
+            "x-now-ms": "1700000110200",
+          },
+          body: JSON.stringify(payBody),
+        });
+        assert.equal(payA.status, 200);
+        assert.equal(payB.status, 200);
+        assert.deepEqual(payB.json, payA.json);
+        assert.equal(payA.json.order.state, "CONFIRMED");
+
+        const confirmBody = {
+          order_id: "v3-idem-order-2",
+          confirmations: 12,
+        };
+        const confirmA = await fetchJson(`${baseUrl}/checkout/confirm`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-pay",
+            "x-idempotency-key": "v3-confirm-key-2",
+            "x-now-ms": "1700000110300",
+          },
+          body: JSON.stringify(confirmBody),
+        });
+        const confirmB = await fetchJson(`${baseUrl}/checkout/confirm`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-pay",
+            "x-idempotency-key": "v3-confirm-key-2",
+            "x-now-ms": "1700000110400",
+          },
+          body: JSON.stringify(confirmBody),
+        });
+        assert.equal(confirmA.status, 200);
+        assert.equal(confirmB.status, 200);
+        assert.deepEqual(confirmB.json, confirmA.json);
+        assert.equal(confirmA.json.state, "ACTIVE");
+      });
+    },
+    "scripts/run-tests.js#V3-002"
+  );
+
+  await runTest(
+    "V3-003 idempotency conflict with same key and different payload is rejected",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const first = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-conflict",
+            "x-idempotency-key": "v3-create-key-3",
+            "x-now-ms": "1700000120000",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "10.000000",
+            order_id: "v3-conflict-order",
+          }),
+        });
+        assert.equal(first.status, 200);
+
+        const second = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-idem-conflict",
+            "x-idempotency-key": "v3-create-key-3",
+            "x-now-ms": "1700000120010",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "10.100000",
+            order_id: "v3-conflict-order",
+          }),
+        });
+        assert.equal(second.status, 400);
+        assert.equal(second.json.error_code, "BAD_REQUEST");
+      });
+    },
+    "scripts/run-tests.js#V3-003"
+  );
+
+  await runTest(
+    "V3-004 checkout endpoint rate-limit blocks 11th request in same minute",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const nowMs = "1700000130000";
+        for (let i = 0; i < 10; i += 1) {
+          const response = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v3-rate-limit",
+              "x-idempotency-key": `v3-rate-key-${i}`,
+              "x-now-ms": nowMs,
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDT-TRON",
+              base_amount: "5.000000",
+              order_id: `v3-rate-order-${i}`,
+            }),
+          });
+          assert.equal(response.status, 200);
+        }
+        const blocked = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v3-rate-limit",
+            "x-idempotency-key": "v3-rate-key-11",
+            "x-now-ms": nowMs,
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDT-TRON",
+            base_amount: "5.000000",
+            order_id: "v3-rate-order-11",
+          }),
+        });
+        assert.equal(blocked.status, 429);
+        assert.equal(blocked.json.error_code, "RATE_LIMITED");
+      });
+    },
+    "scripts/run-tests.js#V3-004"
+  );
+
+  await runTest(
+    "V3-005 persisted orders and entitlements survive service restart",
+    () => {
+      const temp = mkTempStatePath("persist");
+      try {
+        const serviceA = new MonetizationService({
+          persistence_path: temp.filePath,
+        });
+        const order = serviceA.createOrder({
+          member_id: "v3-persist-member",
+          requested_tier: "pro",
+          asset: "USDT-TRON",
+          base_amount: "9.000000",
+          order_id: "v3-persist-order",
+          created_at_ms: 1700000140000,
+        });
+        const paid = serviceA.submitPayment({
+          order_id: order.order_id,
+          transaction_id: "v3persisttx",
+          event_index: 0,
+          onchain_amount_micro: order.amount_expected_micro,
+          confirmations: 20,
+          occurred_at_ms: 1700000141000,
+        });
+        assert.equal(paid.order.state, ORDER_STATES.ACTIVE);
+        serviceA.dispose();
+
+        const serviceB = new MonetizationService({
+          persistence_path: temp.filePath,
+        });
+        const loadedOrder = serviceB.getOrder("v3-persist-order");
+        assert.ok(loadedOrder);
+        assert.equal(loadedOrder.state, ORDER_STATES.ACTIVE);
+        const unlocked = serviceB.isFeatureUnlocked(
+          "v3-persist-member",
+          "realtime_signal"
+        );
+        assert.equal(unlocked.allowed, true);
+        assert.equal(unlocked.tier, "pro");
+        serviceB.dispose();
+      } finally {
+        temp.cleanup();
+      }
+    },
+    "scripts/run-tests.js#V3-005"
+  );
+
+  await runTest(
+    "V3-006 audit trail records CREATED->AWAITING_PAYMENT->CONFIRMED->ACTIVE",
+    () => {
+      const service = new MonetizationService();
+      const order = service.createOrder({
+        member_id: "v3-audit",
+        requested_tier: "pro",
+        asset: "USDT-TRON",
+        base_amount: "6.000000",
+        order_id: "v3-audit-order",
+        created_at_ms: 1700000150000,
+      });
+      service.submitPayment({
+        order_id: order.order_id,
+        transaction_id: "v3audittx",
+        event_index: 0,
+        onchain_amount_micro: order.amount_expected_micro,
+        confirmations: 20,
+        occurred_at_ms: 1700000151000,
+      });
+
+      const transitions = service
+        .getAuditTrail()
+        .filter(
+          (item) =>
+            item.kind === "ORDER_STATE_TRANSITION" &&
+            item.order_id === order.order_id
+        )
+        .map((item) => `${item.from_state}->${item.to_state}`);
+      assert.deepEqual(transitions, [
+        "CREATED->AWAITING_PAYMENT",
+        "AWAITING_PAYMENT->CONFIRMED",
+        "CONFIRMED->ACTIVE",
+      ]);
+    },
+    "scripts/run-tests.js#V3-006"
+  );
+
+  await runTest(
+    "V3-007 reconcile activates missed confirmations and remains deduped on rerun",
+    () => {
+      const service = new MonetizationService();
+      const order = service.createOrder({
+        member_id: "v3-reconcile",
+        requested_tier: "elite",
+        asset: "USDC-L2",
+        base_amount: "17.000000",
+        order_id: "v3-reconcile-order",
+        created_at_ms: 1700000160000,
+      });
+      const pay = service.submitPayment({
+        order_id: order.order_id,
+        tx_hash: "0xv3reconcile",
+        log_index: 2,
+        onchain_amount_micro: order.amount_expected_micro,
+        confirmations: 1,
+        occurred_at_ms: 1700000161000,
+      });
+      assert.equal(pay.order.state, ORDER_STATES.CONFIRMED);
+
+      const first = service.runReconcile({
+        now_ms: 1700000162000,
+        confirmations_by_unique_id: {
+          [pay.settlement.unique_id]: 12,
+        },
+      });
+      assert.equal(first.activated, 1);
+      const postFirst = service.getOrder(order.order_id);
+      assert.equal(postFirst.state, ORDER_STATES.ACTIVE);
+
+      const second = service.runReconcile({
+        now_ms: 1700000163000,
+        confirmations_by_unique_id: {
+          [pay.settlement.unique_id]: 12,
+        },
+      });
+      assert.equal(second.activated, 0);
+
+      const activeTransitions = service
+        .getAuditTrail()
+        .filter(
+          (item) =>
+            item.kind === "ORDER_STATE_TRANSITION" &&
+            item.order_id === order.order_id &&
+            item.to_state === ORDER_STATES.ACTIVE
+        );
+      assert.equal(activeTransitions.length, 1);
+    },
+    "scripts/run-tests.js#V3-007"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

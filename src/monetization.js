@@ -1,8 +1,17 @@
-const { buildPageMeta, buildLocalizedPath } = require("./i18n_meta");
-const { SettlementEngine, computeExpectedAmount } = require("./settlement");
-const { getRequiredConfirmations } = require("./confirmations");
-const { checkEntitlement } = require("./entitlements");
-const { isValidPaymentRail, normalizeLocale } = require("./validators");
+const fs = require("node:fs");
+const path = require("node:path");
+const { randomUUID, createHash } = require("node:crypto");
+
+const { checkEntitlement, normalizeTier } = require("./entitlements");
+const { buildPageMeta } = require("./i18n_meta");
+const { PAYMENT_MATCH_WINDOW_MS } = require("./constants");
+const { isConfirmationSufficient } = require("./confirmations");
+const {
+  PAYMENT_RAILS,
+  isValidPaymentRail,
+  normalizeLocale,
+} = require("./validators");
+const { buildChainUniqueId, computeExpectedAmount } = require("./settlement");
 
 const ORDER_STATES = {
   CREATED: "CREATED",
@@ -11,265 +20,640 @@ const ORDER_STATES = {
   ACTIVE: "ACTIVE",
 };
 
-const TIER_RANK = {
-  free: 0,
-  pro: 1,
-  elite: 2,
-  buyout: 3,
+const RAIL_CONFIG = {
+  "USDT-TRON": {
+    chain: "TRON",
+    chain_profile: "TRON",
+    recipient_address: "TRON_WALLET_1",
+  },
+  "USDC-L2": {
+    chain: "EVM",
+    chain_profile: "L2",
+    recipient_address: "EVM_WALLET_1",
+  },
+  ERC20: {
+    chain: "EVM",
+    chain_profile: "ERC20",
+    recipient_address: "EVM_WALLET_L1",
+  },
 };
 
-function railToSettlementChain(asset) {
-  if (asset === "USDT-TRON") {
-    return "TRON";
-  }
-  return "EVM";
+const DEFAULT_STATE_VERSION = 1;
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function railToChainProfile(asset) {
-  if (asset === "USDT-TRON") {
-    return "TRON";
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
   }
-  if (asset === "USDC-L2") {
-    return "L2";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
   }
-  if (asset === "ERC20") {
-    return "ERC20";
-  }
-  return null;
+  const keys = Object.keys(value).sort();
+  const parts = keys.map(
+    (key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`
+  );
+  return `{${parts.join(",")}}`;
 }
 
-function chooseHigherTier(current, candidate) {
-  const currentTier = current || "free";
-  const candidateTier = candidate || "free";
-  return TIER_RANK[candidateTier] > TIER_RANK[currentTier]
-    ? candidateTier
-    : currentTier;
+function hashRequestBody(value) {
+  const normalized = stableStringify(value ?? {});
+  return createHash("sha256").update(normalized, "utf8").digest("hex");
+}
+
+function toMs(rawValue, fieldName) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${fieldName} must be a non-negative number`);
+  }
+  return Math.floor(value);
+}
+
+function toConfirmations(rawValue) {
+  const value = Number(rawValue ?? 0);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("confirmations must be a non-negative number");
+  }
+  return Math.floor(value);
+}
+
+function parseMicro(rawValue) {
+  if (typeof rawValue === "bigint") {
+    if (rawValue < 0n) {
+      throw new Error("onchain_amount_micro must be >= 0");
+    }
+    return rawValue;
+  }
+  if (typeof rawValue === "number") {
+    if (!Number.isInteger(rawValue) || rawValue < 0) {
+      throw new Error("onchain_amount_micro must be a non-negative integer");
+    }
+    return BigInt(rawValue);
+  }
+  if (typeof rawValue === "string" && /^\d+$/.test(rawValue)) {
+    return BigInt(rawValue);
+  }
+  throw new Error("onchain_amount_micro must be a non-negative integer");
+}
+
+function normalizeRequestedTier(rawTier) {
+  const normalized = normalizeTier(rawTier);
+  if (!normalized) {
+    throw new Error("requested_tier is invalid");
+  }
+  if (normalized === "free") {
+    throw new Error("requested_tier must be pro|elite|buyout");
+  }
+  return normalized;
+}
+
+function normalizeRail(rawAsset) {
+  if (!isValidPaymentRail(rawAsset)) {
+    throw new Error(`Unsupported payment rail: ${rawAsset}`);
+  }
+  return rawAsset;
+}
+
+function resolveRailConfig(asset) {
+  return RAIL_CONFIG[asset];
 }
 
 class MonetizationService {
-  constructor() {
+  constructor(options = {}) {
+    this.persistence_path =
+      options.persistence_path && String(options.persistence_path).trim() !== ""
+        ? String(options.persistence_path)
+        : null;
     this.orders = new Map();
-    this.orderCounter = 0;
-    this.settlement = new SettlementEngine();
-    this.memberTier = new Map();
+    this.entitlements = new Map();
+    this.payments = new Map();
+    this.idempotency = new Map();
+    this.audit_trail = [];
+    this.reconcile_timer = null;
+    this.reconcile_provider = null;
+
+    if (this.persistence_path) {
+      this.#loadState();
+    }
+
+    if (options.enable_reconcile_timer) {
+      this.startReconcileTimer({
+        interval_ms: options.reconcile_interval_ms,
+        getConfirmationsByUniqueId: options.getConfirmationsByUniqueId,
+      });
+    }
   }
 
-  buildPlanPayload({ locale = "zh-Hant" }) {
-    const normalizedLocale = normalizeLocale(locale) || "zh-Hant";
+  dispose() {
+    this.stopReconcileTimer();
+  }
+
+  executeIdempotent({
+    scope,
+    member_id,
+    idempotency_key,
+    request_body,
+    status_code = 200,
+    handler,
+  }) {
+    if (!scope) {
+      throw new Error("scope is required");
+    }
+    if (!member_id) {
+      throw new Error("member_id is required");
+    }
+    if (!idempotency_key || String(idempotency_key).trim() === "") {
+      throw new Error("x-idempotency-key is required");
+    }
+    if (typeof handler !== "function") {
+      throw new Error("handler must be a function");
+    }
+
+    const fullKey = `${scope}:${member_id}:${String(idempotency_key).trim()}`;
+    const request_hash = hashRequestBody(request_body);
+    const existing = this.idempotency.get(fullKey);
+    if (existing) {
+      if (existing.request_hash !== request_hash) {
+        throw new Error("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD");
+      }
+      return {
+        replayed: true,
+        status_code: existing.status_code,
+        response: deepClone(existing.response),
+      };
+    }
+
+    const response = handler();
+    this.idempotency.set(fullKey, {
+      key: fullKey,
+      request_hash,
+      status_code,
+      response: deepClone(response),
+      created_at_ms: Date.now(),
+    });
+    this.#saveState();
+    return {
+      replayed: false,
+      status_code,
+      response,
+    };
+  }
+
+  buildPlanPayload({ locale } = {}) {
+    const normalizedLocale = normalizeLocale(locale || "zh-Hant");
+    if (!normalizedLocale) {
+      throw new Error(`Unsupported locale: ${locale}`);
+    }
+
     return {
       page: "plan",
       locale: normalizedLocale,
-      path: buildLocalizedPath("/plan", normalizedLocale),
-      meta: buildPageMeta("/plan", normalizedLocale),
+      rails: [...PAYMENT_RAILS],
       plans: [
         {
           tier: "free",
-          features: ["single_indicator_snapshot"],
+          summary: "single-indicator snapshot",
         },
         {
           tier: "pro",
-          features: ["realtime_signal", "push", "combo_xy"],
+          summary: "realtime signal and push with x+y combos",
         },
         {
           tier: "elite",
-          features: ["realtime_signal", "push", "combo_xy", "combo_3plus", "advanced_features"],
+          summary: "3+ combos and advanced features",
         },
       ],
-      rails: ["USDT-TRON", "USDC-L2", "ERC20"],
+      meta: buildPageMeta("/plan", normalizedLocale),
     };
   }
 
   createOrder(input) {
-    const member_id = input.member_id || "anon";
-    const requested_tier = String(input.requested_tier || "pro").toLowerCase();
-    if (!["pro", "elite"].includes(requested_tier)) {
-      throw new Error("requested_tier must be pro or elite");
+    if (!input || typeof input !== "object") {
+      throw new Error("createOrder input is required");
     }
-
-    const asset = input.asset || "USDT-TRON";
-    if (!isValidPaymentRail(asset)) {
-      throw new Error(`Unsupported payment rail: ${asset}`);
+    const order_id = input.order_id ? String(input.order_id) : randomUUID();
+    if (this.orders.has(order_id)) {
+      throw new Error(`Duplicate order_id: ${order_id}`);
     }
-
-    const chainProfile = railToChainProfile(asset);
-    const requiredConfirmations = getRequiredConfirmations(chainProfile);
-    if (requiredConfirmations === null) {
-      throw new Error(`Unsupported chain profile for asset: ${asset}`);
+    const member_id = String(input.member_id || "").trim();
+    if (!member_id) {
+      throw new Error("member_id is required");
     }
-
-    this.orderCounter += 1;
-    const order_id = input.order_id || `ord_${this.orderCounter}`;
-    const settlementChain = railToSettlementChain(asset);
-    const recipient_address =
-      input.recipient_address ||
-      (settlementChain === "TRON" ? "TRON_WALLET_1" : "EVM_WALLET_1");
-    const base_amount = input.base_amount || "10.000000";
-    const nowMs = Number(input.created_at_ms || Date.now());
-
+    const requested_tier = normalizeRequestedTier(input.requested_tier);
+    const asset = normalizeRail(input.asset);
+    const config = resolveRailConfig(asset);
+    const base_amount = String(input.base_amount ?? "");
+    if (!base_amount || !/^\d+(\.\d+)?$/.test(base_amount)) {
+      throw new Error("base_amount must be a non-negative decimal");
+    }
+    const created_at_ms = toMs(input.created_at_ms ?? Date.now(), "created_at_ms");
     const expected = computeExpectedAmount(order_id, base_amount);
-    this.settlement.createOrder({
-      order_id,
-      member_id,
-      chain: settlementChain,
-      asset,
-      recipient_address,
-      base_amount,
-      created_at_ms: nowMs,
-      identity_wallet: input.identity_wallet || null,
-    });
 
     const order = {
       order_id,
       member_id,
       requested_tier,
-      state: ORDER_STATES.CREATED,
-      settlement_chain: settlementChain,
-      chain_profile: chainProfile,
-      required_confirmations: requiredConfirmations,
-      recipient_address,
+      unlocked_tier: "free",
+      asset,
+      chain: config.chain,
+      chain_profile: config.chain_profile,
+      recipient_address: input.recipient_address || config.recipient_address,
       base_amount,
+      base_amount_micro: expected.base_amount_micro.toString(),
+      jitter_micro: expected.jitter_micro.toString(),
       amount_expected_micro: expected.amount_expected_micro.toString(),
       amount_expected: expected.amount_expected,
       identity_wallet: input.identity_wallet || null,
       payer_wallet: null,
-      confirmation_count: 0,
-      settlement_outcome: null,
-      unique_id: null,
-      created_at_ms: nowMs,
-      state_history: [ORDER_STATES.CREATED],
+      state: ORDER_STATES.CREATED,
+      created_at_ms,
+      updated_at_ms: created_at_ms,
+      credited_unique_id: null,
+      payment_status: "UNPAID",
+      match_status: "UNPAID",
+      confirmations: 0,
+      state_history: [],
     };
 
-    this._transition(order, ORDER_STATES.AWAITING_PAYMENT);
+    this.#transition(order, ORDER_STATES.AWAITING_PAYMENT, "ORDER_CREATED", created_at_ms);
     this.orders.set(order_id, order);
-    return this._publicOrder(order);
+    this.#saveState();
+    return this.#serializeOrder(order);
   }
 
   getOrder(order_id) {
     const order = this.orders.get(order_id);
-    if (!order) {
-      return null;
-    }
-    return this._publicOrder(order);
+    return order ? this.#serializeOrder(order) : null;
   }
 
   submitPayment(input) {
+    if (!input || typeof input !== "object") {
+      throw new Error("submitPayment input is required");
+    }
     const order = this.orders.get(input.order_id);
     if (!order) {
       throw new Error("order not found");
     }
+    const occurred_at_ms = toMs(input.occurred_at_ms ?? Date.now(), "occurred_at_ms");
 
-    const event = {
-      chain: order.settlement_chain,
-      asset: order.chain_profile === "TRON" ? "USDT-TRON" : order.chain_profile === "L2" ? "USDC-L2" : "ERC20",
+    const unique_id = buildChainUniqueId({
+      chain: order.chain,
+      transaction_id: input.transaction_id,
+      event_index: input.event_index,
+      tx_hash: input.tx_hash,
+      log_index: input.log_index,
+    });
+    const confirmations = toConfirmations(input.confirmations);
+
+    const duplicate = this.payments.get(unique_id);
+    if (duplicate) {
+      return {
+        settlement: {
+          outcome: "DUPLICATE_EVENT",
+          unique_id,
+          order_id: duplicate.order_id || null,
+        },
+        order: this.#serializeOrder(order),
+      };
+    }
+
+    const onchain_amount_micro = parseMicro(input.onchain_amount_micro);
+    const paymentRecord = {
+      unique_id,
+      order_id: order.order_id,
+      chain: order.chain,
+      asset: order.asset,
       recipient_address: order.recipient_address,
-      onchain_amount_micro: input.onchain_amount_micro,
-      occurred_at_ms: Number(input.occurred_at_ms || Date.now()),
+      occurred_at_ms,
+      onchain_amount_micro: onchain_amount_micro.toString(),
+      confirmations,
+      outcome: "RECEIVED",
+      candidate_order_ids: [],
       payer_wallet: input.payer_wallet || null,
     };
-    if (order.settlement_chain === "TRON") {
-      event.transaction_id = input.transaction_id;
-      event.event_index = input.event_index;
-    } else {
-      event.tx_hash = input.tx_hash;
-      event.log_index = input.log_index;
+
+    if (onchain_amount_micro !== BigInt(order.amount_expected_micro)) {
+      paymentRecord.outcome = "UNMATCHED";
+      order.match_status = "UNMATCHED";
+      this.payments.set(unique_id, paymentRecord);
+      this.#saveState();
+      return {
+        settlement: {
+          outcome: "UNMATCHED",
+          unique_id,
+        },
+        order: this.#serializeOrder(order),
+      };
     }
 
-    const settlementResult = this.settlement.processPaymentEvent(event);
-    order.settlement_outcome = settlementResult.outcome;
+    const collisions = this.#findCollisionCandidates(order, occurred_at_ms);
+    if (collisions.length > 1) {
+      paymentRecord.outcome = "NEEDS_CLAIM";
+      paymentRecord.candidate_order_ids = collisions.map((item) => item.order_id);
+      for (const collisionOrder of collisions) {
+        collisionOrder.match_status = "NEEDS_CLAIM";
+      }
+      this.payments.set(unique_id, paymentRecord);
+      this.#saveState();
+      return {
+        settlement: {
+          outcome: "NEEDS_CLAIM",
+          unique_id,
+          order_ids: [...paymentRecord.candidate_order_ids],
+        },
+        order: this.#serializeOrder(order),
+      };
+    }
+
+    paymentRecord.outcome = "CREDITED";
+    paymentRecord.candidate_order_ids = [order.order_id];
+    this.payments.set(unique_id, paymentRecord);
+
+    order.payment_status = "CREDITED";
+    order.match_status = "EXACT_MATCH";
     order.payer_wallet = input.payer_wallet || null;
-    order.confirmation_count = Number(input.confirmations || 0);
-    order.unique_id = settlementResult.unique_id || order.unique_id;
+    order.credited_unique_id = unique_id;
+    order.confirmations = confirmations;
 
-    if (settlementResult.outcome === "CREDITED") {
-      if (order.confirmation_count >= order.required_confirmations) {
-        this._activateOrder(order);
-      } else {
-        this._transition(order, ORDER_STATES.CONFIRMED);
-      }
-    } else if (settlementResult.outcome === "DUPLICATE_EVENT") {
-      if (
-        order.state === ORDER_STATES.CONFIRMED &&
-        order.confirmation_count >= order.required_confirmations
-      ) {
-        this._activateOrder(order);
-      }
+    this.#transition(
+      order,
+      ORDER_STATES.CONFIRMED,
+      "PAYMENT_MATCHED_EXACT",
+      occurred_at_ms
+    );
+    if (isConfirmationSufficient(order.chain_profile, confirmations)) {
+      this.#activateOrder(order, "CONFIRMATIONS_SUFFICIENT", occurred_at_ms);
     }
+    this.#saveState();
 
     return {
-      order: this._publicOrder(order),
-      settlement: settlementResult,
+      settlement: {
+        outcome: "CREDITED",
+        unique_id,
+        order_id: order.order_id,
+      },
+      order: this.#serializeOrder(order),
     };
   }
 
   confirmOrder(input) {
+    if (!input || typeof input !== "object") {
+      throw new Error("confirmOrder input is required");
+    }
     const order = this.orders.get(input.order_id);
     if (!order) {
       throw new Error("order not found");
     }
-    order.confirmation_count = Number(input.confirmations || order.confirmation_count || 0);
-
-    if (
-      order.confirmation_count >= order.required_confirmations &&
-      (order.state === ORDER_STATES.CONFIRMED || order.settlement_outcome === "CREDITED")
-    ) {
-      this._activateOrder(order);
+    const confirmations = toConfirmations(input.confirmations);
+    if (confirmations > order.confirmations) {
+      order.confirmations = confirmations;
+    }
+    if (order.credited_unique_id && this.payments.has(order.credited_unique_id)) {
+      const payment = this.payments.get(order.credited_unique_id);
+      if (confirmations > payment.confirmations) {
+        payment.confirmations = confirmations;
+      }
     }
 
-    return this._publicOrder(order);
+    if (
+      order.state === ORDER_STATES.CONFIRMED &&
+      isConfirmationSufficient(order.chain_profile, order.confirmations)
+    ) {
+      this.#activateOrder(order, "CONFIRM_ENDPOINT_CONFIRMED", Date.now());
+    }
+
+    this.#saveState();
+    return this.#serializeOrder(order);
   }
 
-  getMemberTier(member_id) {
-    return this.memberTier.get(member_id) || "free";
+  runReconcile({ now_ms, confirmations_by_unique_id } = {}) {
+    const nowMs = toMs(now_ms ?? Date.now(), "now_ms");
+    const updates =
+      confirmations_by_unique_id instanceof Map
+        ? confirmations_by_unique_id
+        : new Map(Object.entries(confirmations_by_unique_id || {}));
+
+    let checked = 0;
+    let activated = 0;
+    let updated_confirmations = 0;
+    for (const order of this.orders.values()) {
+      if (order.state !== ORDER_STATES.CONFIRMED || !order.credited_unique_id) {
+        continue;
+      }
+      checked += 1;
+      const payment = this.payments.get(order.credited_unique_id);
+      if (!payment) {
+        continue;
+      }
+
+      const updateValue = updates.get(order.credited_unique_id);
+      if (updateValue !== undefined) {
+        const nextConfirmations = toConfirmations(updateValue);
+        if (nextConfirmations > payment.confirmations) {
+          payment.confirmations = nextConfirmations;
+          order.confirmations = nextConfirmations;
+          updated_confirmations += 1;
+        }
+      }
+
+      if (isConfirmationSufficient(order.chain_profile, order.confirmations)) {
+        const changed = this.#activateOrder(order, "RECONCILE_CONFIRMED", nowMs);
+        if (changed) {
+          activated += 1;
+        }
+      }
+    }
+
+    if (checked > 0 || updated_confirmations > 0 || activated > 0) {
+      this.#saveState();
+    }
+
+    return {
+      checked,
+      activated,
+      updated_confirmations,
+    };
+  }
+
+  startReconcileTimer({ interval_ms = 15_000, getConfirmationsByUniqueId } = {}) {
+    if (this.reconcile_timer) {
+      return false;
+    }
+    this.reconcile_provider =
+      typeof getConfirmationsByUniqueId === "function"
+        ? getConfirmationsByUniqueId
+        : null;
+    const interval = toMs(interval_ms, "interval_ms");
+    this.reconcile_timer = setInterval(() => {
+      const updatePayload = this.reconcile_provider
+        ? this.reconcile_provider()
+        : {};
+      this.runReconcile({
+        confirmations_by_unique_id: updatePayload,
+        now_ms: Date.now(),
+      });
+    }, interval);
+    if (typeof this.reconcile_timer.unref === "function") {
+      this.reconcile_timer.unref();
+    }
+    return true;
+  }
+
+  stopReconcileTimer() {
+    if (!this.reconcile_timer) {
+      return false;
+    }
+    clearInterval(this.reconcile_timer);
+    this.reconcile_timer = null;
+    this.reconcile_provider = null;
+    return true;
   }
 
   isFeatureUnlocked(member_id, feature) {
-    const tier = this.getMemberTier(member_id);
-    const decision = checkEntitlement({
-      member_id,
+    const key = String(member_id || "");
+    const entitlement = this.entitlements.get(key);
+    const tier = entitlement ? entitlement.tier : "free";
+    return checkEntitlement({
+      member_id: key,
       tier,
       feature,
     });
-    return {
-      tier,
-      ...decision,
-    };
   }
 
-  _activateOrder(order) {
-    if (order.state !== ORDER_STATES.CONFIRMED) {
-      this._transition(order, ORDER_STATES.CONFIRMED);
+  getAuditTrail() {
+    return deepClone(this.audit_trail);
+  }
+
+  #findCollisionCandidates(order, occurredAtMs) {
+    const expected = order.amount_expected_micro;
+    const results = [];
+    for (const item of this.orders.values()) {
+      if (item.state === ORDER_STATES.ACTIVE) {
+        continue;
+      }
+      if (item.chain !== order.chain || item.asset !== order.asset) {
+        continue;
+      }
+      if (item.recipient_address !== order.recipient_address) {
+        continue;
+      }
+      if (item.amount_expected_micro !== expected) {
+        continue;
+      }
+      const inWindow =
+        occurredAtMs >= item.created_at_ms &&
+        occurredAtMs <= item.created_at_ms + PAYMENT_MATCH_WINDOW_MS;
+      if (!inWindow) {
+        continue;
+      }
+      results.push(item);
     }
-    this._transition(order, ORDER_STATES.ACTIVE);
-    const currentTier = this.getMemberTier(order.member_id);
-    this.memberTier.set(
-      order.member_id,
-      chooseHigherTier(currentTier, order.requested_tier)
-    );
+    return results;
   }
 
-  _transition(order, state) {
-    if (order.state !== state) {
-      order.state = state;
-      order.state_history.push(state);
+  #transition(order, nextState, reason, atMs) {
+    if (order.state === nextState) {
+      return false;
     }
-  }
-
-  _publicOrder(order) {
-    return {
+    const entry = {
       order_id: order.order_id,
-      member_id: order.member_id,
-      requested_tier: order.requested_tier,
-      state: order.state,
-      amount_expected_micro: order.amount_expected_micro,
-      amount_expected: order.amount_expected,
-      required_confirmations: order.required_confirmations,
-      confirmation_count: order.confirmation_count,
-      settlement_outcome: order.settlement_outcome,
-      unique_id: order.unique_id,
-      payer_wallet: order.payer_wallet,
-      identity_wallet: order.identity_wallet,
-      unlocked_tier: this.getMemberTier(order.member_id),
+      from_state: order.state,
+      to_state: nextState,
+      reason,
+      at_ms: atMs,
     };
+    order.state = nextState;
+    order.updated_at_ms = atMs;
+    order.state_history.push(entry);
+    this.audit_trail.push({
+      kind: "ORDER_STATE_TRANSITION",
+      ...entry,
+    });
+    return true;
+  }
+
+  #activateOrder(order, reason, atMs) {
+    const changed = this.#transition(order, ORDER_STATES.ACTIVE, reason, atMs);
+    if (!changed) {
+      return false;
+    }
+    order.unlocked_tier = order.requested_tier;
+    const existing = this.entitlements.get(order.member_id);
+    if (
+      !existing ||
+      existing.tier !== order.requested_tier ||
+      existing.order_id !== order.order_id
+    ) {
+      this.entitlements.set(order.member_id, {
+        member_id: order.member_id,
+        tier: order.requested_tier,
+        order_id: order.order_id,
+        activated_at_ms: atMs,
+      });
+      this.audit_trail.push({
+        kind: "ENTITLEMENT_GRANTED",
+        member_id: order.member_id,
+        tier: order.requested_tier,
+        order_id: order.order_id,
+        at_ms: atMs,
+      });
+    }
+    return true;
+  }
+
+  #serializeOrder(order) {
+    return deepClone(order);
+  }
+
+  #loadState() {
+    if (!this.persistence_path || !fs.existsSync(this.persistence_path)) {
+      return;
+    }
+    const raw = fs.readFileSync(this.persistence_path, "utf8");
+    if (!raw.trim()) {
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== DEFAULT_STATE_VERSION) {
+      return;
+    }
+
+    for (const order of parsed.orders || []) {
+      this.orders.set(order.order_id, order);
+    }
+    for (const entry of parsed.entitlements || []) {
+      this.entitlements.set(entry.member_id, entry);
+    }
+    for (const payment of parsed.payments || []) {
+      this.payments.set(payment.unique_id, payment);
+    }
+    for (const idem of parsed.idempotency || []) {
+      this.idempotency.set(idem.key, idem);
+    }
+    this.audit_trail = Array.isArray(parsed.audit_trail)
+      ? parsed.audit_trail
+      : [];
+  }
+
+  #saveState() {
+    if (!this.persistence_path) {
+      return;
+    }
+    const state = {
+      version: DEFAULT_STATE_VERSION,
+      orders: Array.from(this.orders.values()),
+      entitlements: Array.from(this.entitlements.values()),
+      payments: Array.from(this.payments.values()),
+      idempotency: Array.from(this.idempotency.values()),
+      audit_trail: this.audit_trail,
+    };
+    const dir = path.dirname(this.persistence_path);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmpPath = `${this.persistence_path}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tmpPath, this.persistence_path);
   }
 }
 

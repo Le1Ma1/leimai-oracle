@@ -33,12 +33,14 @@ function loadTestCoverage() {
     return {
       acCoverage: new Map(),
       v2Coverage: new Map(),
+      v3Coverage: new Map(),
     };
   }
 
   const json = JSON.parse(fs.readFileSync(testResultsPath, "utf8"));
   const acCoverage = new Map();
   const v2Coverage = new Map();
+  const v3Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -57,10 +59,20 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v3Match = result.name.match(/\b(V3-\d+)\b/);
+    if (v3Match) {
+      v3Coverage.set(v3Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
     v2Coverage,
+    v3Coverage,
   };
 }
 
@@ -130,6 +142,28 @@ function main() {
     );
   }
 
+  const v3Ids = Array.from(coverage.v3Coverage.keys()).sort();
+  const v3Rows = [];
+  let v3Pass = 0;
+  let v3Fail = 0;
+  for (const v3Id of v3Ids) {
+    const item = coverage.v3Coverage.get(v3Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v3Pass += 1;
+    } else {
+      v3Fail += 1;
+    }
+    v3Rows.push(
+      toRow([
+        v3Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -155,6 +189,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.2 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.3 Hardening Checkpoint",
+    "",
+    `Summary: ${v3Pass} PASS / ${v3Fail} FAIL / ${v3Pass + v3Fail} TOTAL`,
+    "",
+    toRow(["V3_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v3Rows.length > 0
+      ? v3Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.3 evidence in test-results.json",
           ]),
         ]),
     "",

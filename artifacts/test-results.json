@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 60,
-    "pass": 60,
+    "total": 67,
+    "pass": 67,
     "fail": 0,
-    "generated_at": "2026-02-14T21:22:21.037Z"
+    "generated_at": "2026-02-14T21:44:22.851Z"
   },
   "results": [
     {
@@ -305,6 +305,41 @@
       "name": "V2-007 /checkout endpoints create->pay->confirm status loop",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V2-007"
+    },
+    {
+      "name": "V3-001 idempotency on /checkout/create replays same response and no duplicate order",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-001"
+    },
+    {
+      "name": "V3-002 idempotency keys apply on /checkout/pay and /checkout/confirm",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-002"
+    },
+    {
+      "name": "V3-003 idempotency conflict with same key and different payload is rejected",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-003"
+    },
+    {
+      "name": "V3-004 checkout endpoint rate-limit blocks 11th request in same minute",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-004"
+    },
+    {
+      "name": "V3-005 persisted orders and entitlements survive service restart",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-005"
+    },
+    {
+      "name": "V3-006 audit trail records CREATED->AWAITING_PAYMENT->CONFIRMED->ACTIVE",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-006"
+    },
+    {
+      "name": "V3-007 reconcile activates missed confirmations and remains deduped on rerun",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V3-007"
     }
   ]
 }
