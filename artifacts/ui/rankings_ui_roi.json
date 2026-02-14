@@ -1,0 +1,18 @@
+{
+  "active_tab": "roi",
+  "secondary_tabs": [
+    "risk_adjusted"
+  ],
+  "available_tabs": [
+    "risk_adjusted",
+    "roi"
+  ],
+  "selected_variant": "short",
+  "default_variant": "long",
+  "switchable_variants": [
+    "long",
+    "short",
+    "long_short"
+  ],
+  "best_variant_badge": "short"
+}

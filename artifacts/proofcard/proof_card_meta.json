@@ -1,0 +1,15 @@
+{
+  "proof_id": "proof-demo-001",
+  "method_version": "v0.1",
+  "timestamp": "2026-02-14T00:00:00.000Z",
+  "signature": {
+    "x": 956,
+    "y": 542,
+    "width": 220,
+    "height": 64,
+    "source": "/signature.jpg",
+    "placement": "bottom-right"
+  },
+  "svg_path": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\artifacts\\proofcard\\proof_card.svg",
+  "png_path": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\artifacts\\proofcard\\proof_card.png"
+}

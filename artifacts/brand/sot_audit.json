@@ -1,0 +1,11 @@
+{
+  "pass": true,
+  "expected": {
+    "logo": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\logo.png",
+    "signature": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\signature.jpg"
+  },
+  "actual": {
+    "logo": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\logo.png",
+    "signature": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\signature.jpg"
+  }
+}

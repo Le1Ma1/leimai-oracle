@@ -1,0 +1,310 @@
+{
+  "summary": {
+    "total": 60,
+    "pass": 60,
+    "fail": 0,
+    "generated_at": "2026-02-14T21:22:21.037Z"
+  },
+  "results": [
+    {
+      "name": "AC-001 default ranking tab is risk_adjusted",
+      "status": "PASS",
+      "evidence": "artifacts/ui/rankings_ui_default.json"
+    },
+    {
+      "name": "AC-002 roi is secondary tab",
+      "status": "PASS",
+      "evidence": "artifacts/ui/rankings_ui_default.json"
+    },
+    {
+      "name": "AC-003 universe size fixed 20..30",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-003"
+    },
+    {
+      "name": "AC-004 universe placeholder list is exactly 24 ordered symbols",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-004"
+    },
+    {
+      "name": "AC-005 tf enum strict validation",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-005"
+    },
+    {
+      "name": "AC-006 window enum strict validation",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-006"
+    },
+    {
+      "name": "AC-007 modality fixed to v0",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-007"
+    },
+    {
+      "name": "AC-008 variant defaults to long",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-008"
+    },
+    {
+      "name": "AC-009 UI default long-only and best variant badge behavior",
+      "status": "PASS",
+      "evidence": "artifacts/ui/rankings_ui_default.json"
+    },
+    {
+      "name": "AC-010 free snapshot cadence is 6h",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-010"
+    },
+    {
+      "name": "AC-011 pro/elite cadence follows tf map",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-011"
+    },
+    {
+      "name": "AC-012 per-member per-minute cap N=10",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-012"
+    },
+    {
+      "name": "AC-013 notification dedupe key enforcement",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-013"
+    },
+    {
+      "name": "AC-014 public endpoint availability",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-014"
+    },
+    {
+      "name": "AC-015 full PS-012 allowlist validation",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-015"
+    },
+    {
+      "name": "AC-016 recursive denylist strips locked_data at any depth",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-016"
+    },
+    {
+      "name": "AC-017 unauthorized envelope shape",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-017"
+    },
+    {
+      "name": "AC-018 i18n route strategy mapping",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-018"
+    },
+    {
+      "name": "AC-019 cookie-independent route resolution for crawler",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-019"
+    },
+    {
+      "name": "AC-020 canonical/hreflang/x-default correctness",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-020"
+    },
+    {
+      "name": "AC-021 index payload contains required asset blocks",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-021"
+    },
+    {
+      "name": "AC-022 entry payload contains required asset blocks",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-022"
+    },
+    {
+      "name": "AC-023 entitlement matrix denies cross-tier leakage",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-023"
+    },
+    {
+      "name": "AC-024 entitlement key is member_id (independent of payer/ip)",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-024"
+    },
+    {
+      "name": "AC-025 SIWE required fields validation",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-025"
+    },
+    {
+      "name": "AC-026 SIWE replay/expiry/signature/domain-uri negatives",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-026"
+    },
+    {
+      "name": "AC-027 payment rails allowlist enforcement",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-027"
+    },
+    {
+      "name": "AC-028 identity wallet can differ from payer wallet",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-028"
+    },
+    {
+      "name": "AC-029 deterministic HALF-UP rounding and jitter",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-029"
+    },
+    {
+      "name": "AC-030 exact amount matching only, non-exact UNMATCHED",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-030"
+    },
+    {
+      "name": "AC-031 confirmations defaults by chain profile",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-031"
+    },
+    {
+      "name": "AC-032 chain-specific unique id formatter",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-032"
+    },
+    {
+      "name": "AC-033 push channels support webpush/email/telegram",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-033"
+    },
+    {
+      "name": "AC-034 buyout sets cap_total_future=0 after effective",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-034"
+    },
+    {
+      "name": "AC-035 effective_date_epoch is single activation trigger",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-035"
+    },
+    {
+      "name": "AC-036 grandfathering seat remains until period end",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-036"
+    },
+    {
+      "name": "AC-037 tender threshold >=80% enables early effectiveness",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-037"
+    },
+    {
+      "name": "AC-038 buyout state transitions reject invalid edges",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-038"
+    },
+    {
+      "name": "AC-039 brand SoT root path strategy",
+      "status": "PASS",
+      "evidence": "artifacts/brand/sot_audit.json"
+    },
+    {
+      "name": "AC-040 logo usage has no prohibited transforms",
+      "status": "PASS",
+      "evidence": "artifacts/brand/logo_usage_report.json"
+    },
+    {
+      "name": "AC-041 signature appears only in allowed surfaces",
+      "status": "PASS",
+      "evidence": "artifacts/brand/signature_placement_allowlist.json"
+    },
+    {
+      "name": "AC-042 signature prohibited zones are detected",
+      "status": "PASS",
+      "evidence": "artifacts/brand/signature_placement_prohibited.json"
+    },
+    {
+      "name": "AC-043 proof card includes proof_id/method_version/timestamp",
+      "status": "PASS",
+      "evidence": "artifacts/proofcard/proof_card.svg"
+    },
+    {
+      "name": "AC-044 proof card signature is bottom-right with safe box",
+      "status": "PASS",
+      "evidence": "artifacts/proofcard/proof_card_meta.json"
+    },
+    {
+      "name": "AC-045 logo recognizability artifacts exist at 16/24/32",
+      "status": "PASS",
+      "evidence": "artifacts/brand/logo_16.png"
+    },
+    {
+      "name": "AC-046 each variant returns selected metrics",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-046"
+    },
+    {
+      "name": "AC-047 best_variant equals argmax",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-047"
+    },
+    {
+      "name": "AC-048 tie-break deterministic order",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-048"
+    },
+    {
+      "name": "AC-049 collision marks NEEDS_CLAIM without auto-credit",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-049"
+    },
+    {
+      "name": "AC-050 claim cannot bypass exact-match rule",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-050"
+    },
+    {
+      "name": "AC-051 legacy tolerance-band matching is removed",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-051"
+    },
+    {
+      "name": "AC-052 TRON unique id dedupe transaction_id:event_index",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-052"
+    },
+    {
+      "name": "AC-053 EVM unique id dedupe tx_hash:log_index",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#AC-053"
+    },
+    {
+      "name": "V2-001 /plan endpoint returns static plans + i18n meta",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-001"
+    },
+    {
+      "name": "V2-002 create order exposes deterministic amount and AWAITING_PAYMENT",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-002"
+    },
+    {
+      "name": "V2-003 conversion loop happy path unlocks entitlement",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-003"
+    },
+    {
+      "name": "V2-004 non-exact payment remains UNMATCHED and does not activate",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-004"
+    },
+    {
+      "name": "V2-005 insufficient confirmations delay ACTIVE until confirm",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-005"
+    },
+    {
+      "name": "V2-006 identity wallet may differ from payer wallet in checkout flow",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-006"
+    },
+    {
+      "name": "V2-007 /checkout endpoints create->pay->confirm status loop",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V2-007"
+    }
+  ]
+}

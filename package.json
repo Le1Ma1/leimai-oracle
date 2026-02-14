@@ -1,0 +1,11 @@
+{
+  "name": "mdp-v0-1-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal backend and deterministic settlement for MDP v0.1",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node scripts/run-tests.js",
+    "checkpoint": "node scripts/checkpoint.js"
+  }
+}
