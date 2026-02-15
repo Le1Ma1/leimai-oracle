@@ -40,6 +40,8 @@ function loadTestCoverage() {
       v7Coverage: new Map(),
       v8Coverage: new Map(),
       v9Coverage: new Map(),
+      v10Coverage: new Map(),
+      v11Coverage: new Map(),
     };
   }
 
@@ -53,6 +55,8 @@ function loadTestCoverage() {
   const v7Coverage = new Map();
   const v8Coverage = new Map();
   const v9Coverage = new Map();
+  const v10Coverage = new Map();
+  const v11Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -134,6 +138,24 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v10Match = result.name.match(/\b(V10-\d+)\b/);
+    if (v10Match) {
+      v10Coverage.set(v10Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
+
+    const v11Match = result.name.match(/\b(V11-\d+)\b/);
+    if (v11Match) {
+      v11Coverage.set(v11Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
@@ -145,6 +167,8 @@ function loadTestCoverage() {
     v7Coverage,
     v8Coverage,
     v9Coverage,
+    v10Coverage,
+    v11Coverage,
   };
 }
 
@@ -368,6 +392,50 @@ function main() {
     );
   }
 
+  const v10Ids = Array.from(coverage.v10Coverage.keys()).sort();
+  const v10Rows = [];
+  let v10Pass = 0;
+  let v10Fail = 0;
+  for (const v10Id of v10Ids) {
+    const item = coverage.v10Coverage.get(v10Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v10Pass += 1;
+    } else {
+      v10Fail += 1;
+    }
+    v10Rows.push(
+      toRow([
+        v10Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
+  const v11Ids = Array.from(coverage.v11Coverage.keys()).sort();
+  const v11Rows = [];
+  let v11Pass = 0;
+  let v11Fail = 0;
+  for (const v11Id of v11Ids) {
+    const item = coverage.v11Coverage.get(v11Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v11Pass += 1;
+    } else {
+      v11Fail += 1;
+    }
+    v11Rows.push(
+      toRow([
+        v11Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -512,6 +580,40 @@ function main() {
             "FAIL",
             "none",
             "No v0.9 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v1.0 Pyramid Route Integration Checkpoint",
+    "",
+    `Summary: ${v10Pass} PASS / ${v10Fail} FAIL / ${v10Pass + v10Fail} TOTAL`,
+    "",
+    toRow(["V10_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v10Rows.length > 0
+      ? v10Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v1.0 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v1.1 Pyramid SEO Surface Checkpoint",
+    "",
+    `Summary: ${v11Pass} PASS / ${v11Fail} FAIL / ${v11Pass + v11Fail} TOTAL`,
+    "",
+    toRow(["V11_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v11Rows.length > 0
+      ? v11Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v1.1 evidence in test-results.json",
           ]),
         ]),
     "",

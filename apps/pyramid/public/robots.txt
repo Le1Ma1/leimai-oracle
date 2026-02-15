@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://leimaitech.com/pyramid/sitemap.xml

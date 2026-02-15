@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pyramid FAQ</title>
+    <meta
+      name="description"
+      content="FAQ for Pyramid: declaration, transfer, claim-transfer, TXID binding, and common errors."
+    />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://leimaitech.com/pyramid/faq" />
+  </head>
+  <body>
+    <main>
+      <h1>Pyramid FAQ</h1>
+
+      <h2>How do I join?</h2>
+      <p>
+        Submit <code>declare</code>, transfer the required USDT on the required network,
+        then wait for confirmation.
+      </p>
+
+      <h2>When should I use claim-transfer?</h2>
+      <p>
+        Use <code>claim-transfer</code> when transfer metadata cannot be auto-bound
+        to your declaration session.
+      </p>
+
+      <h2>What is TXID binding?</h2>
+      <p>
+        TXID binding links your declaration to a specific on-chain transfer record.
+        It helps attribute identity for exchange or delayed settlement paths.
+      </p>
+
+      <h2>Common errors</h2>
+      <ul>
+        <li>Wrong chain or token.</li>
+        <li>Missing or invalid TXID.</li>
+        <li>Expired declaration session.</li>
+        <li>Trying to claim a transfer that does not match declared context.</li>
+      </ul>
+
+      <h2>Counterexample</h2>
+      <p>
+        Sending from an unrelated address and submitting another user&apos;s TXID will
+        not prove ownership and can be rejected.
+      </p>
+    </main>
+  </body>
+</html>

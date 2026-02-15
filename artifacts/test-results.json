@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 92,
-    "pass": 92,
+    "total": 98,
+    "pass": 98,
     "fail": 0,
-    "generated_at": "2026-02-15T00:33:51.253Z"
+    "generated_at": "2026-02-15T15:02:13.832Z"
   },
   "results": [
     {
@@ -465,6 +465,36 @@
       "name": "V9-003 mock mode uses fixtures and never attempts network calls",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V9-003"
+    },
+    {
+      "name": "V10-001 oracle /ops/health remains 200 with /pyramid proxy enabled",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V10-001"
+    },
+    {
+      "name": "V10-002 /pyramid/api/state returns 200 via same-origin proxy",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V10-002"
+    },
+    {
+      "name": "V10-003 /socket.io/socket.io.js is reachable when /pyramid proxy is enabled",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V10-003"
+    },
+    {
+      "name": "V11-001 GET /pyramid/ returns 200 and includes canonical",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V11-001"
+    },
+    {
+      "name": "V11-002 GET /pyramid/methodology returns 200 and includes fixed keyword",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V11-002"
+    },
+    {
+      "name": "V11-003 GET /pyramid/faq returns 200",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V11-003"
     }
   ]
 }

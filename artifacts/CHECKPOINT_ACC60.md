@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-15T00:33:51.332Z
+Generated: 2026-02-15T15:02:07.568Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -154,3 +154,23 @@ Summary: 3 PASS / 0 FAIL / 3 TOTAL
 | V9-001 | PASS | scripts/run-tests.js#V9-001 | Automated check passed |
 | V9-002 | PASS | scripts/run-tests.js#V9-002 | Automated check passed |
 | V9-003 | PASS | scripts/run-tests.js#V9-003 | Automated check passed |
+
+# v1.0 Pyramid Route Integration Checkpoint
+
+Summary: 3 PASS / 0 FAIL / 3 TOTAL
+
+| V10_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V10-001 | PASS | scripts/run-tests.js#V10-001 | Automated check passed |
+| V10-002 | PASS | scripts/run-tests.js#V10-002 | Automated check passed |
+| V10-003 | PASS | scripts/run-tests.js#V10-003 | Automated check passed |
+
+# v1.1 Pyramid SEO Surface Checkpoint
+
+Summary: 3 PASS / 0 FAIL / 3 TOTAL
+
+| V11_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V11-001 | PASS | scripts/run-tests.js#V11-001 | Automated check passed |
+| V11-002 | PASS | scripts/run-tests.js#V11-002 | Automated check passed |
+| V11-003 | PASS | scripts/run-tests.js#V11-003 | Automated check passed |

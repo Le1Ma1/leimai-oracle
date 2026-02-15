@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -209,6 +210,103 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const json = await response.json();
   return { status: response.status, json };
+}
+
+async function withMockPyramidServer(fn) {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<!doctype html><html><body>PYRAMID_OK<script src=\"/socket.io/socket.io.js\"></script></body></html>");
+      return;
+    }
+    if (url.pathname === "/api/state") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ state: [] }));
+      return;
+    }
+    if (url.pathname === "/socket.io/socket.io.js") {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end("window.io=function(){return {on:function(){},emit:function(){}}};");
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("NOT_FOUND");
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    await fn(origin);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+}
+
+async function withPyramidStaticPublicServer(fn) {
+  const publicDir = path.join(process.cwd(), "apps", "pyramid", "public");
+  const contentTypeByExt = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml; charset=utf-8",
+  };
+
+  function resolveStaticPath(pathname) {
+    if (pathname === "/" || pathname === "") {
+      return path.join(publicDir, "index.html");
+    }
+    if (pathname === "/methodology" || pathname === "/methodology/") {
+      return path.join(publicDir, "methodology", "index.html");
+    }
+    if (pathname === "/faq" || pathname === "/faq/") {
+      return path.join(publicDir, "faq", "index.html");
+    }
+    return path.join(publicDir, pathname.replace(/^\/+/, ""));
+  }
+
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    const pathname = decodeURIComponent(url.pathname);
+    const filePath = path.resolve(resolveStaticPath(pathname));
+    const publicRoot = path.resolve(publicDir);
+    if (!filePath.startsWith(publicRoot)) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("FORBIDDEN");
+      return;
+    }
+
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("NOT_FOUND");
+      return;
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = contentTypeByExt[ext] || "application/octet-stream";
+    res.writeHead(200, { "content-type": contentType });
+    res.end(fs.readFileSync(filePath));
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    await fn(origin);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
 }
 
 async function run() {
@@ -3562,6 +3660,139 @@ async function run() {
       assert.equal(rpcCalls, 0);
     },
     "scripts/run-tests.js#V9-003"
+  );
+
+  await runTest(
+    "V10-001 oracle /ops/health remains 200 with /pyramid proxy enabled",
+    async () => {
+      await withMockPyramidServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const health = await fetchJson(`${baseUrl}/ops/health`);
+            assert.equal(health.status, 200);
+            assert.equal(health.json.ok, true);
+            const pyramid = await fetch(`${baseUrl}/pyramid`);
+            const text = await pyramid.text();
+            assert.equal(pyramid.status, 200);
+            assert.equal(text.includes("PYRAMID_OK"), true);
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V10-001"
+  );
+
+  await runTest(
+    "V10-002 /pyramid/api/state returns 200 via same-origin proxy",
+    async () => {
+      await withMockPyramidServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const state = await fetchJson(`${baseUrl}/pyramid/api/state`);
+            assert.equal(state.status, 200);
+            assert.deepEqual(state.json, { state: [] });
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V10-002"
+  );
+
+  await runTest(
+    "V10-003 /socket.io/socket.io.js is reachable when /pyramid proxy is enabled",
+    async () => {
+      await withMockPyramidServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const socketScript = await fetch(`${baseUrl}/socket.io/socket.io.js`);
+            const text = await socketScript.text();
+            assert.equal(socketScript.status, 200);
+            assert.equal(text.includes("window.io"), true);
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V10-003"
+  );
+
+  await runTest(
+    "V11-001 GET /pyramid/ returns 200 and includes canonical",
+    async () => {
+      await withPyramidStaticPublicServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const response = await fetch(`${baseUrl}/pyramid/`);
+            const html = await response.text();
+            assert.equal(response.status, 200);
+            assert.equal(
+              html.includes(
+                '<link rel="canonical" href="https://leimaitech.com/pyramid/" />'
+              ),
+              true
+            );
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V11-001"
+  );
+
+  await runTest(
+    "V11-002 GET /pyramid/methodology returns 200 and includes fixed keyword",
+    async () => {
+      await withPyramidStaticPublicServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const response = await fetch(`${baseUrl}/pyramid/methodology`);
+            const html = await response.text();
+            assert.equal(response.status, 200);
+            assert.equal(html.includes("1 USDT = 86400"), true);
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V11-002"
+  );
+
+  await runTest(
+    "V11-003 GET /pyramid/faq returns 200",
+    async () => {
+      await withPyramidStaticPublicServer(async (origin) => {
+        await withServer(
+          async (baseUrl) => {
+            const response = await fetch(`${baseUrl}/pyramid/faq`);
+            const html = await response.text();
+            assert.equal(response.status, 200);
+            assert.equal(html.includes("Pyramid FAQ"), true);
+          },
+          {
+            pyramidOrigin: origin,
+            enablePyramidProxy: true,
+          }
+        );
+      });
+    },
+    "scripts/run-tests.js#V11-003"
   );
 
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;

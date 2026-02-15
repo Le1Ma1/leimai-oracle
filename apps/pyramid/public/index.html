@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="The Pyramid clock-war: 1 USDT = 86400 seconds. Declare identity, send transfer, claim TXID, and usurp the throne."
+    />
+    <meta
+      name="keywords"
+      content="pyramid, usdt, trc20, countdown, declare identity, claim transfer, leimaitech"
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <link rel="canonical" href="https://leimaitech.com/pyramid/" />
+
+    <meta property="og:title" content="THE PYRAMID | 1 USDT = 86400s" />
+    <meta
+      property="og:description"
+      content="Declare, transfer, and defend your time. Public countdown war on TRON USDT."
+    />
+    <meta property="og:image" content="https://leimaitech.com/pyramid/logo.png" />
+    <meta property="og:url" content="https://leimaitech.com/pyramid/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="LeiMai Pyramid" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="THE PYRAMID | 1 USDT = 86400s" />
+    <meta name="twitter:description" content="Time is status. Declare, transfer, and usurp." />
+    <meta name="twitter:image" content="https://leimaitech.com/pyramid/logo.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "LeiMai Pyramid",
+        "url": "https://leimaitech.com/pyramid/",
+        "inLanguage": "en",
+        "potentialAction": {
+          "@type": "ReadAction",
+          "target": "https://leimaitech.com/pyramid/"
+        }
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": "The Pyramid",
+        "url": "https://leimaitech.com/pyramid/",
+        "isPartOf": {
+          "@type": "WebSite",
+          "name": "LeiMai Pyramid",
+          "url": "https://leimaitech.com/pyramid/"
+        },
+        "description": "A public countdown game where 1 USDT equals 86400 seconds of throne time."
+      }
+    </script>
+
+    <title>I AM RICH - The Pyramid</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/logo.png" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="crt-overlay"></div>
+    <canvas id="matrix-canvas"></canvas>
+    <main id="app-container">
+      <header class="glitch" data-text="THE PYRAMID">THE PYRAMID</header>
+      <div id="architect-zone" class="architect">
+        <div id="architect-avatar" aria-label="Top Tier Label">[ I AM RICH ]</div>
+        <div id="architect-address">NO ONE IS RICH YET</div>
+        <div id="architect-manifesto">DECLARE YOUR IDENTITY.</div>
+        <div id="architect-value">0.00 USDT => 0D 00:00:00</div>
+        <div id="architect-timer">00:00:00.000</div>
+      </div>
+      <ul id="exile-list" aria-label="Exile List"></ul>
+      <div id="population-counter">POPULATION: 0</div>
+      <section id="oracle-bridge" aria-label="Oracle Bridge">
+        <div class="bridge-title">UNLOCK THE LAB</div>
+        <div class="bridge-copy">Need proof-driven signals? Enter Oracle.</div>
+        <a
+          id="oracle-bridge-link"
+          href="https://oracle.leimaitech.com/?utm_source=pyramid&utm_medium=bridge"
+          target="_blank"
+          rel="noreferrer"
+          >TRY ORACLE / PROOF ENGINE</a
+        >
+      </section>
+      <div id="controls">
+        <section id="declaration-step">
+          <div class="control-title">STEP 1: DECLARATION</div>
+          <label for="nickname-input">NICKNAME (MAX 12)</label>
+          <input id="nickname-input" name="nickname" type="text" maxlength="12" placeholder="ELON" />
+          <label for="manifesto-input">MANIFESTO (MAX 50)</label>
+          <input id="manifesto-input" name="manifesto" type="text" maxlength="50" placeholder="BUYING THE DIP" />
+          <label for="sender-wallet-input">SENDER WALLET (OPTIONAL, AUTO-BIND IF KNOWN)</label>
+          <input
+            id="sender-wallet-input"
+            name="sender-wallet"
+            type="text"
+            placeholder="TUxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          />
+          <button id="declare-button" type="button">[ I AM READY ]</button>
+        </section>
+        <section id="connection-step" class="hidden">
+          <div class="control-title">STEP 2: THE CONNECTION</div>
+          <div id="chain-warning">
+            NETWORK MUST BE: <strong>TRON (TRC20)</strong> | TOKEN: <strong>USDT-TRC20</strong> | WRONG CHAIN = LOSS OF FUNDS
+          </div>
+          <div class="wallet-line">
+            TARGET WALLET ADDRESS:
+            <span id="target-wallet-address">T...COMINGSOON...</span>
+            <button id="copy-wallet-button" type="button">COPY</button>
+          </div>
+          <img id="wallet-qr" alt="Wallet QR Code" />
+          <label for="usdt-preview-input">USDT AMOUNT PREVIEW</label>
+          <input id="usdt-preview-input" name="usdt-preview" type="number" min="0" step="0.01" placeholder="1.00" />
+          <div id="time-preview">1 USDT => 1D 00:00:00</div>
+          <div id="exchange-note">IF YOU SEND FROM EXCHANGE, PASTE TXID BELOW TO CLAIM YOUR IDENTITY.</div>
+          <label for="txid-input">TRANSFER TXID (FOR EXCHANGE CLAIM)</label>
+          <input id="txid-input" name="txid" type="text" placeholder="PASTE TXID HERE" />
+          <button id="claim-tx-button" type="button">[ CLAIM MY IDENTITY ]</button>
+          <div id="waiting-indicator">WAITING FOR ON-CHAIN CONFIRMATION...</div>
+        </section>
+        <div id="action-status">STANDBY.</div>
+      </div>
+    </main>
+    <script src="./matrix.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
