@@ -3164,6 +3164,204 @@ async function run() {
     "scripts/run-tests.js#V7-004"
   );
 
+  await runTest(
+    "V8-001 rpc preflight missing URL returns deterministic error and does not mutate order state",
+    async () => {
+      let rpcCalls = 0;
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v8-preflight-member",
+              "x-idempotency-key": "v8-preflight-create",
+              "x-now-ms": "1700000340000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "15.000000",
+              order_id: "v8-preflight-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v8-preflight-member",
+              "x-idempotency-key": "v8-preflight-confirm",
+              "x-now-ms": "1700000341000",
+            },
+            body: JSON.stringify({
+              order_id: "v8-preflight-order",
+              chain: "arbitrum",
+              tx_id: "0xv8preflight",
+            }),
+          });
+          assert.equal(confirm.status, 400);
+          assert.equal(confirm.json.error_code, "BAD_REQUEST");
+          assert.equal(
+            String(confirm.json.message).includes("RPC_CONFIG_MISSING_ARBITRUM_RPC_URL"),
+            true
+          );
+
+          const status = await fetchJson(
+            `${baseUrl}/checkout/status?order_id=v8-preflight-order`,
+            {
+              headers: {
+                "x-member-id": "v8-preflight-member",
+                "x-now-ms": "1700000342000",
+              },
+            }
+          );
+          assert.equal(status.status, 200);
+          assert.equal(status.json.order_state, ORDER_STATES.AWAITING_PAYMENT);
+          assert.equal(
+            status.json.last_error_code,
+            "RPC_CONFIG_MISSING_ARBITRUM_RPC_URL"
+          );
+          assert.equal(status.json.confirmations_observed, 0);
+        },
+        {
+          chainMode: "rpc",
+          tronRpcUrl: "http://tron.rpc.local",
+          arbitrumRpcUrl: null,
+          ethereumRpcUrl: "http://eth.rpc.local",
+          rpcFetchImpl: () => {
+            rpcCalls += 1;
+            throw new Error("rpc fetch should not be called when preflight fails");
+          },
+        }
+      );
+      assert.equal(rpcCalls, 0);
+    },
+    "scripts/run-tests.js#V8-001"
+  );
+
+  await runTest(
+    "V8-002 rpc confirm uses provider and preserves recipient/amount hard locks",
+    async () => {
+      const railsMap = getPaymentRailsMap();
+      const recipient = railsMap["USDC-L2"].recipient_address.toLowerCase();
+      let rpcCalls = 0;
+      let expectedAmountMicro = 0;
+      const providerTx = {
+        "0xv8nonexact": () => expectedAmountMicro + 1,
+        "0xv8exact": () => expectedAmountMicro,
+      };
+
+      await withServer(
+        async (baseUrl) => {
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v8-rpc-member",
+              "x-idempotency-key": "v8-rpc-create",
+              "x-now-ms": "1700000350000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "16.000000",
+              order_id: "v8-rpc-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          expectedAmountMicro = Number(create.json.amount_expected_micro);
+          assert.ok(Number.isInteger(expectedAmountMicro));
+
+          const firstConfirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v8-rpc-member",
+              "x-idempotency-key": "v8-rpc-confirm-1",
+              "x-now-ms": "1700000351000",
+            },
+            body: JSON.stringify({
+              order_id: "v8-rpc-order",
+              chain: "arbitrum",
+              tx_id: "0xv8nonexact",
+              recipient_address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }),
+          });
+          assert.equal(firstConfirm.status, 200);
+          assert.equal(firstConfirm.json.state, ORDER_STATES.AWAITING_PAYMENT);
+          assert.equal(firstConfirm.json.match_status, "UNMATCHED");
+
+          const secondConfirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v8-rpc-member",
+              "x-idempotency-key": "v8-rpc-confirm-2",
+              "x-now-ms": "1700000352000",
+            },
+            body: JSON.stringify({
+              order_id: "v8-rpc-order",
+              chain: "arbitrum",
+              tx_id: "0xv8exact",
+              recipient_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            }),
+          });
+          assert.equal(secondConfirm.status, 200);
+          assert.equal(secondConfirm.json.state, ORDER_STATES.ACTIVE);
+          assert.equal(secondConfirm.json.match_status, "EXACT_MATCH");
+        },
+        {
+          chainMode: "rpc",
+          tronRpcUrl: "http://tron.rpc.local",
+          arbitrumRpcUrl: "http://arb.rpc.local",
+          ethereumRpcUrl: "http://eth.rpc.local",
+          rpcFetchImpl: (request) => {
+            rpcCalls += 1;
+            if (request.transport === "jsonrpc") {
+              const method = request.body && request.body.method;
+              if (method === "eth_getTransactionReceipt") {
+                const txHash = request.body.params[0];
+                const amount = providerTx[txHash] ? providerTx[txHash]() : null;
+                if (!Number.isInteger(amount)) {
+                  return { jsonrpc: "2.0", id: 1, result: null };
+                }
+                return {
+                  jsonrpc: "2.0",
+                  id: 1,
+                  result: {
+                    blockNumber: "0x64",
+                    logs: [
+                      {
+                        transactionHash: txHash,
+                        logIndex: "0x0",
+                        topics: [
+                          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                          "0x0000000000000000000000001111111111111111111111111111111111111111",
+                          `0x000000000000000000000000${recipient.slice(2)}`,
+                        ],
+                        data: `0x${amount.toString(16).padStart(64, "0")}`,
+                      },
+                    ],
+                  },
+                };
+              }
+              if (method === "eth_blockNumber") {
+                return { jsonrpc: "2.0", id: 1, result: "0x70" };
+              }
+            }
+            throw new Error(`unexpected rpc request: ${JSON.stringify(request)}`);
+          },
+        }
+      );
+
+      assert.equal(rpcCalls > 0, true);
+    },
+    "scripts/run-tests.js#V8-002"
+  );
+
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;
   const failCount = RESULTS.length - passCount;
   const summary = {

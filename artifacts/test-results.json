@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 87,
-    "pass": 87,
+    "total": 89,
+    "pass": 89,
     "fail": 0,
-    "generated_at": "2026-02-15T00:06:30.580Z"
+    "generated_at": "2026-02-15T00:20:04.323Z"
   },
   "results": [
     {
@@ -440,6 +440,16 @@
       "name": "V7-004 unauthorized access to status/claim is denied by entitlement rules",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V7-004"
+    },
+    {
+      "name": "V8-001 rpc preflight missing URL returns deterministic error and does not mutate order state",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V8-001"
+    },
+    {
+      "name": "V8-002 rpc confirm uses provider and preserves recipient/amount hard locks",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V8-002"
     }
   ]
 }

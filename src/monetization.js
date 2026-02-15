@@ -738,11 +738,14 @@ class MonetizationService {
     if (!["tron", "arbitrum"].includes(chain)) {
       throw new Error(`v0.4 chain proof not supported for ${chain}`);
     }
-    if (!this.chain_provider) {
-      throw new Error("chain provider is not configured");
-    }
-    if (typeof this.chain_provider.getTransferEvidence !== "function") {
-      throw new Error("chain provider does not implement getTransferEvidence");
+    try {
+      this.#preflightChainProvider(chain);
+    } catch (error) {
+      const mapped = mapProviderError(error);
+      order.last_error_code = mapped.code;
+      order.last_checked_at_ms = checkedAtMs;
+      this.#saveState();
+      throw mapped;
     }
 
     let evidence = null;
@@ -846,6 +849,7 @@ class MonetizationService {
           const txId = payment.transaction_id || payment.tx_hash;
           if (txId) {
             order.last_checked_at_ms = nowMs;
+            this.#preflightChainProvider(order.payment_chain);
             const evidence = this.chain_provider.getTransferEvidence({
               chain: order.payment_chain,
               asset: order.payment_asset,
@@ -954,6 +958,24 @@ class MonetizationService {
     }
     if (String(order.member_id) !== String(memberId)) {
       fail();
+    }
+  }
+
+  #preflightChainProvider(chain) {
+    if (!this.chain_provider) {
+      throw new Error("chain provider is not configured");
+    }
+    if (typeof this.chain_provider.getTransferEvidence !== "function") {
+      throw new Error("chain provider does not implement getTransferEvidence");
+    }
+    if (typeof this.chain_provider.preflightValidate === "function") {
+      try {
+        this.chain_provider.preflightValidate({
+          chain,
+        });
+      } catch (error) {
+        throw mapProviderError(error);
+      }
     }
   }
 

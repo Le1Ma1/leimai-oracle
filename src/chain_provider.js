@@ -305,6 +305,27 @@ class MockChainProvider {
     );
   }
 
+  preflightValidate(input = {}) {
+    const chainRaw = input.chain;
+    if (chainRaw === undefined || chainRaw === null || chainRaw === "") {
+      return {
+        provider_mode: "mock",
+        source: "mock",
+        ok: true,
+      };
+    }
+    const chain = normalizePaymentChain(chainRaw);
+    if (!chain || !["tron", "arbitrum", "ethereum"].includes(chain)) {
+      throw new ChainProviderError("RPC_UNSUPPORTED_CHAIN", "RPC_UNSUPPORTED_CHAIN");
+    }
+    return {
+      provider_mode: "mock",
+      source: "mock",
+      ok: true,
+      chain,
+    };
+  }
+
   getTransferEvidence(input) {
     const chain = normalizePaymentChain(input.chain);
     if (!chain) {
@@ -473,6 +494,33 @@ class RpcChainProvider {
       provider_name: `${this.provider_name}:${chain}`,
       fetched_at_epoch: this.now_fn(),
       source: "rpc",
+    };
+  }
+
+  preflightValidate(input = {}) {
+    const chainRaw = input.chain;
+    if (chainRaw !== undefined && chainRaw !== null && chainRaw !== "") {
+      const chain = normalizePaymentChain(chainRaw);
+      if (!chain || !["tron", "arbitrum", "ethereum"].includes(chain)) {
+        throw new ChainProviderError("RPC_UNSUPPORTED_CHAIN", "RPC_UNSUPPORTED_CHAIN");
+      }
+      this.#requireRpcUrl(chain);
+      return {
+        provider_mode: "rpc",
+        provider_name: `${this.provider_name}:${chain}`,
+        source: "rpc",
+        ok: true,
+        chain,
+      };
+    }
+    // v0.8 preflight baseline: rails-relevant rpc urls must all be configured.
+    this.#requireRpcUrl("tron");
+    this.#requireRpcUrl("arbitrum");
+    return {
+      provider_mode: "rpc",
+      provider_name: this.provider_name,
+      source: "rpc",
+      ok: true,
     };
   }
 

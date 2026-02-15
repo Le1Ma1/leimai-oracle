@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-15T00:06:30.624Z
+Generated: 2026-02-15T00:20:13.180Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -135,3 +135,12 @@ Summary: 4 PASS / 0 FAIL / 4 TOTAL
 | V7-002 | PASS | scripts/run-tests.js#V7-002 | Automated check passed |
 | V7-003 | PASS | scripts/run-tests.js#V7-003 | Automated check passed |
 | V7-004 | PASS | scripts/run-tests.js#V7-004 | Automated check passed |
+
+# v0.8 Production Switch Kit Checkpoint
+
+Summary: 2 PASS / 0 FAIL / 2 TOTAL
+
+| V8_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V8-001 | PASS | scripts/run-tests.js#V8-001 | Automated check passed |
+| V8-002 | PASS | scripts/run-tests.js#V8-002 | Automated check passed |
