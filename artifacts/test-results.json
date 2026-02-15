@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 83,
-    "pass": 83,
+    "total": 87,
+    "pass": 87,
     "fail": 0,
-    "generated_at": "2026-02-14T23:53:55.392Z"
+    "generated_at": "2026-02-15T00:05:27.534Z"
   },
   "results": [
     {
@@ -420,6 +420,26 @@
       "name": "V6-004 provider error mapping does not mutate order state",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V6-004"
+    },
+    {
+      "name": "V7-001 status endpoint does not leak locked_data and returns stable shape",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V7-001"
+    },
+    {
+      "name": "V7-002 NEEDS_CLAIM flow does not bypass exact-match and triggers reconcile attempt",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V7-002"
+    },
+    {
+      "name": "V7-003 claim replay is idempotent and does not duplicate actions",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V7-003"
+    },
+    {
+      "name": "V7-004 unauthorized access to status/claim is denied by entitlement rules",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V7-004"
     }
   ]
 }

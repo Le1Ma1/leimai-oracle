@@ -2831,6 +2831,339 @@ async function run() {
     "scripts/run-tests.js#V6-004"
   );
 
+  await runTest(
+    "V7-001 status endpoint does not leak locked_data and returns stable shape",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const create = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v7-status-member",
+            "x-idempotency-key": "v7-status-create",
+            "x-now-ms": "1700000300000",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDC-L2",
+            base_amount: "13.000000",
+            order_id: "v7-status-order",
+          }),
+        });
+        assert.equal(create.status, 200);
+
+        const status = await fetchJson(
+          `${baseUrl}/checkout/status?order_id=v7-status-order`,
+          {
+            headers: {
+              "x-member-id": "v7-status-member",
+              "x-now-ms": "1700000301000",
+            },
+          }
+        );
+        assert.equal(status.status, 200);
+        assert.equal(hasLockedData(status.json), false);
+        assert.deepEqual(Object.keys(status.json).sort(), [
+          "confirmations_observed",
+          "expected_amount",
+          "last_checked_at",
+          "last_error_code",
+          "order_id",
+          "order_state",
+          "rail",
+        ]);
+        assert.equal(status.json.order_state, ORDER_STATES.AWAITING_PAYMENT);
+        assert.equal(typeof status.json.expected_amount, "string");
+        assert.equal(typeof status.json.rail, "object");
+        assert.equal(typeof status.json.confirmations_observed, "number");
+      });
+    },
+    "scripts/run-tests.js#V7-001"
+  );
+
+  await runTest(
+    "V7-002 NEEDS_CLAIM flow does not bypass exact-match and triggers reconcile attempt",
+    async () => {
+      const railsMap = getPaymentRailsMap();
+      const expectedMicro = "25000000";
+      const orderA = "v7-claim-order-a";
+      const orderB = "v7-claim-order-b";
+      const baseA = deriveBaseAmountForExpected(orderA, expectedMicro);
+      const baseB = deriveBaseAmountForExpected(orderB, expectedMicro);
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+
+      await withServer(
+        async (baseUrl) => {
+          const createA = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-claim-member",
+              "x-idempotency-key": "v7-claim-create-a",
+              "x-now-ms": "1700000310000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDT-TRON",
+              base_amount: baseA,
+              order_id: orderA,
+            }),
+          });
+          const createB = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-claim-member",
+              "x-idempotency-key": "v7-claim-create-b",
+              "x-now-ms": "1700000310100",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDT-TRON",
+              base_amount: baseB,
+              order_id: orderB,
+            }),
+          });
+          assert.equal(createA.status, 200);
+          assert.equal(createB.status, 200);
+
+          const pay = await fetchJson(`${baseUrl}/checkout/pay`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-claim-member",
+              "x-idempotency-key": "v7-claim-pay",
+              "x-now-ms": "1700000310200",
+            },
+            body: JSON.stringify({
+              order_id: orderA,
+              chain: "tron",
+              asset_symbol: "usdt",
+              recipient_address: railsMap["USDT-TRON"].recipient_address,
+              onchain_amount_micro: expectedMicro,
+              confirmations: 20,
+              transaction_id: "v7_claim_collision_tx",
+              event_index: 0,
+            }),
+          });
+          assert.equal(pay.status, 200);
+          assert.equal(pay.json.settlement.outcome, "NEEDS_CLAIM");
+
+          const claimCreate = await fetchJson(`${baseUrl}/claim/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-claim-member",
+              "x-idempotency-key": "v7-claim-create",
+              "x-now-ms": "1700000310300",
+            },
+            body: JSON.stringify({
+              order_id: orderA,
+            }),
+          });
+          assert.equal(claimCreate.status, 200);
+          assert.equal(claimCreate.json.state, "CREATED");
+
+          const claimSubmit = await fetchJson(`${baseUrl}/claim/submit`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-claim-member",
+              "x-idempotency-key": "v7-claim-submit",
+              "x-now-ms": "1700000310400",
+            },
+            body: JSON.stringify({
+              order_id: orderA,
+              chain: "tron",
+              tx_id: "v4_tron_non_exact_tx",
+            }),
+          });
+          assert.equal(claimSubmit.status, 200);
+          assert.equal(claimSubmit.json.reconcile_scheduled, true);
+          assert.equal(claimSubmit.json.claim.reconcile_attempts, 1);
+          assert.notEqual(
+            claimSubmit.json.order_status.order_state,
+            ORDER_STATES.ACTIVE
+          );
+        },
+        {
+          chainMock: true,
+          chainFixturesDir: fixturesDir,
+        }
+      );
+    },
+    "scripts/run-tests.js#V7-002"
+  );
+
+  await runTest(
+    "V7-003 claim replay is idempotent and does not duplicate actions",
+    async () => {
+      const railsMap = getPaymentRailsMap();
+      const expectedMicro = "25000000";
+      const orderA = "v7-idem-order-a";
+      const orderB = "v7-idem-order-b";
+      const baseA = deriveBaseAmountForExpected(orderA, expectedMicro);
+      const baseB = deriveBaseAmountForExpected(orderB, expectedMicro);
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+
+      await withServer(
+        async (baseUrl) => {
+          for (const [orderId, baseAmount, idemKey] of [
+            [orderA, baseA, "v7-idem-create-a"],
+            [orderB, baseB, "v7-idem-create-b"],
+          ]) {
+            const create = await fetchJson(`${baseUrl}/checkout/create`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-member-id": "v7-idem-member",
+                "x-idempotency-key": idemKey,
+                "x-now-ms": "1700000320000",
+              },
+              body: JSON.stringify({
+                requested_tier: "pro",
+                asset: "USDT-TRON",
+                base_amount: baseAmount,
+                order_id: orderId,
+              }),
+            });
+            assert.equal(create.status, 200);
+          }
+
+          const pay = await fetchJson(`${baseUrl}/checkout/pay`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-idem-member",
+              "x-idempotency-key": "v7-idem-pay",
+              "x-now-ms": "1700000320100",
+            },
+            body: JSON.stringify({
+              order_id: orderA,
+              chain: "tron",
+              asset_symbol: "usdt",
+              recipient_address: railsMap["USDT-TRON"].recipient_address,
+              onchain_amount_micro: expectedMicro,
+              confirmations: 20,
+              transaction_id: "v7_idem_collision_tx",
+              event_index: 0,
+            }),
+          });
+          assert.equal(pay.status, 200);
+          assert.equal(pay.json.settlement.outcome, "NEEDS_CLAIM");
+
+          const claimCreate = await fetchJson(`${baseUrl}/claim/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-idem-member",
+              "x-idempotency-key": "v7-idem-claim-create",
+              "x-now-ms": "1700000320200",
+            },
+            body: JSON.stringify({
+              order_id: orderA,
+            }),
+          });
+          assert.equal(claimCreate.status, 200);
+
+          const payload = {
+            order_id: orderA,
+            chain: "tron",
+            tx_id: "v4_tron_non_exact_tx",
+          };
+          const first = await fetchJson(`${baseUrl}/claim/submit`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-idem-member",
+              "x-idempotency-key": "v7-idem-submit",
+              "x-now-ms": "1700000320300",
+            },
+            body: JSON.stringify(payload),
+          });
+          const second = await fetchJson(`${baseUrl}/claim/submit`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v7-idem-member",
+              "x-idempotency-key": "v7-idem-submit",
+              "x-now-ms": "1700000320400",
+            },
+            body: JSON.stringify(payload),
+          });
+          assert.equal(first.status, 200);
+          assert.equal(second.status, 200);
+          assert.deepEqual(second.json, first.json);
+          assert.equal(first.json.claim.reconcile_attempts, 1);
+          assert.equal(first.json.claim.submissions.length, 1);
+        },
+        {
+          chainMock: true,
+          chainFixturesDir: fixturesDir,
+        }
+      );
+    },
+    "scripts/run-tests.js#V7-003"
+  );
+
+  await runTest(
+    "V7-004 unauthorized access to status/claim is denied by entitlement rules",
+    async () => {
+      await withServer(async (baseUrl) => {
+        const create = await fetchJson(`${baseUrl}/checkout/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v7-auth-owner",
+            "x-idempotency-key": "v7-auth-create",
+            "x-now-ms": "1700000330000",
+          },
+          body: JSON.stringify({
+            requested_tier: "pro",
+            asset: "USDC-L2",
+            base_amount: "14.000000",
+            order_id: "v7-auth-order",
+          }),
+        });
+        assert.equal(create.status, 200);
+
+        const statusNoAuth = await fetchJson(
+          `${baseUrl}/checkout/status?order_id=v7-auth-order`
+        );
+        assert.equal(statusNoAuth.status, 401);
+        assert.equal(statusNoAuth.json.error_code, "UNAUTHORIZED");
+
+        const statusWrongMember = await fetchJson(
+          `${baseUrl}/checkout/status?order_id=v7-auth-order`,
+          {
+            headers: {
+              "x-member-id": "v7-auth-other",
+              "x-now-ms": "1700000331000",
+            },
+          }
+        );
+        assert.equal(statusWrongMember.status, 403);
+        assert.equal(statusWrongMember.json.error_code, "FORBIDDEN");
+
+        const claimWrongMember = await fetchJson(`${baseUrl}/claim/create`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "v7-auth-other",
+            "x-idempotency-key": "v7-auth-claim",
+            "x-now-ms": "1700000332000",
+          },
+          body: JSON.stringify({
+            order_id: "v7-auth-order",
+          }),
+        });
+        assert.equal(claimWrongMember.status, 403);
+        assert.equal(claimWrongMember.json.error_code, "FORBIDDEN");
+      });
+    },
+    "scripts/run-tests.js#V7-004"
+  );
+
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;
   const failCount = RESULTS.length - passCount;
   const summary = {

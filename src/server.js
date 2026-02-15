@@ -73,6 +73,24 @@ function readJsonBody(req) {
   });
 }
 
+function requireMemberHeader(headers) {
+  const value = headers["x-member-id"];
+  if (value === undefined || String(value).trim() === "") {
+    return {
+      ok: false,
+      error: createErrorEnvelope(
+        "UNAUTHORIZED",
+        "member authentication is required",
+        401
+      ),
+    };
+  }
+  return {
+    ok: true,
+    member_id: String(value).trim(),
+  };
+}
+
 function toCheckoutErrorEnvelope(error) {
   const code = String(error && error.code ? error.code : "").trim();
   if (Object.prototype.hasOwnProperty.call(CHECKOUT_PROVIDER_ERROR_STATUS, code)) {
@@ -80,6 +98,9 @@ function toCheckoutErrorEnvelope(error) {
   }
   if (code.startsWith("RPC_CONFIG_MISSING_")) {
     return createErrorEnvelope("BAD_REQUEST", code, 400);
+  }
+  if (code === "ACCESS_DENIED_BY_MEMBER") {
+    return createErrorEnvelope("FORBIDDEN", code, 403);
   }
   return createErrorEnvelope(
     "BAD_REQUEST",
@@ -208,6 +229,36 @@ function createAppServer(options = {}) {
       return sendJson(res, 200, order);
     }
 
+    if (req.method === "GET" && url.pathname === "/checkout/status") {
+      const memberAuth = requireMemberHeader(req.headers);
+      if (!memberAuth.ok) {
+        return sendJson(
+          res,
+          memberAuth.error.status,
+          memberAuth.error.payload
+        );
+      }
+      const orderId = query.order_id;
+      if (!orderId) {
+        const err = createErrorEnvelope("BAD_REQUEST", "order_id is required", 400);
+        return sendJson(res, err.status, err.payload);
+      }
+      try {
+        const status = monetization.getOrderStatus({
+          order_id: orderId,
+          member_id: memberAuth.member_id,
+        });
+        if (!status) {
+          const err = createErrorEnvelope("NOT_FOUND", "order not found", 404);
+          return sendJson(res, err.status, err.payload);
+        }
+        return sendJson(res, 200, status);
+      } catch (error) {
+        const err = toCheckoutErrorEnvelope(error);
+        return sendJson(res, err.status, err.payload);
+      }
+    }
+
     if (req.method === "POST" && url.pathname === "/checkout/create") {
       try {
         const body = await readJsonBody(req);
@@ -269,6 +320,69 @@ function createAppServer(options = {}) {
           idempotency_key: idempotencyKey,
           request_body: body,
           handler: () => monetization.confirmOrder(body),
+        });
+        return sendJson(res, wrapped.status_code, wrapped.response);
+      } catch (error) {
+        const err = toCheckoutErrorEnvelope(error);
+        return sendJson(res, err.status, err.payload);
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/claim/create") {
+      const memberAuth = requireMemberHeader(req.headers);
+      if (!memberAuth.ok) {
+        return sendJson(
+          res,
+          memberAuth.error.status,
+          memberAuth.error.payload
+        );
+      }
+      try {
+        const body = await readJsonBody(req);
+        const idempotencyKey = pickIdempotencyKey(req.headers, body);
+        const wrapped = monetization.executeIdempotent({
+          scope: "claim/create",
+          member_id: memberAuth.member_id,
+          idempotency_key: idempotencyKey,
+          request_body: body,
+          handler: () =>
+            monetization.createClaim({
+              member_id: memberAuth.member_id,
+              order_id: body.order_id,
+              signature: body.signature,
+            }),
+        });
+        return sendJson(res, wrapped.status_code, wrapped.response);
+      } catch (error) {
+        const err = toCheckoutErrorEnvelope(error);
+        return sendJson(res, err.status, err.payload);
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/claim/submit") {
+      const memberAuth = requireMemberHeader(req.headers);
+      if (!memberAuth.ok) {
+        return sendJson(
+          res,
+          memberAuth.error.status,
+          memberAuth.error.payload
+        );
+      }
+      try {
+        const body = await readJsonBody(req);
+        const idempotencyKey = pickIdempotencyKey(req.headers, body);
+        const wrapped = monetization.executeIdempotent({
+          scope: "claim/submit",
+          member_id: memberAuth.member_id,
+          idempotency_key: idempotencyKey,
+          request_body: body,
+          handler: () =>
+            monetization.submitClaim({
+              member_id: memberAuth.member_id,
+              order_id: body.order_id,
+              tx_id: body.tx_id || body.tx_hash,
+              chain: body.chain,
+            }),
         });
         return sendJson(res, wrapped.status_code, wrapped.response);
       } catch (error) {

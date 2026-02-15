@@ -37,6 +37,7 @@ function loadTestCoverage() {
       v4Coverage: new Map(),
       v5Coverage: new Map(),
       v6Coverage: new Map(),
+      v7Coverage: new Map(),
     };
   }
 
@@ -47,6 +48,7 @@ function loadTestCoverage() {
   const v4Coverage = new Map();
   const v5Coverage = new Map();
   const v6Coverage = new Map();
+  const v7Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -101,6 +103,15 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v7Match = result.name.match(/\b(V7-\d+)\b/);
+    if (v7Match) {
+      v7Coverage.set(v7Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
@@ -109,6 +120,7 @@ function loadTestCoverage() {
     v4Coverage,
     v5Coverage,
     v6Coverage,
+    v7Coverage,
   };
 }
 
@@ -266,6 +278,28 @@ function main() {
     );
   }
 
+  const v7Ids = Array.from(coverage.v7Coverage.keys()).sort();
+  const v7Rows = [];
+  let v7Pass = 0;
+  let v7Fail = 0;
+  for (const v7Id of v7Ids) {
+    const item = coverage.v7Coverage.get(v7Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v7Pass += 1;
+    } else {
+      v7Fail += 1;
+    }
+    v7Rows.push(
+      toRow([
+        v7Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -359,6 +393,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.6 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.7 Revenue Activation Checkpoint",
+    "",
+    `Summary: ${v7Pass} PASS / ${v7Fail} FAIL / ${v7Pass + v7Fail} TOTAL`,
+    "",
+    toRow(["V7_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v7Rows.length > 0
+      ? v7Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.7 evidence in test-results.json",
           ]),
         ]),
     "",

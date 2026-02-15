@@ -129,6 +129,10 @@ function normalizeRequestedTier(rawTier) {
   return normalized;
 }
 
+function isMissingMember(memberId) {
+  return !memberId || String(memberId).trim() === "";
+}
+
 class MonetizationService {
   constructor(options = {}) {
     this.persistence_path =
@@ -139,6 +143,7 @@ class MonetizationService {
     this.entitlements = new Map();
     this.payments = new Map();
     this.idempotency = new Map();
+    this.claims = new Map();
     this.audit_trail = [];
     this.reconcile_timer = null;
     this.reconcile_provider = null;
@@ -301,6 +306,8 @@ class MonetizationService {
       payment_status: "UNPAID",
       match_status: "UNPAID",
       confirmations: 0,
+      last_error_code: null,
+      last_checked_at_ms: null,
       state_history: [],
     };
 
@@ -324,6 +331,189 @@ class MonetizationService {
     serialized.payment_chain = rail.chain;
     serialized.payment_asset = rail.payment_asset;
     return serialized;
+  }
+
+  getOrderStatus(input) {
+    if (!input || typeof input !== "object") {
+      throw new Error("getOrderStatus input is required");
+    }
+    const orderId = String(input.order_id || "").trim();
+    if (!orderId) {
+      throw new Error("order_id is required");
+    }
+    const memberId = String(input.member_id || "").trim();
+    if (isMissingMember(memberId)) {
+      throw new Error("member_id is required");
+    }
+    const order = this.orders.get(orderId);
+    if (!order) {
+      return null;
+    }
+    this.#assertOrderAccess(order, memberId);
+    const rail = resolveOrderRail({
+      railKey: order.asset,
+      paymentAsset: order.payment_asset,
+    });
+    const lastCheckedAtMs = Number(order.last_checked_at_ms);
+    return {
+      order_id: order.order_id,
+      order_state: order.state,
+      expected_amount: order.amount_expected,
+      rail: {
+        key: order.asset,
+        chain: rail.chain,
+        asset: rail.payment_asset,
+        recipient_address: rail.recipient_address,
+      },
+      last_error_code: order.last_error_code || null,
+      last_checked_at:
+        Number.isFinite(lastCheckedAtMs) && lastCheckedAtMs > 0
+          ? new Date(lastCheckedAtMs).toISOString()
+          : null,
+      confirmations_observed: Number(order.confirmations || 0),
+    };
+  }
+
+  createClaim(input) {
+    if (!input || typeof input !== "object") {
+      throw new Error("createClaim input is required");
+    }
+    const memberId = String(input.member_id || "").trim();
+    const orderId = String(input.order_id || "").trim();
+    if (isMissingMember(memberId)) {
+      throw new Error("member_id is required");
+    }
+    if (!orderId) {
+      throw new Error("order_id is required");
+    }
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error("order not found");
+    }
+    this.#assertOrderAccess(order, memberId);
+    if (order.match_status !== "NEEDS_CLAIM") {
+      throw new Error("CLAIM_NOT_REQUIRED");
+    }
+    const key = `${memberId}:${orderId}`;
+    const nowMs = Date.now();
+    let claim = this.claims.get(key);
+    if (!claim) {
+      claim = {
+        claim_id: randomUUID(),
+        member_id: memberId,
+        order_id: orderId,
+        optional_signature:
+          input.signature !== undefined && input.signature !== null
+            ? String(input.signature)
+            : null,
+        state: "CREATED",
+        submissions: [],
+        reconcile_attempts: 0,
+        last_reconcile_at_ms: null,
+        last_reconcile_result: null,
+        created_at_ms: nowMs,
+        updated_at_ms: nowMs,
+      };
+      this.claims.set(key, claim);
+      this.audit_trail.push({
+        kind: "CLAIM_CREATED",
+        claim_id: claim.claim_id,
+        member_id: memberId,
+        order_id: orderId,
+        at_ms: nowMs,
+      });
+    } else {
+      claim.updated_at_ms = nowMs;
+      if (
+        !claim.optional_signature &&
+        input.signature !== undefined &&
+        input.signature !== null
+      ) {
+        claim.optional_signature = String(input.signature);
+      }
+    }
+    this.#saveState();
+    return deepClone(claim);
+  }
+
+  submitClaim(input) {
+    if (!input || typeof input !== "object") {
+      throw new Error("submitClaim input is required");
+    }
+    const memberId = String(input.member_id || "").trim();
+    const orderId = String(input.order_id || "").trim();
+    const txId = String(input.tx_id || input.tx_hash || "").trim();
+    if (isMissingMember(memberId)) {
+      throw new Error("member_id is required");
+    }
+    if (!orderId) {
+      throw new Error("order_id is required");
+    }
+    if (!txId) {
+      throw new Error("tx_id is required");
+    }
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error("order not found");
+    }
+    this.#assertOrderAccess(order, memberId);
+    const chain = normalizePaymentChain(input.chain || order.payment_chain);
+    if (!chain) {
+      throw new Error(`Unsupported payment chain: ${input.chain}`);
+    }
+    if (chain !== order.payment_chain) {
+      throw new Error(
+        `Payment chain mismatch, expected ${order.payment_chain}, got ${chain}`
+      );
+    }
+    const key = `${memberId}:${orderId}`;
+    const claim = this.claims.get(key);
+    if (!claim) {
+      throw new Error("claim not found");
+    }
+    const submissionKey = `${chain}:${txId}`;
+    const nowMs = Date.now();
+    if (!claim.submissions.includes(submissionKey)) {
+      claim.submissions.push(submissionKey);
+    }
+    claim.state = "SUBMITTED";
+    claim.reconcile_attempts += 1;
+    claim.last_reconcile_at_ms = nowMs;
+    claim.updated_at_ms = nowMs;
+
+    let reconcileOutcome = "RECONCILE_ATTEMPTED";
+    try {
+      this.confirmOrder({
+        order_id: orderId,
+        chain,
+        tx_id: txId,
+      });
+      order.last_error_code = null;
+    } catch (error) {
+      const mapped = mapProviderError(error);
+      order.last_error_code = mapped.code;
+      reconcileOutcome = mapped.code;
+    }
+    order.last_checked_at_ms = nowMs;
+    claim.last_reconcile_result = reconcileOutcome;
+    this.audit_trail.push({
+      kind: "CLAIM_SUBMITTED",
+      claim_id: claim.claim_id,
+      member_id: memberId,
+      order_id: orderId,
+      submission_key: submissionKey,
+      reconcile_result: reconcileOutcome,
+      at_ms: nowMs,
+    });
+    this.#saveState();
+    return {
+      claim: deepClone(claim),
+      order_status: this.getOrderStatus({
+        order_id: orderId,
+        member_id: memberId,
+      }),
+      reconcile_scheduled: true,
+    };
   }
 
   submitPayment(input) {
@@ -503,6 +693,7 @@ class MonetizationService {
     if (hasChainProofInput(input)) {
       return this.#confirmOrderByChainProof(order, input);
     }
+    const checkedAtMs = Date.now();
     const confirmations = toConfirmations(input.confirmations);
     if (confirmations > order.confirmations) {
       order.confirmations = confirmations;
@@ -518,14 +709,17 @@ class MonetizationService {
       order.state === ORDER_STATES.CONFIRMED &&
       isConfirmationSufficient(order.chain_profile, order.confirmations)
     ) {
-      this.#activateOrder(order, "CONFIRM_ENDPOINT_CONFIRMED", Date.now());
+      this.#activateOrder(order, "CONFIRM_ENDPOINT_CONFIRMED", checkedAtMs);
     }
 
+    order.last_error_code = null;
+    order.last_checked_at_ms = checkedAtMs;
     this.#saveState();
     return this.#serializeOrder(order);
   }
 
   #confirmOrderByChainProof(order, input) {
+    const checkedAtMs = Date.now();
     const txId = String(input.tx_id || input.tx_hash || "").trim();
     if (!txId) {
       throw new Error("tx_id is required for chain proof confirm");
@@ -561,15 +755,23 @@ class MonetizationService {
         amount_expected_micro: order.amount_expected_micro,
       });
     } catch (error) {
-      throw mapProviderError(error);
+      const mapped = mapProviderError(error);
+      order.last_error_code = mapped.code;
+      order.last_checked_at_ms = checkedAtMs;
+      this.#saveState();
+      throw mapped;
     }
     if (!evidence) {
       order.match_status = "UNMATCHED";
+      order.last_error_code = "UNMATCHED";
+      order.last_checked_at_ms = checkedAtMs;
       this.#saveState();
       return this.#serializeOrder(order);
     }
     if (normalizePaymentAsset(evidence.asset) !== rail.payment_asset) {
       order.match_status = "UNMATCHED";
+      order.last_error_code = "UNMATCHED";
+      order.last_checked_at_ms = checkedAtMs;
       this.#saveState();
       return this.#serializeOrder(order);
     }
@@ -603,6 +805,8 @@ class MonetizationService {
     }
 
     this.submitPayment(paymentInput);
+    order.last_error_code = null;
+    order.last_checked_at_ms = checkedAtMs;
     return this.#serializeOrder(order);
   }
 
@@ -629,6 +833,8 @@ class MonetizationService {
 
       const updateValue = updates.get(order.credited_unique_id);
       if (updateValue !== undefined) {
+        order.last_checked_at_ms = nowMs;
+        order.last_error_code = null;
         const nextConfirmations = toConfirmations(updateValue);
         if (nextConfirmations > payment.confirmations) {
           payment.confirmations = nextConfirmations;
@@ -639,6 +845,7 @@ class MonetizationService {
         try {
           const txId = payment.transaction_id || payment.tx_hash;
           if (txId) {
+            order.last_checked_at_ms = nowMs;
             const evidence = this.chain_provider.getTransferEvidence({
               chain: order.payment_chain,
               asset: order.payment_asset,
@@ -647,16 +854,21 @@ class MonetizationService {
               amount_expected_micro: order.amount_expected_micro,
             });
             if (evidence) {
+              order.last_error_code = null;
               const nextConfirmations = toConfirmations(evidence.confirmations);
               if (nextConfirmations > payment.confirmations) {
                 payment.confirmations = nextConfirmations;
                 order.confirmations = nextConfirmations;
                 updated_confirmations += 1;
               }
+            } else {
+              order.last_error_code = "UNMATCHED";
             }
           }
         } catch (error) {
           const mapped = mapProviderError(error);
+          order.last_error_code = mapped.code;
+          order.last_checked_at_ms = nowMs;
           provider_errors[mapped.code] =
             (provider_errors[mapped.code] || 0) + 1;
         }
@@ -729,6 +941,20 @@ class MonetizationService {
 
   getAuditTrail() {
     return deepClone(this.audit_trail);
+  }
+
+  #assertOrderAccess(order, memberId) {
+    const fail = () => {
+      const error = new Error("ACCESS_DENIED_BY_MEMBER");
+      error.code = "ACCESS_DENIED_BY_MEMBER";
+      throw error;
+    };
+    if (!order || !memberId) {
+      fail();
+    }
+    if (String(order.member_id) !== String(memberId)) {
+      fail();
+    }
   }
 
   #findCollisionCandidates(order, occurredAtMs) {
@@ -847,6 +1073,10 @@ class MonetizationService {
     for (const payment of parsed.payments || []) {
       this.payments.set(payment.unique_id, payment);
     }
+    for (const claim of parsed.claims || []) {
+      const key = `${claim.member_id}:${claim.order_id}`;
+      this.claims.set(key, claim);
+    }
     for (const idem of parsed.idempotency || []) {
       this.idempotency.set(idem.key, idem);
     }
@@ -864,6 +1094,7 @@ class MonetizationService {
       orders: Array.from(this.orders.values()),
       entitlements: Array.from(this.entitlements.values()),
       payments: Array.from(this.payments.values()),
+      claims: Array.from(this.claims.values()),
       idempotency: Array.from(this.idempotency.values()),
       audit_trail: this.audit_trail,
     };

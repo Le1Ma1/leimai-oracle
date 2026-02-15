@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-14T23:53:55.495Z
+Generated: 2026-02-15T00:05:27.584Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -124,3 +124,14 @@ Summary: 4 PASS / 0 FAIL / 4 TOTAL
 | V6-002 | PASS | scripts/run-tests.js#V6-002 | Automated check passed |
 | V6-003 | PASS | scripts/run-tests.js#V6-003 | Automated check passed |
 | V6-004 | PASS | scripts/run-tests.js#V6-004 | Automated check passed |
+
+# v0.7 Revenue Activation Checkpoint
+
+Summary: 4 PASS / 0 FAIL / 4 TOTAL
+
+| V7_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V7-001 | PASS | scripts/run-tests.js#V7-001 | Automated check passed |
+| V7-002 | PASS | scripts/run-tests.js#V7-002 | Automated check passed |
+| V7-003 | PASS | scripts/run-tests.js#V7-003 | Automated check passed |
+| V7-004 | PASS | scripts/run-tests.js#V7-004 | Automated check passed |
