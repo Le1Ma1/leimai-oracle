@@ -1,9 +1,9 @@
 {
   "summary": {
-    "total": 89,
-    "pass": 89,
+    "total": 92,
+    "pass": 92,
     "fail": 0,
-    "generated_at": "2026-02-15T00:20:04.323Z"
+    "generated_at": "2026-02-15T00:33:51.253Z"
   },
   "results": [
     {
@@ -450,6 +450,21 @@
       "name": "V8-002 rpc confirm uses provider and preserves recipient/amount hard locks",
       "status": "PASS",
       "evidence": "scripts/run-tests.js#V8-002"
+    },
+    {
+      "name": "V9-001 /ops/health returns stable shape and does not leak rpc url/token",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V9-001"
+    },
+    {
+      "name": "V9-002 rpc missing required URL exposes provider_ready=false and confirm remains deterministic without state mutation",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V9-002"
+    },
+    {
+      "name": "V9-003 mock mode uses fixtures and never attempts network calls",
+      "status": "PASS",
+      "evidence": "scripts/run-tests.js#V9-003"
     }
   ]
 }

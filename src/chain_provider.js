@@ -1,4 +1,5 @@
 const { execFileSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -130,6 +131,26 @@ function ensureMode(modeRaw) {
     throw new ChainProviderError("RPC_BAD_RESPONSE", `Unsupported CHAIN_MODE: ${mode}`);
   }
   return mode;
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  const parts = keys.map(
+    (key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`
+  );
+  return `{${parts.join(",")}}`;
+}
+
+function buildProviderConfigHash(safeConfig) {
+  return createHash("sha256")
+    .update(stableStringify(safeConfig), "utf8")
+    .digest("hex");
 }
 
 function fixturePath(fixturesDir, chain, txId) {
@@ -279,6 +300,28 @@ class MockChainProvider {
       options.fixturesPath ||
       path.join(process.cwd(), "tests", "fixtures", "chain");
     this.now_fn = options.now_fn || Date.now;
+    const safeConfig = {
+      chain_mode: "mock",
+      provider_name: "fixture",
+      rpc_config_present: {
+        arbitrum: false,
+        tron: false,
+      },
+      supported_chains: ["tron", "arbitrum", "ethereum"],
+    };
+    this.operational_status = {
+      chain_mode: "mock",
+      provider_ready: true,
+      rpc_config_present: safeConfig.rpc_config_present,
+      provider_config_hash: buildProviderConfigHash(safeConfig),
+    };
+  }
+
+  getOperationalStatus() {
+    return {
+      ...this.operational_status,
+      rpc_config_present: { ...this.operational_status.rpc_config_present },
+    };
   }
 
   getTransfersByTx({ chain, tx_id }) {
@@ -373,6 +416,33 @@ class RpcChainProvider {
     this.sleep_impl = options.sleep_impl || deterministicSleep;
     this.now_fn = options.now_fn || Date.now;
     this.provider_name = options.provider_name || "rpc";
+    const rpcConfigPresent = {
+      arbitrum: !!this.urls.arbitrum,
+      tron: !!this.urls.tron,
+    };
+    const safeConfig = {
+      chain_mode: "rpc",
+      provider_name: this.provider_name,
+      rpc_config_present: rpcConfigPresent,
+      request_timeout_ms: this.request_timeout_ms,
+      max_attempts: this.max_attempts,
+      base_backoff_ms: this.base_backoff_ms,
+      rate_limit_per_minute: this.rate_limit_per_minute,
+      supported_chains: ["tron", "arbitrum", "ethereum"],
+    };
+    this.operational_status = {
+      chain_mode: "rpc",
+      provider_ready: rpcConfigPresent.arbitrum && rpcConfigPresent.tron,
+      rpc_config_present: rpcConfigPresent,
+      provider_config_hash: buildProviderConfigHash(safeConfig),
+    };
+  }
+
+  getOperationalStatus() {
+    return {
+      ...this.operational_status,
+      rpc_config_present: { ...this.operational_status.rpc_config_present },
+    };
   }
 
   #requireRpcUrl(chain) {

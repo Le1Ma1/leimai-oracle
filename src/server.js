@@ -145,6 +145,15 @@ function createAppServer(options = {}) {
       rpc_sleep_impl: options.rpcSleepImpl,
       rpc_now_fn: options.rpcNowFn,
     });
+  const buildCommitRaw =
+    options.buildCommit !== undefined ? options.buildCommit : process.env.BUILD_COMMIT;
+  const buildCommit =
+    buildCommitRaw === undefined || buildCommitRaw === null || String(buildCommitRaw).trim() === ""
+      ? null
+      : String(buildCommitRaw).trim();
+  const providerSoT = monetization.getProviderOperationalStatus({
+    now_ms: Date.now(),
+  });
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -201,6 +210,23 @@ function createAppServer(options = {}) {
     if (req.method === "GET" && url.pathname === "/methodology") {
       const result = buildMethodologyPayload(now);
       return sendJson(res, result.status, result.payload);
+    }
+
+    if (req.method === "GET" && url.pathname === "/ops/health") {
+      return sendJson(res, 200, {
+        ok: true,
+        data: {
+          chain_mode: providerSoT.chain_mode,
+          provider_ready: providerSoT.provider_ready,
+          rpc_config_present: {
+            arbitrum: providerSoT.rpc_config_present.arbitrum,
+            tron: providerSoT.rpc_config_present.tron,
+          },
+          build_commit: buildCommit,
+          provider_config_hash: providerSoT.provider_config_hash,
+          now_epoch: nowMs,
+        },
+      });
     }
 
     if (req.method === "GET" && url.pathname === "/plan") {

@@ -148,6 +148,7 @@ class MonetizationService {
     this.reconcile_timer = null;
     this.reconcile_provider = null;
     this.chain_provider = createChainProviderFromEnv(options);
+    this.provider_operational_status = this.#computeProviderOperationalStatus();
 
     if (this.persistence_path) {
       this.#loadState();
@@ -947,6 +948,19 @@ class MonetizationService {
     return deepClone(this.audit_trail);
   }
 
+  getProviderOperationalStatus({ now_ms } = {}) {
+    const nowEpoch = toMs(now_ms ?? Date.now(), "now_ms");
+    return {
+      chain_mode: this.provider_operational_status.chain_mode,
+      provider_ready: !!this.provider_operational_status.provider_ready,
+      rpc_config_present: {
+        ...this.provider_operational_status.rpc_config_present,
+      },
+      provider_config_hash: this.provider_operational_status.provider_config_hash,
+      now_epoch: nowEpoch,
+    };
+  }
+
   #assertOrderAccess(order, memberId) {
     const fail = () => {
       const error = new Error("ACCESS_DENIED_BY_MEMBER");
@@ -977,6 +991,33 @@ class MonetizationService {
         throw mapProviderError(error);
       }
     }
+  }
+
+  #computeProviderOperationalStatus() {
+    if (
+      this.chain_provider &&
+      typeof this.chain_provider.getOperationalStatus === "function"
+    ) {
+      const status = this.chain_provider.getOperationalStatus();
+      return {
+        chain_mode: String(status.chain_mode || "mock"),
+        provider_ready: !!status.provider_ready,
+        rpc_config_present: {
+          arbitrum: !!(status.rpc_config_present && status.rpc_config_present.arbitrum),
+          tron: !!(status.rpc_config_present && status.rpc_config_present.tron),
+        },
+        provider_config_hash: String(status.provider_config_hash || ""),
+      };
+    }
+    return {
+      chain_mode: "mock",
+      provider_ready: true,
+      rpc_config_present: {
+        arbitrum: false,
+        tron: false,
+      },
+      provider_config_hash: "",
+    };
   }
 
   #findCollisionCandidates(order, occurredAtMs) {

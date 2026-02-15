@@ -39,6 +39,7 @@ function loadTestCoverage() {
       v6Coverage: new Map(),
       v7Coverage: new Map(),
       v8Coverage: new Map(),
+      v9Coverage: new Map(),
     };
   }
 
@@ -51,6 +52,7 @@ function loadTestCoverage() {
   const v6Coverage = new Map();
   const v7Coverage = new Map();
   const v8Coverage = new Map();
+  const v9Coverage = new Map();
   for (const result of json.results || []) {
     const acMatch = result.name.match(/\b(AC-\d+)\b/);
     if (acMatch) {
@@ -123,6 +125,15 @@ function loadTestCoverage() {
         note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
       });
     }
+
+    const v9Match = result.name.match(/\b(V9-\d+)\b/);
+    if (v9Match) {
+      v9Coverage.set(v9Match[1], {
+        status: result.status,
+        evidence: result.evidence || "scripts/run-tests.js",
+        note: result.status === "PASS" ? "Automated check passed" : result.error || "Automated check failed",
+      });
+    }
   }
   return {
     acCoverage,
@@ -133,6 +144,7 @@ function loadTestCoverage() {
     v6Coverage,
     v7Coverage,
     v8Coverage,
+    v9Coverage,
   };
 }
 
@@ -334,6 +346,28 @@ function main() {
     );
   }
 
+  const v9Ids = Array.from(coverage.v9Coverage.keys()).sort();
+  const v9Rows = [];
+  let v9Pass = 0;
+  let v9Fail = 0;
+  for (const v9Id of v9Ids) {
+    const item = coverage.v9Coverage.get(v9Id);
+    const status = item.status === "PASS" ? "PASS" : "FAIL";
+    if (status === "PASS") {
+      v9Pass += 1;
+    } else {
+      v9Fail += 1;
+    }
+    v9Rows.push(
+      toRow([
+        v9Id,
+        status,
+        item.evidence,
+        item.note.replace(/\|/g, "/"),
+      ])
+    );
+  }
+
   const output = [
     "# ACC-60 Checkpoint Report",
     "",
@@ -461,6 +495,23 @@ function main() {
             "FAIL",
             "none",
             "No v0.8 evidence in test-results.json",
+          ]),
+        ]),
+    "",
+    "# v0.9 Ops Health + Boot Preflight Checkpoint",
+    "",
+    `Summary: ${v9Pass} PASS / ${v9Fail} FAIL / ${v9Pass + v9Fail} TOTAL`,
+    "",
+    toRow(["V9_ID", "Status", "Evidence Artifact", "Note"]),
+    toRow(["---", "---", "---", "---"]),
+    ...(v9Rows.length > 0
+      ? v9Rows
+      : [
+          toRow([
+            "none",
+            "FAIL",
+            "none",
+            "No v0.9 evidence in test-results.json",
           ]),
         ]),
     "",

@@ -3362,6 +3362,208 @@ async function run() {
     "scripts/run-tests.js#V8-002"
   );
 
+  await runTest(
+    "V9-001 /ops/health returns stable shape and does not leak rpc url/token",
+    async () => {
+      await withServer(
+        async (baseUrl) => {
+          const health = await fetchJson(`${baseUrl}/ops/health`);
+          assert.equal(health.status, 200);
+          assert.deepEqual(Object.keys(health.json).sort(), ["data", "ok"]);
+          assert.equal(health.json.ok, true);
+          assert.deepEqual(Object.keys(health.json.data).sort(), [
+            "build_commit",
+            "chain_mode",
+            "now_epoch",
+            "provider_config_hash",
+            "provider_ready",
+            "rpc_config_present",
+          ]);
+          assert.equal(health.json.data.chain_mode, "rpc");
+          assert.equal(health.json.data.provider_ready, true);
+          assert.deepEqual(health.json.data.rpc_config_present, {
+            arbitrum: true,
+            tron: true,
+          });
+          assert.equal(health.json.data.build_commit, "v0.9-test-commit");
+          assert.equal(typeof health.json.data.now_epoch, "number");
+          assert.equal(typeof health.json.data.provider_config_hash, "string");
+          assert.equal(health.json.data.provider_config_hash.length, 64);
+          const payloadText = JSON.stringify(health.json).toLowerCase();
+          assert.equal(payloadText.includes("http://arb.rpc.local"), false);
+          assert.equal(payloadText.includes("http://tron.rpc.local"), false);
+          assert.equal(payloadText.includes("v9-secret-token"), false);
+          assert.equal(payloadText.includes("rpc_url"), false);
+          assert.equal(payloadText.includes("token"), false);
+        },
+        {
+          chainMode: "rpc",
+          arbitrumRpcUrl: "http://arb.rpc.local",
+          tronRpcUrl: "http://tron.rpc.local",
+          ethereumRpcUrl: "http://eth.rpc.local",
+          tronApiKey: "v9-secret-token",
+          buildCommit: "v0.9-test-commit",
+          rpcFetchImpl: () => {
+            throw new Error("network must not be called by health endpoint");
+          },
+        }
+      );
+    },
+    "scripts/run-tests.js#V9-001"
+  );
+
+  await runTest(
+    "V9-002 rpc missing required URL exposes provider_ready=false and confirm remains deterministic without state mutation",
+    async () => {
+      let rpcCalls = 0;
+      await withServer(
+        async (baseUrl) => {
+          const health = await fetchJson(`${baseUrl}/ops/health`);
+          assert.equal(health.status, 200);
+          assert.equal(health.json.ok, true);
+          assert.equal(health.json.data.chain_mode, "rpc");
+          assert.equal(health.json.data.provider_ready, false);
+          assert.deepEqual(health.json.data.rpc_config_present, {
+            arbitrum: false,
+            tron: true,
+          });
+
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v9-missing-url-member",
+              "x-idempotency-key": "v9-missing-url-create",
+              "x-now-ms": "1700000360000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDC-L2",
+              base_amount: "17.000000",
+              order_id: "v9-missing-url-order",
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v9-missing-url-member",
+              "x-idempotency-key": "v9-missing-url-confirm",
+              "x-now-ms": "1700000361000",
+            },
+            body: JSON.stringify({
+              order_id: "v9-missing-url-order",
+              chain: "arbitrum",
+              tx_id: "0xv9missing",
+            }),
+          });
+          assert.equal(confirm.status, 400);
+          assert.equal(confirm.json.error_code, "BAD_REQUEST");
+          assert.equal(
+            String(confirm.json.message).includes("RPC_CONFIG_MISSING_ARBITRUM_RPC_URL"),
+            true
+          );
+
+          const status = await fetchJson(
+            `${baseUrl}/checkout/status?order_id=v9-missing-url-order`,
+            {
+              headers: {
+                "x-member-id": "v9-missing-url-member",
+                "x-now-ms": "1700000362000",
+              },
+            }
+          );
+          assert.equal(status.status, 200);
+          assert.equal(status.json.order_state, ORDER_STATES.AWAITING_PAYMENT);
+          assert.equal(status.json.confirmations_observed, 0);
+          assert.equal(
+            status.json.last_error_code,
+            "RPC_CONFIG_MISSING_ARBITRUM_RPC_URL"
+          );
+        },
+        {
+          chainMode: "rpc",
+          tronRpcUrl: "http://tron.rpc.local",
+          arbitrumRpcUrl: null,
+          ethereumRpcUrl: "http://eth.rpc.local",
+          rpcFetchImpl: () => {
+            rpcCalls += 1;
+            throw new Error("rpc fetch should not be called when preflight fails");
+          },
+        }
+      );
+      assert.equal(rpcCalls, 0);
+    },
+    "scripts/run-tests.js#V9-002"
+  );
+
+  await runTest(
+    "V9-003 mock mode uses fixtures and never attempts network calls",
+    async () => {
+      const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "chain");
+      let rpcCalls = 0;
+      await withServer(
+        async (baseUrl) => {
+          const health = await fetchJson(`${baseUrl}/ops/health`);
+          assert.equal(health.status, 200);
+          assert.equal(health.json.ok, true);
+          assert.equal(health.json.data.chain_mode, "mock");
+          assert.equal(health.json.data.provider_ready, true);
+
+          const orderId = "v9-mock-order";
+          const baseAmount = deriveBaseAmountForExpected(orderId, "25000000");
+          const create = await fetchJson(`${baseUrl}/checkout/create`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v9-mock-member",
+              "x-idempotency-key": "v9-mock-create",
+              "x-now-ms": "1700000370000",
+            },
+            body: JSON.stringify({
+              requested_tier: "pro",
+              asset: "USDT-TRON",
+              base_amount: baseAmount,
+              order_id: orderId,
+            }),
+          });
+          assert.equal(create.status, 200);
+          assert.equal(create.json.state, ORDER_STATES.AWAITING_PAYMENT);
+
+          const confirm = await fetchJson(`${baseUrl}/checkout/confirm`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-member-id": "v9-mock-member",
+              "x-idempotency-key": "v9-mock-confirm",
+              "x-now-ms": "1700000371000",
+            },
+            body: JSON.stringify({
+              order_id: orderId,
+              chain: "tron",
+              tx_id: "v4_tron_ok_tx",
+            }),
+          });
+          assert.equal(confirm.status, 200);
+          assert.equal(confirm.json.state, ORDER_STATES.ACTIVE);
+        },
+        {
+          chainMode: "mock",
+          chainFixturesDir: fixturesDir,
+          rpcFetchImpl: () => {
+            rpcCalls += 1;
+            throw new Error("network should not be called in mock mode");
+          },
+        }
+      );
+      assert.equal(rpcCalls, 0);
+    },
+    "scripts/run-tests.js#V9-003"
+  );
+
   const passCount = RESULTS.filter((item) => item.status === "PASS").length;
   const failCount = RESULTS.length - passCount;
   const summary = {

@@ -1,6 +1,6 @@
 # ACC-60 Checkpoint Report
 
-Generated: 2026-02-15T00:20:13.180Z
+Generated: 2026-02-15T00:33:51.332Z
 
 Summary: 53 PASS / 0 FAIL / 53 TOTAL
 
@@ -144,3 +144,13 @@ Summary: 2 PASS / 0 FAIL / 2 TOTAL
 | --- | --- | --- | --- |
 | V8-001 | PASS | scripts/run-tests.js#V8-001 | Automated check passed |
 | V8-002 | PASS | scripts/run-tests.js#V8-002 | Automated check passed |
+
+# v0.9 Ops Health + Boot Preflight Checkpoint
+
+Summary: 3 PASS / 0 FAIL / 3 TOTAL
+
+| V9_ID | Status | Evidence Artifact | Note |
+| --- | --- | --- | --- |
+| V9-001 | PASS | scripts/run-tests.js#V9-001 | Automated check passed |
+| V9-002 | PASS | scripts/run-tests.js#V9-002 | Automated check passed |
+| V9-003 | PASS | scripts/run-tests.js#V9-003 | Automated check passed |
