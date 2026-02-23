@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { DATA_SOURCE, IS_SAMPLE_SCOPE, TRUTH_FLAGS } from "@/lib/compliance";
-import type { SupportedLocale } from "@/lib/i18n";
+import { SUPPORTED_LOCALES, type SupportedLocale } from "@/lib/i18n";
 import { coerceCoin, fetchCandles, normalizeSymbol, barsForLookback } from "@/lib/market";
 import { t } from "@/lib/text";
 import type {
@@ -416,7 +416,7 @@ export async function computeAtlas(input: Omit<PageDataRequest, "indicatorSlug">
 export function buildMethodologyData(locale: PageDataRequest["locale"]) {
   return {
     locale,
-    objective: "Historical in-sample parameter exploration with deterministic scoring and friction-aware adjustment.",
+    objective: t(locale, "methodologyObjective"),
     constraints: [
       "IN_SAMPLE_ONLY",
       "BAR_CLOSE_EXECUTION_ASSUMPTION",
@@ -426,7 +426,7 @@ export function buildMethodologyData(locale: PageDataRequest["locale"]) {
     ],
     scoring: "score = CAGR - 0.5 * MaxDrawdown - 0.1 * TurnoverPenalty",
     friction: FRICTION,
-    locales: ["en", "zh-TW", "ko", "tr", "vi"],
+    locales: [...SUPPORTED_LOCALES],
     brand: "LeiMai Oracle"
   };
 }

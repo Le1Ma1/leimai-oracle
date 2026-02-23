@@ -7,6 +7,10 @@
     "precompute": "tsx scripts/precompute.ts",
     "precompute:hybrid": "tsx scripts/precompute.ts --hybrid",
     "precompute:hybrid-full": "tsx scripts/precompute.ts --hybrid --full-bars",
+    "i18n:check": "tsx scripts/i18n-check.ts",
+    "test:ui:snapshots": "playwright test",
+    "test:ui:update-baseline": "playwright test --update-snapshots",
+    "quality:gate": "npm run i18n:check && npm run test:ui:snapshots",
     "predev": "npm run prepare:brand && npm run precompute",
     "dev": "next dev",
     "prebuild": "npm run prepare:brand && npm run precompute",
@@ -25,6 +29,7 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "20.17.19",
     "@types/react": "18.3.20",
     "@types/react-dom": "18.3.6",

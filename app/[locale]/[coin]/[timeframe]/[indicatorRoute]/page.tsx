@@ -7,6 +7,7 @@ import { coerceLocale } from "@/lib/i18n";
 import { coerceCoin, isSupportedTimeframe } from "@/lib/market";
 import { getPrecomputedPageData } from "@/lib/precomputed";
 import { buildPageMetadata } from "@/lib/seo";
+import { t } from "@/lib/text";
 
 function parseIndicatorRoute(route: string) {
   const match = /^best-([a-z0-9-]+)-settings$/i.exec(route);
@@ -28,7 +29,7 @@ export async function generateMetadata({
   return buildPageMetadata({
     locale,
     title: `${params.coin.toUpperCase()} ${params.timeframe} ${indicatorSlug}`,
-    description: `Historical in-sample snapshot for ${params.coin.toUpperCase()} ${params.timeframe}.`,
+    description: `${t(locale, "detailMetaDescriptionPrefix")} ${params.coin.toUpperCase()} ${params.timeframe}.`,
     pathWithoutLocale: `/${params.coin}/${params.timeframe}/${params.indicatorRoute}`
   });
 }
@@ -73,23 +74,24 @@ export default async function BestIndicatorPage({
           {payload.coin} {payload.timeframe} best-{indicatorSlug}-settings
         </h1>
         <p className="muted mono">
-          symbol={payload.symbol} | lookback={payload.lookback} | regime={payload.regime} | proof={payload.proofId}
+          {t(locale, "detailSymbolLabel")}={payload.symbol} | {t(locale, "detailLookbackLabel")}={payload.lookback} |{" "}
+          {t(locale, "detailRegimeLabel")}={payload.regime} | {t(locale, "detailProofLabel")}={payload.proofId}
         </p>
       </article>
 
       <article className="grid two">
         <div className="panel">
-          <div className="muted">HISTORICAL RETURN (IN-SAMPLE)</div>
+          <div className="muted">{t(locale, "detailHistoricalReturnLabel")}</div>
           <div className="kpi">{payload.headlineReturnIS}%</div>
         </div>
         <div className="panel">
-          <div className="muted">AFTER FRICTION</div>
+          <div className="muted">{t(locale, "detailAfterFrictionLabel")}</div>
           <div className="kpi">{payload.headlineReturnAfterFriction}%</div>
         </div>
       </article>
 
       <article className="panel">
-        <h2 style={{ marginTop: 0 }}>Best Params</h2>
+        <h2 style={{ marginTop: 0 }}>{t(locale, "detailBestParams")}</h2>
         <pre className="mono" style={{ overflowX: "auto" }}>
           {JSON.stringify(payload.bestParams, null, 2)}
         </pre>
@@ -102,17 +104,18 @@ export default async function BestIndicatorPage({
           ))}
         </div>
         <p className="muted mono" style={{ marginTop: "0.75rem" }}>
-          truth_flags={payload.truthFlags.join(",")} | precomputed_at={payload.precomputedAt}
+          {t(locale, "detailTruthFlagsLabel")}={payload.truthFlags.join(",")} | {t(locale, "detailPrecomputedLabel")}=
+          {payload.precomputedAt}
         </p>
       </article>
 
       <article className="panel">
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           <Link href={`/${locale}/atlas/${params.coin}?tf=${params.timeframe}&lookback=${lookback}&regime=${regime}`}>
-            Open Atlas
+            {t(locale, "detailOpenAtlas")}
           </Link>
-          <Link href={`/${locale}/verify/${payload.proofId}`}>Open Verify</Link>
-          <Link href={`/${locale}/methodology`}>Methodology</Link>
+          <Link href={`/${locale}/verify/${payload.proofId}`}>{t(locale, "detailOpenVerify")}</Link>
+          <Link href={`/${locale}/methodology`}>{t(locale, "detailMethodologyLink")}</Link>
         </div>
       </article>
     </section>

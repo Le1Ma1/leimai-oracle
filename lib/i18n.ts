@@ -1,21 +1,37 @@
-export const SUPPORTED_LOCALES = ["en", "zh-TW", "ko", "tr", "vi"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-TW", "zh-CN", "ko", "tr", "vi"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: SupportedLocale = "en";
 
 const LOCALE_SET = new Set<string>(SUPPORTED_LOCALES);
+const LOCALE_BY_LOWERCASE = Object.fromEntries(
+  SUPPORTED_LOCALES.map((locale) => [locale.toLowerCase(), locale])
+) as Record<string, SupportedLocale>;
 
 const COUNTRY_TO_LOCALE: Record<string, SupportedLocale> = {
   TW: "zh-TW",
   HK: "zh-TW",
   MO: "zh-TW",
+  CN: "zh-CN",
+  SG: "zh-CN",
   KR: "ko",
   TR: "tr",
   VN: "vi"
 };
 
+const LOCALE_ALIASES: Record<string, SupportedLocale> = {
+  zh: "zh-CN",
+  "zh-hans": "zh-CN",
+  "zh-cn": "zh-CN",
+  "zh-sg": "zh-CN",
+  "zh-hant": "zh-TW",
+  "zh-tw": "zh-TW",
+  "zh-hk": "zh-TW",
+  "zh-mo": "zh-TW"
+};
+
 function normalizeLocaleToken(token: string): string {
-  return token.trim().replace("_", "-");
+  return token.trim().replace(/_/g, "-");
 }
 
 export function isSupportedLocale(value: string): value is SupportedLocale {
@@ -27,12 +43,21 @@ export function coerceLocale(value: string | null | undefined): SupportedLocale 
     return null;
   }
   const normalized = normalizeLocaleToken(value);
+  const lower = normalized.toLowerCase();
+  if (LOCALE_ALIASES[lower]) {
+    return LOCALE_ALIASES[lower];
+  }
   if (isSupportedLocale(normalized)) {
     return normalized;
   }
-  const base = normalized.split("-")[0] ?? "";
-  const match = SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === base.toLowerCase());
-  return match ?? null;
+  if (LOCALE_BY_LOWERCASE[lower]) {
+    return LOCALE_BY_LOWERCASE[lower];
+  }
+  const base = lower.split("-")[0] ?? "";
+  if (LOCALE_ALIASES[base]) {
+    return LOCALE_ALIASES[base];
+  }
+  return LOCALE_BY_LOWERCASE[base] ?? null;
 }
 
 export function resolveLocaleFromAcceptLanguage(

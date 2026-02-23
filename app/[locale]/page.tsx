@@ -12,7 +12,7 @@ export async function generateMetadata({ params }: { params: { locale: string } 
   }
   return buildPageMetadata({
     locale,
-    title: "Home",
+    title: t(locale, "homeMetaTitle"),
     description: t(locale, "subtitle"),
     pathWithoutLocale: "/"
   });
@@ -37,9 +37,12 @@ export default function LocaleHomePage({ params }: { params: { locale: string } 
         <h1 style={{ marginTop: "0.75rem", marginBottom: "0.25rem" }}>{t(locale, "title")}</h1>
         <p className="muted">{t(locale, "subtitle")}</p>
         <p className="mono" style={{ marginTop: "0.75rem" }}>
-          Route Pattern: /{locale}/[coin]/[timeframe]/best-[indicator]-settings
+          {t(locale, "homeRoutePattern")}: /{locale}/[coin]/[timeframe]/best-[indicator]-settings
         </p>
-        <p className="mono">Lookback: 30d / 90d / 1y / 2020-now | Regime: all / bull / range / bear</p>
+        <p className="mono">
+          {t(locale, "homeLookbackLabel")}: 30d / 90d / 1y / 2020-now | {t(locale, "homeRegimeLabel")}: all / bull / range /
+          bear
+        </p>
       </article>
 
       <article className="grid two">
@@ -53,7 +56,7 @@ export default function LocaleHomePage({ params }: { params: { locale: string } 
             <h2 style={{ marginTop: 0, marginBottom: "0.4rem" }}>
               {seed.coin.toUpperCase()} {seed.tf} / {seed.indicator}
             </h2>
-            <p className="muted">Open IS peak snapshot</p>
+            <p className="muted">{t(locale, "homeOpenSnapshot")}</p>
           </Link>
         ))}
       </article>

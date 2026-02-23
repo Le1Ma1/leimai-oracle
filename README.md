@@ -5,7 +5,7 @@ Historical in-sample crypto parameter research platform with multilingual SEO pa
 ## Stack
 - Next.js App Router + TypeScript
 - API routes under `/api/v1/*`
-- Middleware locale redirect (`en`, `zh-TW`, `ko`, `tr`, `vi`)
+- Middleware locale redirect (`en`, `zh-TW`, `zh-CN`, `ko`, `tr`, `vi`)
 - Dynamic sitemap buckets
 - Offline precompute pipeline for Top-10 coins
 - Brand source-of-truth: root `logo.png`, `signature.jpg`
@@ -25,6 +25,13 @@ npm run build
 1. `prepare:brand` to generate favicon/icon assets
 2. `precompute` to generate offline data artifacts in `public/precomputed`
 3. `next build`
+
+## Quality Gates
+```bash
+npm run i18n:check
+npm run test:ui:snapshots
+npm run quality:gate
+```
 
 ## Hybrid market ingest (small timeframes)
 - `npm run precompute:hybrid`

@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { LocaleNav } from "@/components/LocaleNav";
 import { coerceLocale } from "@/lib/i18n";
+import { t } from "@/lib/text";
 
 export default function LocaleLayout({
   children,
@@ -25,17 +26,16 @@ export default function LocaleLayout({
           {children}
           <footer className="panel" style={{ marginTop: "1rem" }}>
             <p className="muted" style={{ marginTop: 0 }}>
-              LeiMai Oracle publishes historical in-sample research snapshots only. Results are not out-of-sample forecasts and
-              are not investment advice.
+              {t(locale, "footerDisclaimer")}
             </p>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-              {["IN_SAMPLE", "NOT_OOS", "NOT_ADVICE"].map((flag) => (
+              {[t(locale, "disclaimerA"), t(locale, "disclaimerB"), t(locale, "disclaimerC")].map((flag) => (
                 <span key={flag} className="badge">
                   {flag}
                 </span>
               ))}
               <Link href={`/${locale}/methodology`} className="mono">
-                Methodology
+                {t(locale, "footerMethodologyLink")}
               </Link>
             </div>
           </footer>
