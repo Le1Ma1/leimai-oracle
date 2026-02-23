@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 
 import { SUPPORTED_LOCALES, type SupportedLocale } from "@/lib/i18n";
+import { t } from "@/lib/text";
 
 type Props = {
   locale: SupportedLocale;
@@ -12,15 +13,15 @@ export function LocaleNav({ locale }: Props) {
     <header className="panel" style={{ marginBottom: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.75rem" }}>
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <Image src="/logo.png" alt="LeiMai Oracle logo" width={32} height={32} />
-          <strong>LeiMai Oracle</strong>
-          <span className="badge">Global i18n</span>
+          <Image src="/logo.png" alt={t(locale, "logoAlt")} width={32} height={32} />
+          <strong>{t(locale, "title")}</strong>
+          <span className="badge">{t(locale, "globalI18n")}</span>
         </div>
         <nav style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-          <Link href={`/${locale}`}>Home</Link>
-          <Link href={`/${locale}/methodology`}>Methodology</Link>
-          <Link href={`/${locale}/summaries`}>Summaries</Link>
-          <Link href={`/${locale}/atlas/btc`}>Atlas</Link>
+          <Link href={`/${locale}`}>{t(locale, "home")}</Link>
+          <Link href={`/${locale}/methodology`}>{t(locale, "methodology")}</Link>
+          <Link href={`/${locale}/summaries`}>{t(locale, "summaries")}</Link>
+          <Link href={`/${locale}/atlas/btc`}>{t(locale, "atlas")}</Link>
         </nav>
       </div>
       <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
