@@ -26,6 +26,12 @@ npm run build
 2. `precompute` to generate offline data artifacts in `public/precomputed`
 3. `next build`
 
+## Hybrid market ingest (small timeframes)
+- `npm run precompute:hybrid`
+  Uses Binance monthly archive `.zip` for `1m/5m/15m`, then fills missing ranges with API.
+- `npm run precompute:hybrid-full`
+  Same source mode, but disables candle cap (`maxBars=null`). Use for deep backfill jobs only.
+
 ## Key routes
 - `/{locale}`
 - `/{locale}/{coin}/{timeframe}/best-{indicator}-settings`

@@ -5,6 +5,8 @@
   "scripts": {
     "prepare:brand": "node scripts/prepare-brand.mjs",
     "precompute": "tsx scripts/precompute.ts",
+    "precompute:hybrid": "tsx scripts/precompute.ts --hybrid",
+    "precompute:hybrid-full": "tsx scripts/precompute.ts --hybrid --full-bars",
     "predev": "npm run prepare:brand && npm run precompute",
     "dev": "next dev",
     "prebuild": "npm run prepare:brand && npm run precompute",
@@ -15,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "next": "14.2.25",
     "png-to-ico": "^3.0.1",
     "react": "18.3.1",

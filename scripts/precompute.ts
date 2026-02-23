@@ -17,6 +17,12 @@ function writeJson(filename: string, value: unknown) {
 
 async function run() {
   mkdirSync(OUTPUT_DIR, { recursive: true });
+  const argv = new Set(process.argv.slice(2));
+  const useHybrid = argv.has("--hybrid");
+  const useFullBars = argv.has("--full-bars");
+  if (useHybrid) {
+    console.log(`[precompute] data-mode=hybrid${useFullBars ? " full-bars=on" : " full-bars=off"}`);
+  }
 
   const runningOnVercel = process.env.VERCEL === "1";
   const hasAllArtifacts = ARTIFACT_FILES.every((name) => existsSync(path.join(OUTPUT_DIR, name)));
@@ -49,7 +55,9 @@ async function run() {
           const candles = await fetchCandles({
             symbol: normalizeSymbol(coin),
             timeframe,
-            lookback
+            lookback,
+            mode: useHybrid ? "hybrid" : "fast",
+            maxBars: useFullBars ? null : undefined
           });
           marketSlices += 1;
 

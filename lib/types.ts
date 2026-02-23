@@ -2,7 +2,7 @@ import type { SupportedLocale } from "@/lib/i18n";
 
 export type Coin = "btc" | "eth" | "sol" | "bnb" | "xrp" | "ada" | "doge" | "ton" | "avax" | "link";
 export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
-export type Lookback = "30d" | "90d" | "1y";
+export type Lookback = "30d" | "90d" | "1y" | "2020-now";
 export type Regime = "all" | "bull" | "range" | "bear";
 export type IndicatorSetSlug = "macd-rsi" | "ema-bollinger" | "rsi-macd";
 export type TruthFlag = "THEORETICAL" | "IN_SAMPLE" | "SNAPSHOT" | "NOT_OOS" | "NOT_EXECUTABLE" | "NOT_ADVICE";
