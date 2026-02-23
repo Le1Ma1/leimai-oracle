@@ -1,0 +1,59 @@
+import { notFound } from "next/navigation";
+
+import { coerceLocale } from "@/lib/i18n";
+import { buildPageMetadata } from "@/lib/seo";
+
+export async function generateMetadata({
+  params
+}: {
+  params: { locale: string; proofId: string };
+}) {
+  const locale = coerceLocale(params.locale);
+  if (!locale) {
+    return {};
+  }
+  return buildPageMetadata({
+    locale,
+    title: `Verify ${params.proofId} | Panopticon`,
+    description: "Proof and metadata validation page.",
+    pathWithoutLocale: `/verify/${params.proofId}`
+  });
+}
+
+export default function VerifyPage({
+  params
+}: {
+  params: { locale: string; proofId: string };
+}) {
+  const locale = coerceLocale(params.locale);
+  if (!locale) {
+    notFound();
+  }
+
+  return (
+    <section className="grid" style={{ gap: "1rem" }}>
+      <article className="panel">
+        <h1 style={{ marginTop: 0 }}>Verify Proof</h1>
+        <p className="mono">proof_id={params.proofId}</p>
+      </article>
+
+      <article className="panel">
+        <h2 style={{ marginTop: 0 }}>Truth Banner</h2>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          {[
+            "THEORETICAL",
+            "IN_SAMPLE",
+            "SNAPSHOT",
+            "NOT_OOS",
+            "NOT_EXECUTABLE",
+            "NOT_ADVICE"
+          ].map((flag) => (
+            <span className="badge" key={flag}>
+              {flag}
+            </span>
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
