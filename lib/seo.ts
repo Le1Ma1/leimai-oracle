@@ -8,14 +8,14 @@ export function getBaseUrl(): URL {
   return new URL(BASE_URL);
 }
 
-export function buildAlternates(pathWithoutLocale: string): Metadata["alternates"] {
+export function buildAlternates(locale: SupportedLocale, pathWithoutLocale: string): Metadata["alternates"] {
   const clean = pathWithoutLocale.startsWith("/") ? pathWithoutLocale : `/${pathWithoutLocale}`;
   const languages = Object.fromEntries(
     SUPPORTED_LOCALES.map((locale) => [locale, `/${locale}${clean === "/" ? "" : clean}`])
   );
 
   return {
-    canonical: `/${DEFAULT_LOCALE}${clean === "/" ? "" : clean}`,
+    canonical: `/${locale}${clean === "/" ? "" : clean}`,
     languages: {
       ...languages,
       "x-default": `/${DEFAULT_LOCALE}${clean === "/" ? "" : clean}`
@@ -34,7 +34,7 @@ export function buildPageMetadata(input: {
     title: input.title,
     description: input.description,
     metadataBase: getBaseUrl(),
-    alternates: buildAlternates(input.pathWithoutLocale),
+    alternates: buildAlternates(input.locale, input.pathWithoutLocale),
     openGraph: {
       title: input.title,
       description: input.description,
