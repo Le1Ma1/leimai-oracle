@@ -10,10 +10,17 @@ export type LocaleMessages = {
   footerDisclaimer: string;
   footerMethodologyLink: string;
   homeMetaTitle: string;
+  homeHeroAlphaLabel: string;
+  homeHeroModeTag: string;
+  homeHeroStatusTag: string;
   homeRoutePattern: string;
   homeLookbackLabel: string;
   homeRegimeLabel: string;
   homeOpenSnapshot: string;
+  homeMatrixHeading: string;
+  homeMatrixSubheading: string;
+  homeMatrixWinRateLabel: string;
+  homeMatrixMddLabel: string;
   methodologyMetaTitle: string;
   methodologyMetaDescription: string;
   methodologyHeading: string;
