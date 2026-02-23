@@ -1,8 +1,25 @@
 import { createHash } from "node:crypto";
 
-import { fetchCandles, normalizeSymbol, timeframeToMs } from "@/lib/market";
+import { DATA_SOURCE, IS_SAMPLE_SCOPE, TRUTH_FLAGS } from "@/lib/compliance";
+import type { SupportedLocale } from "@/lib/i18n";
+import { coerceCoin, fetchCandles, normalizeSymbol, barsForLookback } from "@/lib/market";
 import { t } from "@/lib/text";
-import type { AtlasPoint, AtlasResult, Candle, PageDataRequest, PageDataResult, Regime, StrategyRun } from "@/lib/types";
+import type {
+  AtlasCore,
+  AtlasPoint,
+  AtlasResult,
+  Candle,
+  Coin,
+  IndicatorSetSlug,
+  Lookback,
+  PageDataCore,
+  PageDataRequest,
+  PageDataResult,
+  Regime,
+  StrategyRun,
+  SummariesResult,
+  Timeframe
+} from "@/lib/types";
 
 const ALLOWED_INDICATORS = new Set(["rsi", "macd", "bollinger", "ema"]);
 const FALLBACK_INDICATORS = ["rsi", "macd"];
@@ -13,7 +30,7 @@ const FRICTION = {
   fundingBps: 2
 };
 
-function parseIndicators(slug: string): string[] {
+function parseIndicators(slug: IndicatorSetSlug): string[] {
   const cleaned = slug.toLowerCase().replace(/settings/g, "");
   const parts = cleaned
     .split("-")
@@ -225,10 +242,10 @@ function applyFriction(equity: number, tradeCount: number): number {
 
 function createProofId(input: {
   symbol: string;
-  timeframe: string;
-  lookback: string;
-  regime: string;
-  indicatorSlug: string;
+  timeframe: Timeframe;
+  lookback: Lookback;
+  regime: Regime;
+  indicatorSlug: IndicatorSetSlug;
   params: Record<string, number>;
   asof: number;
 }): string {
@@ -244,21 +261,23 @@ function sortRuns(runs: StrategyRun[]): StrategyRun[] {
   return [...runs].sort((a, b) => b.score - a.score);
 }
 
-export async function computePageData(input: PageDataRequest): Promise<PageDataResult> {
+export function buildPageDataCoreFromCandles(input: {
+  coin: Coin;
+  timeframe: Timeframe;
+  lookback: Lookback;
+  regime: Regime;
+  indicatorSlug: IndicatorSetSlug;
+  candles: Candle[];
+}): PageDataCore {
   const symbol = normalizeSymbol(input.coin);
   const indicators = parseIndicators(input.indicatorSlug);
-  const candles = await fetchCandles({
-    symbol,
-    timeframe: input.timeframe,
-    lookback: input.lookback
-  });
-  const regimeCandles = applyRegime(candles, input.regime);
+  const regimeCandles = applyRegime(input.candles, input.regime);
   const paramSpace = buildParameterSpace(indicators);
   const candidates = cartesian(paramSpace);
   const runs = sortRuns(candidates.map((params) => backtest(regimeCandles, indicators, params)));
   const winner = runs[0];
   const frictionEquity = applyFriction(winner.equity, winner.tradeCount);
-  const nowIso = new Date().toISOString();
+  const asofMs = regimeCandles[regimeCandles.length - 1]?.openTime ?? input.candles[input.candles.length - 1]?.openTime;
   const proofId = createProofId({
     symbol,
     timeframe: input.timeframe,
@@ -266,16 +285,16 @@ export async function computePageData(input: PageDataRequest): Promise<PageDataR
     regime: input.regime,
     indicatorSlug: input.indicatorSlug,
     params: winner.params,
-    asof: regimeCandles[regimeCandles.length - 1].openTime
+    asof: asofMs
   });
 
   return {
-    locale: input.locale,
     coin: input.coin.toUpperCase(),
     symbol,
     timeframe: input.timeframe,
     lookback: input.lookback,
     regime: input.regime,
+    indicatorSlug: input.indicatorSlug,
     indicatorSet: indicators,
     headlineReturnIS: percent(winner.equity - 1),
     headlineReturnAfterFriction: percent(frictionEquity - 1),
@@ -284,27 +303,28 @@ export async function computePageData(input: PageDataRequest): Promise<PageDataR
     score: Number(winner.score.toFixed(4)),
     bestParams: winner.params,
     proofId,
-    asof: nowIso,
+    asof: new Date(asofMs).toISOString(),
+    isSampleScope: IS_SAMPLE_SCOPE,
+    dataSource: DATA_SOURCE,
+    truthFlags: TRUTH_FLAGS,
     friction: {
       ...FRICTION,
       totalCostBpsPerRoundTrip: (FRICTION.takerFeeBps + FRICTION.slippageBps) * 2 + FRICTION.fundingBps
-    },
-    disclaimerFlags: [t(input.locale, "disclaimerA"), t(input.locale, "disclaimerB"), t(input.locale, "disclaimerC")],
-    analysis: `${t(input.locale, "analysisPrefix")} IS=${percent(winner.equity - 1)}%, friction-adjusted=${percent(
-      frictionEquity - 1
-    )}%, trades=${winner.tradeCount}.`
+    }
   };
 }
 
-export async function computeAtlas(input: Omit<PageDataRequest, "indicatorSlug"> & { indicatorSlug: string }): Promise<AtlasResult> {
+export function buildAtlasCoreFromCandles(input: {
+  coin: Coin;
+  timeframe: Timeframe;
+  lookback: Lookback;
+  regime: Regime;
+  indicatorSlug: IndicatorSetSlug;
+  candles: Candle[];
+}): AtlasCore {
   const symbol = normalizeSymbol(input.coin);
   const indicators = parseIndicators(input.indicatorSlug);
-  const candles = await fetchCandles({
-    symbol,
-    timeframe: input.timeframe,
-    lookback: input.lookback
-  });
-  const regimeCandles = applyRegime(candles, input.regime);
+  const regimeCandles = applyRegime(input.candles, input.regime);
   const paramSpace = buildParameterSpace(indicators);
   const candidates = cartesian(paramSpace);
   const points: AtlasPoint[] = candidates.slice(0, 60).map((params) => {
@@ -321,39 +341,98 @@ export async function computeAtlas(input: Omit<PageDataRequest, "indicatorSlug">
   const peak = points.length
     ? points.reduce((best, curr) => (curr.score > best.score ? curr : best), points[0])
     : null;
+  const asofMs = regimeCandles[regimeCandles.length - 1]?.openTime ?? input.candles[input.candles.length - 1]?.openTime;
   return {
-    locale: input.locale,
     coin: input.coin.toUpperCase(),
     symbol,
     timeframe: input.timeframe,
     lookback: input.lookback,
     regime: input.regime,
+    indicatorSlug: input.indicatorSlug,
     indicatorSet: indicators,
     points,
     peak,
-    asof: new Date().toISOString()
+    asof: new Date(asofMs).toISOString(),
+    isSampleScope: IS_SAMPLE_SCOPE,
+    dataSource: DATA_SOURCE,
+    truthFlags: TRUTH_FLAGS
   };
+}
+
+export function hydratePageData(core: PageDataCore, locale: SupportedLocale, precomputedAt: string): PageDataResult {
+  return {
+    ...core,
+    locale,
+    precomputedAt,
+    disclaimerFlags: [t(locale, "disclaimerA"), t(locale, "disclaimerB"), t(locale, "disclaimerC")],
+    analysis: `${t(locale, "analysisPrefix")} IS=${core.headlineReturnIS}%, friction-adjusted=${
+      core.headlineReturnAfterFriction
+    }%, trades=${core.tradeCount}.`
+  };
+}
+
+export function hydrateAtlas(core: AtlasCore, locale: SupportedLocale, precomputedAt: string): AtlasResult {
+  return {
+    ...core,
+    locale,
+    precomputedAt
+  };
+}
+
+export async function computePageData(input: PageDataRequest): Promise<PageDataResult> {
+  const candles = await fetchCandles({
+    symbol: normalizeSymbol(input.coin),
+    timeframe: input.timeframe,
+    lookback: input.lookback
+  });
+  const core = buildPageDataCoreFromCandles({
+    coin: input.coin,
+    timeframe: input.timeframe,
+    lookback: input.lookback,
+    regime: input.regime,
+    indicatorSlug: input.indicatorSlug,
+    candles
+  });
+  return hydratePageData(core, input.locale, new Date().toISOString());
+}
+
+export async function computeAtlas(input: Omit<PageDataRequest, "indicatorSlug"> & { indicatorSlug: IndicatorSetSlug }): Promise<AtlasResult> {
+  const candles = await fetchCandles({
+    symbol: normalizeSymbol(input.coin),
+    timeframe: input.timeframe,
+    lookback: input.lookback
+  });
+  const core = buildAtlasCoreFromCandles({
+    coin: input.coin,
+    timeframe: input.timeframe,
+    lookback: input.lookback,
+    regime: input.regime,
+    indicatorSlug: input.indicatorSlug,
+    candles
+  });
+  return hydrateAtlas(core, input.locale, new Date().toISOString());
 }
 
 export function buildMethodologyData(locale: PageDataRequest["locale"]) {
   return {
     locale,
-    objective:
-      "Programmatic historical parameter exploration with deterministic scoring and friction-aware adjustment.",
+    objective: "Historical in-sample parameter exploration with deterministic scoring and friction-aware adjustment.",
     constraints: [
       "IN_SAMPLE_ONLY",
       "BAR_CLOSE_EXECUTION_ASSUMPTION",
       "NOT_INVESTMENT_ADVICE",
-      "BINANCE_MARKET_DATA_SOURCE"
+      "BINANCE_MARKET_DATA_SOURCE",
+      "NO_OUT_OF_SAMPLE_VALIDATION"
     ],
     scoring: "score = CAGR - 0.5 * MaxDrawdown - 0.1 * TurnoverPenalty",
     friction: FRICTION,
-    locales: ["en", "zh-TW", "ko", "tr", "vi"]
+    locales: ["en", "zh-TW", "ko", "tr", "vi"],
+    brand: "LeiMai Oracle"
   };
 }
 
-export async function buildSummariesData(input: Pick<PageDataRequest, "locale"> & { symbol?: string }) {
-  const coin = (input.symbol || "BTC").replace(/USDT$/i, "");
+export async function buildSummariesData(input: Pick<PageDataRequest, "locale"> & { symbol?: string }): Promise<SummariesResult> {
+  const coin = coerceCoin((input.symbol || "btc").replace(/usdt$/i, "")) ?? "btc";
   const page = await computePageData({
     locale: input.locale,
     coin,
@@ -376,6 +455,10 @@ export async function buildSummariesData(input: Pick<PageDataRequest, "locale"> 
   };
 }
 
-export function expectedBars(input: { lookback: string; timeframe: PageDataRequest["timeframe"] }): number {
-  return Math.floor((90 * 86_400_000) / timeframeToMs(input.timeframe));
+export function expectedBars(input: { lookback: Lookback; timeframe: Timeframe }): number {
+  return barsForLookback(input.lookback, input.timeframe);
+}
+
+export function getFrictionConfig() {
+  return { ...FRICTION };
 }

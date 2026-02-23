@@ -2,7 +2,15 @@ import type { Candle, Timeframe } from "@/lib/types";
 
 const BINANCE_BASE_URL = "https://api.binance.com/api/v3/klines";
 
+export const SUPPORTED_COINS = ["btc", "eth", "sol", "bnb", "xrp", "ada", "doge", "ton", "avax", "link"] as const;
+export type SupportedCoin = (typeof SUPPORTED_COINS)[number];
+export const DEFAULT_COIN: SupportedCoin = "btc";
+
 export const SUPPORTED_TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+export const SUPPORTED_LOOKBACKS = ["30d", "90d", "1y"] as const;
+export type SupportedLookback = (typeof SUPPORTED_LOOKBACKS)[number];
+export const DEFAULT_LOOKBACK: SupportedLookback = "90d";
+
 const TIMEFRAME_TO_MS: Record<Timeframe, number> = {
   "1m": 60_000,
   "5m": 300_000,
@@ -14,6 +22,22 @@ const TIMEFRAME_TO_MS: Record<Timeframe, number> = {
 
 export function isSupportedTimeframe(value: string): value is Timeframe {
   return SUPPORTED_TIMEFRAMES.includes(value as Timeframe);
+}
+
+export function isSupportedCoin(value: string): value is SupportedCoin {
+  return SUPPORTED_COINS.includes(value as SupportedCoin);
+}
+
+export function coerceCoin(value: string | null | undefined): SupportedCoin | null {
+  if (!value) {
+    return null;
+  }
+  const token = value.trim().toLowerCase();
+  return isSupportedCoin(token) ? token : null;
+}
+
+export function isSupportedLookback(value: string): value is SupportedLookback {
+  return SUPPORTED_LOOKBACKS.includes(value as SupportedLookback);
 }
 
 export function normalizeSymbol(coin: string): string {
@@ -28,7 +52,7 @@ export function timeframeToMs(tf: Timeframe): number {
   return TIMEFRAME_TO_MS[tf];
 }
 
-function lookbackToDays(lookback: string): number {
+function lookbackToDays(lookback: SupportedLookback): number {
   switch (lookback) {
     case "30d":
       return 30;
@@ -36,16 +60,12 @@ function lookbackToDays(lookback: string): number {
       return 90;
     case "1y":
       return 365;
-    case "3y":
-      return 365 * 3;
-    case "all":
-      return 365 * 5;
     default:
       return 90;
   }
 }
 
-export function barsForLookback(lookback: string, timeframe: Timeframe): number {
+export function barsForLookback(lookback: SupportedLookback, timeframe: Timeframe): number {
   const days = lookbackToDays(lookback);
   const barsPerDay = Math.max(1, Math.floor(86_400_000 / timeframeToMs(timeframe)));
   return Math.max(120, Math.min(days * barsPerDay, 1000));
@@ -70,7 +90,7 @@ function parseKline(row: unknown): Candle | null {
 export async function fetchCandles(input: {
   symbol: string;
   timeframe: Timeframe;
-  lookback: string;
+  lookback: SupportedLookback;
 }): Promise<Candle[]> {
   const limit = barsForLookback(input.lookback, input.timeframe);
   const url = new URL(BINANCE_BASE_URL);

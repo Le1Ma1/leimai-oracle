@@ -1,20 +1,23 @@
 import { notFound } from "next/navigation";
 
-import { computeAtlas } from "@/lib/engine";
+import { parseLookback, parseRegime } from "@/lib/api";
+import { DEFAULT_INDICATOR_SET, isSupportedIndicatorSet } from "@/lib/catalog";
 import { coerceLocale } from "@/lib/i18n";
-import { isSupportedTimeframe } from "@/lib/market";
+import { coerceCoin, isSupportedTimeframe } from "@/lib/market";
+import { getPrecomputedAtlas } from "@/lib/precomputed";
 import { buildPageMetadata } from "@/lib/seo";
 
 export async function generateMetadata({ params }: { params: { locale: string; coin: string } }) {
   const locale = coerceLocale(params.locale);
-  if (!locale) {
+  const coin = coerceCoin(params.coin);
+  if (!locale || !coin) {
     return {};
   }
   return buildPageMetadata({
     locale,
-    title: `${params.coin.toUpperCase()} Atlas`,
-    description: `Parameter surface atlas for ${params.coin.toUpperCase()}.`,
-    pathWithoutLocale: `/atlas/${params.coin}`
+    title: `${coin.toUpperCase()} Atlas`,
+    description: `Parameter surface atlas for ${coin.toUpperCase()}.`,
+    pathWithoutLocale: `/atlas/${coin}`
   });
 }
 
@@ -26,7 +29,8 @@ export default async function AtlasPage({
   searchParams: { tf?: string; lookback?: string; regime?: string; indicator?: string };
 }) {
   const locale = coerceLocale(params.locale);
-  if (!locale) {
+  const coin = coerceCoin(params.coin);
+  if (!locale || !coin) {
     notFound();
   }
 
@@ -34,15 +38,24 @@ export default async function AtlasPage({
   if (!isSupportedTimeframe(timeframe)) {
     notFound();
   }
+  const lookback = parseLookback(searchParams.lookback ?? null);
+  const regime = parseRegime(searchParams.regime ?? null);
+  const indicatorSlug = (searchParams.indicator ?? DEFAULT_INDICATOR_SET).toLowerCase();
+  if (!lookback || !regime || !isSupportedIndicatorSet(indicatorSlug)) {
+    notFound();
+  }
 
-  const payload = await computeAtlas({
+  const payload = await getPrecomputedAtlas({
     locale,
-    coin: params.coin,
+    coin,
     timeframe,
-    indicatorSlug: searchParams.indicator ?? "macd-rsi",
-    lookback: searchParams.lookback ?? "90d",
-    regime: (searchParams.regime ?? "all") as "all" | "bull" | "range" | "bear"
+    indicatorSlug,
+    lookback,
+    regime
   });
+  if (!payload) {
+    notFound();
+  }
 
   return (
     <section className="grid" style={{ gap: "1rem" }}>
@@ -53,6 +66,7 @@ export default async function AtlasPage({
         <p className="muted mono">
           indicator_set={payload.indicatorSet.join(",")} | points={payload.points.length} | asof={payload.asof}
         </p>
+        <p className="muted mono">truth_flags={payload.truthFlags.join(",")} | precomputed_at={payload.precomputedAt}</p>
       </article>
 
       <article className="panel">

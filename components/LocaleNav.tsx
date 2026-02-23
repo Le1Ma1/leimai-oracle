@@ -12,9 +12,9 @@ export function LocaleNav({ locale }: Props) {
     <header className="panel" style={{ marginBottom: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.75rem" }}>
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <Image src="/logo.png" alt="Panopticon logo" width={32} height={32} />
-          <strong>Project Panopticon</strong>
-          <span className="badge">Day-1 i18n</span>
+          <Image src="/logo.png" alt="LeiMai Oracle logo" width={32} height={32} />
+          <strong>LeiMai Oracle</strong>
+          <span className="badge">Global i18n</span>
         </div>
         <nav style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
           <Link href={`/${locale}`}>Home</Link>

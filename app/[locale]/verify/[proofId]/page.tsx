@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { TRUTH_FLAGS } from "@/lib/compliance";
 import { coerceLocale } from "@/lib/i18n";
 import { buildPageMetadata } from "@/lib/seo";
 
@@ -16,7 +17,8 @@ export async function generateMetadata({
     locale,
     title: `Verify ${params.proofId}`,
     description: "Proof and metadata validation page.",
-    pathWithoutLocale: `/verify/${params.proofId}`
+    pathWithoutLocale: `/verify/${params.proofId}`,
+    noindex: true
   });
 }
 
@@ -40,14 +42,7 @@ export default function VerifyPage({
       <article className="panel">
         <h2 style={{ marginTop: 0 }}>Truth Banner</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          {[
-            "THEORETICAL",
-            "IN_SAMPLE",
-            "SNAPSHOT",
-            "NOT_OOS",
-            "NOT_EXECUTABLE",
-            "NOT_ADVICE"
-          ].map((flag) => (
+          {TRUTH_FLAGS.map((flag) => (
             <span className="badge" key={flag}>
               {flag}
             </span>

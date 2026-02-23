@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { parseLocaleWithFallback } from "@/lib/api";
+import { TRUTH_FLAGS } from "@/lib/compliance";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
     data: {
       locale,
       proof_id: proofId,
-      truth_flags: ["THEORETICAL", "IN_SAMPLE", "SNAPSHOT", "NOT_OOS", "NOT_EXECUTABLE", "NOT_ADVICE"],
+      truth_flags: TRUTH_FLAGS,
       canonical_url: `/${locale}/verify/${proofId}`
     }
   });

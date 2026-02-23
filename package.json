@@ -1,12 +1,13 @@
 {
-  "name": "project-panopticon",
+  "name": "leimai-oracle",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "prepare:brand": "node scripts/prepare-brand.mjs",
-    "predev": "npm run prepare:brand",
+    "precompute": "tsx scripts/precompute.ts",
+    "predev": "npm run prepare:brand && npm run precompute",
     "dev": "next dev",
-    "prebuild": "npm run prepare:brand",
+    "prebuild": "npm run prepare:brand && npm run precompute",
     "build": "next build",
     "prestart": "npm run prepare:brand",
     "start": "next start",
@@ -29,6 +30,7 @@
     "eslint-config-next": "14.2.25",
     "postcss": "8.5.3",
     "tailwindcss": "3.4.17",
+    "tsx": "^4.20.6",
     "typescript": "5.7.3"
   }
 }

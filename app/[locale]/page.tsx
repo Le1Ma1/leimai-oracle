@@ -39,6 +39,7 @@ export default function LocaleHomePage({ params }: { params: { locale: string } 
         <p className="mono" style={{ marginTop: "0.75rem" }}>
           Route Pattern: /{locale}/[coin]/[timeframe]/best-[indicator]-settings
         </p>
+        <p className="mono">Lookback: 30d / 90d / 1y | Regime: all / bull / range / bear</p>
       </article>
 
       <article className="grid two">

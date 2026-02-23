@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { computePageData } from "@/lib/engine";
+import { isSupportedIndicatorSet } from "@/lib/catalog";
+import { parseLookback, parseRegime } from "@/lib/api";
 import { coerceLocale } from "@/lib/i18n";
-import { isSupportedTimeframe } from "@/lib/market";
+import { coerceCoin, isSupportedTimeframe } from "@/lib/market";
+import { getPrecomputedPageData } from "@/lib/precomputed";
 import { buildPageMetadata } from "@/lib/seo";
 
-function parseIndicatorRoute(route: string): string | null {
+function parseIndicatorRoute(route: string) {
   const match = /^best-([a-z0-9-]+)-settings$/i.exec(route);
-  return match?.[1] ?? null;
+  const indicator = match?.[1]?.toLowerCase();
+  return indicator && isSupportedIndicatorSet(indicator) ? indicator : null;
 }
 
 export async function generateMetadata({
@@ -18,13 +21,14 @@ export async function generateMetadata({
 }) {
   const locale = coerceLocale(params.locale);
   const indicatorSlug = parseIndicatorRoute(params.indicatorRoute);
-  if (!locale || !indicatorSlug || !isSupportedTimeframe(params.timeframe)) {
+  const coin = coerceCoin(params.coin);
+  if (!locale || !coin || !indicatorSlug || !isSupportedTimeframe(params.timeframe)) {
     return {};
   }
   return buildPageMetadata({
     locale,
     title: `${params.coin.toUpperCase()} ${params.timeframe} ${indicatorSlug}`,
-    description: `In-sample optimization snapshot for ${params.coin.toUpperCase()} ${params.timeframe}.`,
+    description: `Historical in-sample snapshot for ${params.coin.toUpperCase()} ${params.timeframe}.`,
     pathWithoutLocale: `/${params.coin}/${params.timeframe}/${params.indicatorRoute}`
   });
 }
@@ -37,21 +41,29 @@ export default async function BestIndicatorPage({
   searchParams: { lookback?: string; regime?: string };
 }) {
   const locale = coerceLocale(params.locale);
+  const coin = coerceCoin(params.coin);
   const indicatorSlug = parseIndicatorRoute(params.indicatorRoute);
-  if (!locale || !indicatorSlug || !isSupportedTimeframe(params.timeframe)) {
+  if (!locale || !coin || !indicatorSlug || !isSupportedTimeframe(params.timeframe)) {
     notFound();
   }
 
-  const lookback = searchParams.lookback ?? "90d";
-  const regime = (searchParams.regime ?? "all") as "all" | "bull" | "range" | "bear";
-  const payload = await computePageData({
+  const lookback = parseLookback(searchParams.lookback ?? null);
+  const regime = parseRegime(searchParams.regime ?? null);
+  if (!lookback || !regime) {
+    notFound();
+  }
+
+  const payload = await getPrecomputedPageData({
     locale,
-    coin: params.coin,
+    coin,
     timeframe: params.timeframe,
     indicatorSlug,
     lookback,
     regime
   });
+  if (!payload) {
+    notFound();
+  }
 
   return (
     <section className="grid" style={{ gap: "1rem" }}>
@@ -67,7 +79,7 @@ export default async function BestIndicatorPage({
 
       <article className="grid two">
         <div className="panel">
-          <div className="muted">THEORETICAL APY (IS)</div>
+          <div className="muted">HISTORICAL RETURN (IN-SAMPLE)</div>
           <div className="kpi">{payload.headlineReturnIS}%</div>
         </div>
         <div className="panel">
@@ -89,6 +101,9 @@ export default async function BestIndicatorPage({
             </span>
           ))}
         </div>
+        <p className="muted mono" style={{ marginTop: "0.75rem" }}>
+          truth_flags={payload.truthFlags.join(",")} | precomputed_at={payload.precomputedAt}
+        </p>
       </article>
 
       <article className="panel">

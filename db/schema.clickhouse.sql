@@ -1,4 +1,4 @@
--- P2/Panopticon Day-1 i18n schema for ClickHouse.
+-- LeiMai Oracle i18n schema for ClickHouse.
 
 CREATE TABLE IF NOT EXISTS candles_raw (
   symbol LowCardinality(String),

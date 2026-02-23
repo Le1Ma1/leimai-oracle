@@ -1,6 +1,7 @@
 import { coerceLocale, DEFAULT_LOCALE } from "@/lib/i18n";
-import { isSupportedTimeframe } from "@/lib/market";
-import type { Regime, Timeframe } from "@/lib/types";
+import { DEFAULT_INDICATOR_SET, DEFAULT_QUERY, isSupportedIndicatorSet, isSupportedRegime } from "@/lib/catalog";
+import { coerceCoin, isSupportedLookback, isSupportedTimeframe } from "@/lib/market";
+import type { Coin, IndicatorSetSlug, Lookback, Regime, Timeframe } from "@/lib/types";
 
 export function parseLocale(input: string | null): ReturnType<typeof coerceLocale> {
   return coerceLocale(input ?? "");
@@ -8,31 +9,38 @@ export function parseLocale(input: string | null): ReturnType<typeof coerceLocal
 
 export function parseTimeframe(input: string | null): Timeframe | null {
   if (!input) {
-    return null;
+    return DEFAULT_QUERY.timeframe;
   }
   return isSupportedTimeframe(input) ? input : null;
 }
 
-export function parseRegime(input: string | null): Regime {
-  if (input === "bull" || input === "bear" || input === "range") {
-    return input;
+export function parseRegime(input: string | null): Regime | null {
+  if (!input) {
+    return DEFAULT_QUERY.regime;
   }
-  return "all";
+  return isSupportedRegime(input) ? input : null;
 }
 
-export function parseLookback(input: string | null): string {
-  if (!input) return "90d";
-  const allowed = new Set(["30d", "90d", "1y", "3y", "all"]);
-  return allowed.has(input) ? input : "90d";
+export function parseLookback(input: string | null): Lookback | null {
+  if (!input) {
+    return DEFAULT_QUERY.lookback;
+  }
+  return isSupportedLookback(input) ? input : null;
 }
 
-export function parseCoin(input: string | null): string {
-  const token = (input ?? "btc").trim().toLowerCase();
-  return token || "btc";
+export function parseCoin(input: string | null): Coin | null {
+  if (!input) {
+    return DEFAULT_QUERY.coin;
+  }
+  return coerceCoin(input);
 }
 
-export function parseIndicator(input: string | null): string {
-  return (input ?? "macd-rsi").trim().toLowerCase() || "macd-rsi";
+export function parseIndicator(input: string | null): IndicatorSetSlug | null {
+  if (!input) {
+    return DEFAULT_INDICATOR_SET;
+  }
+  const token = input.trim().toLowerCase();
+  return isSupportedIndicatorSet(token) ? token : null;
 }
 
 export function parseLocaleWithFallback(input: string | null) {

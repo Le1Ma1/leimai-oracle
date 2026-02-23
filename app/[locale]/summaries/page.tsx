@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { buildSummariesData } from "@/lib/engine";
 import { coerceLocale } from "@/lib/i18n";
+import { getPrecomputedSummaries } from "@/lib/precomputed";
 import { buildPageMetadata } from "@/lib/seo";
 
 export async function generateMetadata({ params }: { params: { locale: string } }) {
@@ -23,13 +23,17 @@ export default async function SummariesPage({ params }: { params: { locale: stri
   if (!locale) {
     notFound();
   }
-  const payload = await buildSummariesData({ locale });
+  const payload = await getPrecomputedSummaries({ locale });
+  if (!payload) {
+    notFound();
+  }
 
   return (
     <section className="grid" style={{ gap: "1rem" }}>
       <article className="panel">
         <h1 style={{ marginTop: 0 }}>Summaries</h1>
-        <p className="muted">Programmatic summary feed for high-intent entry pages.</p>
+        <p className="muted">Historical in-sample summary feed for high-intent entry pages.</p>
+        <p className="muted mono">truth_flags=IN_SAMPLE,NOT_OOS,NOT_ADVICE</p>
       </article>
 
       <article className="grid two">

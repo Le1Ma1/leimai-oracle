@@ -7,7 +7,7 @@ export const metadata: Metadata = {
     default: "LeiMai Oracle",
     template: "%s | LeiMai Oracle"
   },
-  description: "Crypto in-sample optimization library for global programmatic SEO.",
+  description: "LeiMai Oracle is a multilingual historical in-sample crypto optimization research library.",
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },

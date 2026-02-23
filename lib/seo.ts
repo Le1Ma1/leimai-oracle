@@ -28,6 +28,7 @@ export function buildPageMetadata(input: {
   title: string;
   description: string;
   pathWithoutLocale: string;
+  noindex?: boolean;
 }): Metadata {
   return {
     title: input.title,
@@ -46,6 +47,12 @@ export function buildPageMetadata(input: {
       description: input.description,
       images: ["/logo.png"]
     },
+    robots: input.noindex
+      ? {
+          index: false,
+          follow: true
+        }
+      : undefined,
     icons: {
       icon: [
         { url: "/favicon.ico", sizes: "any" },
