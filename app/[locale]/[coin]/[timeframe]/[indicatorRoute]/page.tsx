@@ -23,7 +23,7 @@ export async function generateMetadata({
   }
   return buildPageMetadata({
     locale,
-    title: `${params.coin.toUpperCase()} ${params.timeframe} ${indicatorSlug} | Panopticon`,
+    title: `${params.coin.toUpperCase()} ${params.timeframe} ${indicatorSlug}`,
     description: `In-sample optimization snapshot for ${params.coin.toUpperCase()} ${params.timeframe}.`,
     pathWithoutLocale: `/${params.coin}/${params.timeframe}/${params.indicatorRoute}`
   });

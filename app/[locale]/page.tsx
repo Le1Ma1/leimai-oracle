@@ -12,7 +12,7 @@ export async function generateMetadata({ params }: { params: { locale: string } 
   }
   return buildPageMetadata({
     locale,
-    title: `${t(locale, "title")} | Home`,
+    title: "Home",
     description: t(locale, "subtitle"),
     pathWithoutLocale: "/"
   });

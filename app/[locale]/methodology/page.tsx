@@ -11,7 +11,7 @@ export async function generateMetadata({ params }: { params: { locale: string } 
   }
   return buildPageMetadata({
     locale,
-    title: `Methodology | Panopticon`,
+    title: "Methodology",
     description: "Deterministic in-sample scoring and friction model.",
     pathWithoutLocale: "/methodology"
   });

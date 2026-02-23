@@ -12,7 +12,7 @@ export async function generateMetadata({ params }: { params: { locale: string; c
   }
   return buildPageMetadata({
     locale,
-    title: `${params.coin.toUpperCase()} Atlas | Panopticon`,
+    title: `${params.coin.toUpperCase()} Atlas`,
     description: `Parameter surface atlas for ${params.coin.toUpperCase()}.`,
     pathWithoutLocale: `/atlas/${params.coin}`
   });

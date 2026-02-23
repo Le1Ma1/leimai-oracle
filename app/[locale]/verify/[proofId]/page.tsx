@@ -14,7 +14,7 @@ export async function generateMetadata({
   }
   return buildPageMetadata({
     locale,
-    title: `Verify ${params.proofId} | Panopticon`,
+    title: `Verify ${params.proofId}`,
     description: "Proof and metadata validation page.",
     pathWithoutLocale: `/verify/${params.proofId}`
   });

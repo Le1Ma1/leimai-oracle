@@ -15,8 +15,10 @@
   },
   "dependencies": {
     "next": "14.2.25",
+    "png-to-ico": "^3.0.1",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/node": "20.17.19",

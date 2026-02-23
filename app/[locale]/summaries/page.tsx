@@ -12,7 +12,7 @@ export async function generateMetadata({ params }: { params: { locale: string } 
   }
   return buildPageMetadata({
     locale,
-    title: "Summaries | Panopticon",
+    title: "Summaries",
     description: "Long-tail summary cards for crypto optimization pages.",
     pathWithoutLocale: "/summaries"
   });
