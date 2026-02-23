@@ -6,9 +6,13 @@ export type LocaleMessages = {
   summaries: string;
   atlas: string;
   globalI18n: string;
+  navEngineVersion: string;
   logoAlt: string;
   footerDisclaimer: string;
   footerMethodologyLink: string;
+  footerStatusPipeline: string;
+  footerStatusSource: string;
+  footerStatusScope: string;
   homeMetaTitle: string;
   homeHeroAlphaLabel: string;
   homeHeroModeTag: string;
