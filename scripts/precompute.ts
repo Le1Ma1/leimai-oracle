@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { buildQueryKey, getPrecomputeSpace } from "../lib/catalog";
@@ -8,6 +9,7 @@ import { fetchCandles, normalizeSymbol } from "../lib/market";
 import type { AtlasCore, PageDataCore, PrecomputedManifest } from "../lib/types";
 
 const OUTPUT_DIR = path.join(process.cwd(), "public", "precomputed");
+const ARTIFACT_FILES = ["manifest.json", "page-data-core.json", "atlas-core.json"] as const;
 
 function writeJson(filename: string, value: unknown) {
   writeFileSync(path.join(OUTPUT_DIR, filename), JSON.stringify(value));
@@ -15,6 +17,13 @@ function writeJson(filename: string, value: unknown) {
 
 async function run() {
   mkdirSync(OUTPUT_DIR, { recursive: true });
+
+  const runningOnVercel = process.env.VERCEL === "1";
+  const hasAllArtifacts = ARTIFACT_FILES.every((name) => existsSync(path.join(OUTPUT_DIR, name)));
+  if (runningOnVercel && hasAllArtifacts) {
+    console.log("[precompute] detected existing artifacts on Vercel build. Skip remote recompute.");
+    return;
+  }
 
   const pageDataCore: Record<string, PageDataCore> = {};
   const atlasCore: Record<string, AtlasCore> = {};
@@ -128,4 +137,3 @@ run().catch((error) => {
   console.error("[precompute] fatal", error);
   process.exitCode = 1;
 });
-
