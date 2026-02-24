@@ -1,0 +1,6 @@
+vectorbt
+pandas
+numpy
+ccxt
+clickhouse-connect
+python-dotenv
