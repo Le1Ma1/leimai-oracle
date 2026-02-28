@@ -109,35 +109,10 @@ Single-indicator optimization output is written to:
 - `window_alpha_heatmap_payload` (window/symbol/indicator alpha matrix payload)
 - `indicator_competition_overview` (indicator-level alpha/pass aggregate)
 
-## Cloud Offload (Kaggle / Colab)
+## Local-Only Execution Contract
 
-Primary (recommended): Kaggle CPU batches.
+This repository now runs as local-first only:
 
-Prepare one batch command payload:
-
-```bash
-python scripts/cloud_dispatch.py prepare --target kaggle --batch-index 1 --batch-total 3 --max-rounds 1 --skip-ingest
-```
-
-Write/update cloud manifest for monitor:
-
-```bash
-python scripts/cloud_dispatch.py manifest --target kaggle --status running --batch-index 1 --batch-total 3 --tasks-total 180 --tasks-done 60 --eta-seconds 7200
-```
-
-Sync local data to Kaggle dataset:
-
-```bash
-python scripts/cloud_data_sync.py push --dataset <owner/dataset> --source engine/data/raw --create-if-missing
-```
-
-Pull cloud artifacts back to local repo:
-
-```bash
-python scripts/cloud_data_sync.py pull --dataset <owner/dataset>
-```
-
-Notebook templates:
-
-- `cloud/kaggle/runner.ipynb`
-- `cloud/colab/runner.ipynb` (fallback)
+- optimization/validation execution stays on local machine
+- monitor reads local status only (`engine/artifacts/monitor/live_status.json`)
+- no cloud batch or remote manifest workflow is used

@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T14:52:30Z`
+- Last Updated (UTC): `2026-02-28T15:12:54Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -574,7 +574,27 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Notebook orchestration only; engine strategy modules unchanged.
 - Bai Ben (Minimalism) Review: Pass. Added pre-check + guarded invocation in existing execution cells.
 
+### [x] B20_LOCAL_ONLY_CLOUD_RETIREMENT
+- Technical Dependency: removed `cloud/*`, `scripts/cloud_dispatch.py`, `scripts/cloud_data_sync.py`, `monitor/CLOUD.md`; monitor now local-source only.
+- Business Value: execution path simplified to deterministic local-only training/review, eliminating remote orchestration drift.
+- Read/Write Isolation Review: Pass. No cloud write path remains in runtime entrypoints.
+- Bai Ben (Minimalism) Review: Pass. Retired entire unused cloud branch and reduced operator surface.
+
+### [x] B20_1_ARTIFACT_RETENTION_LATEST_PLUS_ITERATIONS
+- Technical Dependency: local artifact cleanup under `engine/artifacts/optimization/single`.
+- Business Value: retained only latest benchmark set (`2026-02-28`) plus `iterations` decision history, reducing storage noise while preserving audit trail.
+- Read/Write Isolation Review: Pass. Cleanup affects artifact cache only.
+- Bai Ben (Minimalism) Review: Pass. Historical clutter removed with one clear retention contract.
+
 ## [BUSINESS_STATUS]
+
+### [x] 專案已切換為 Local-only 執行基線
+- Technical Dependency: `monitor/index.html`, `engine/README.md`, removed `cloud/*` and cloud scripts.
+- Business Value: 後續 R2/R3 迭代只走本地資料、本地訓練、本地審閱，不再受雲端同步與權限問題干擾。
+
+### [x] R1 產物完成收斂保留策略
+- Technical Dependency: `engine/artifacts/optimization/single/2026-02-28`, `engine/artifacts/optimization/single/iterations`.
+- Business Value: 僅保留最新可用基準與決策摘要，便於快速審閱與連續迭代。
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
 - Technical Dependency: `scripts/cloud_dispatch.py --auto-quality`, `engine/artifacts/cloud/cloud_run_manifest.json`.
