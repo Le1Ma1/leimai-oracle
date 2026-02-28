@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T07:16:48Z`
+- Last Updated (UTC): `2026-02-28T07:37:18Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -432,6 +432,27 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Supervisor orchestrates scripts only; no coupling to frontend runtime.
 - Bai Ben (Minimalism) Review: Pass. Reuses existing scripts with minimal CLI additions.
 
+### [x] B10_25_CLOUD_BATCH_DISPATCH_AND_MANIFEST
+- Technical Dependency: `scripts/cloud_dispatch.py`, `engine/artifacts/cloud/cloud_run_manifest.json`.
+- Business Value: standardized cloud batch slicing (`kaggle/colab`) and monitor-readable manifest contract for remote run visibility.
+- Evidence: `cloud_dispatch.py prepare` emits deterministic batch command payload; `cloud_dispatch.py manifest` writes schema `lmo.cloud_run_manifest.v1`.
+- Read/Write Isolation Review: Pass. Cloud orchestration is script-level and does not couple to web/support runtime.
+- Bai Ben (Minimalism) Review: Pass. One lightweight dispatcher script + one JSON contract.
+
+### [x] B10_26_KAGGLE_DATASET_SYNC_PIPELINE
+- Technical Dependency: `scripts/cloud_data_sync.py`.
+- Business Value: push/pull synchronization between local repo and Kaggle datasets for data/artifact offload workflow.
+- Evidence: subcommands `push` and `pull` with dataset id contract (`owner/slug`) and auto extract-root detection.
+- Read/Write Isolation Review: Pass. Sync path is explicit and constrained to selected roots.
+- Bai Ben (Minimalism) Review: Pass. Reuses Kaggle CLI without adding backend services.
+
+### [x] B10_27_MONITOR_SOURCE_TOGGLE_LOCAL_CLOUD
+- Technical Dependency: `monitor/index.html`, `monitor/CLOUD.md`.
+- Business Value: operators can switch between live local monitor stream and cloud manifest stream without manual page rewiring.
+- Evidence: toolbar source selector (`本地 Monitor` / `雲端 Manifest`) and schema normalization for `lmo.cloud_run_manifest.v1`.
+- Read/Write Isolation Review: Pass. UI-only source binding; no mutation of engine training logic.
+- Bai Ben (Minimalism) Review: Pass. Implemented in existing monitor page with path presets.
+
 ### [ ] B11_CLICKHOUSE_WRITEBACK
 - Technical Dependency: future schema + idempotent writer.
 - Business Value: persistent query layer for SaaS APIs.
@@ -505,6 +526,14 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Bai Ben (Minimalism) Review: Pass. Reuses existing chain poll logic without introducing new service layers.
 
 ## [BUSINESS_STATUS]
+
+### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
+- Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
+- Business Value: 筆電 CPU 慢速問題可切換到免費雲端批次訓練，保持 1m-only 矩陣契約不變。
+
+### [x] 監控面板支援本地與雲端雙來源
+- Technical Dependency: `monitor/index.html`, `monitor/CLOUD.md`, `engine/artifacts/cloud/cloud_run_manifest.json`.
+- Business Value: 可在同一個 Monitor 介面切換查看本地迭代與雲端批次進度。
 
 ### [x] 前 15 交易標的與歷史 1m 數據完成
 - Technical Dependency: `engine/src/universe.py`, `engine/src/ingest_1m.py`, `engine/data/raw/symbol=*/timeframe=1m/*`.

@@ -199,6 +199,10 @@
       <div class="sub" id="pageSub">monitor</div>
       <div class="toolbar">
         <input id="statusPath" aria-label="status json path" value="/engine/artifacts/monitor/live_status.json">
+        <select id="sourceMode">
+          <option value="local" id="sourceLocal">本地 Monitor</option>
+          <option value="cloud" id="sourceCloud">雲端 Manifest</option>
+        </select>
         <select id="intervalSec">
           <option value="2" id="opt2">2s</option>
           <option value="3" id="opt3">3s</option>
@@ -344,10 +348,15 @@
       staleTip: "\u3002\u8acb\u6aa2\u67e5 progress_monitor \u662f\u5426\u4ecd\u5728\u57f7\u884c\u3002",
       staleWrite: "\u76e3\u63a7\u5beb\u5165\u7570\u5e38\uff1a\u9023\u7e8c\u5beb\u5165\u5931\u6557",
       staleWriteTail: "\u6b21\u3002",
-      staleLoadFail: "\u76e3\u63a7\u9801\u76ee\u524d\u7121\u6cd5\u8b80\u53d6 live_status.json\uff0c\u8acb\u78ba\u8a8d\u672c\u5730 http server \u8207 progress_monitor \u7a0b\u5f0f\u3002",
+      staleLoadFail: "\u76e3\u63a7\u9801\u76ee\u524d\u7121\u6cd5\u8b80\u53d6\u8cc7\u6599\u6e90\uff0c\u8acb\u78ba\u8a8d\u8def\u5f91\u3001http server \u6216\u96f2\u7aef manifest \u662f\u5426\u5b58\u5728\u3002",
       statusState: "\u72c0\u614b",
       statusProgress: "\u9032\u5ea6",
       statusRemain: "\u5269\u9918",
+      sourceMode: "\u8cc7\u6599\u4f86\u6e90",
+      sourceLocal: "\u672c\u5730 Monitor",
+      sourceCloud: "\u96f2\u7aef Manifest",
+      sourcePathHintLocal: "\u672c\u5730\u5373\u6642\u72c0\u614b\u8def\u5f91",
+      sourcePathHintCloud: "\u96f2\u7aef\u56de\u62c9 Manifest \u8def\u5f91",
       targetFmt: "\u9031\u671f",
       targetPass: "\u9054\u6a19",
       targetPending: "\u672a\u9054",
@@ -373,17 +382,24 @@
       done: ZH.phaseDone
     };
 
+    const DEFAULT_LOCAL_STATUS_PATH = "/engine/artifacts/monitor/live_status.json";
+    const DEFAULT_CLOUD_MANIFEST_PATH = "/engine/artifacts/cloud/cloud_run_manifest.json";
+
     const state = {
       auto: true,
       timer: null,
       intervalMs: 2000,
-      statusPath: "/engine/artifacts/monitor/live_status.json"
+      sourceMode: "local",
+      statusPath: DEFAULT_LOCAL_STATUS_PATH
     };
 
     const dom = {
       pageTitle: document.getElementById("pageTitle"),
       pageSub: document.getElementById("pageSub"),
       statusPath: document.getElementById("statusPath"),
+      sourceMode: document.getElementById("sourceMode"),
+      sourceLocal: document.getElementById("sourceLocal"),
+      sourceCloud: document.getElementById("sourceCloud"),
       intervalSec: document.getElementById("intervalSec"),
       opt2: document.getElementById("opt2"),
       opt3: document.getElementById("opt3"),
@@ -459,6 +475,8 @@
       dom.statusMsg.textContent = ZH.waiting;
       dom.reloadBtn.textContent = ZH.reload;
       dom.autoBtn.textContent = ZH.pause;
+      dom.sourceLocal.textContent = ZH.sourceLocal;
+      dom.sourceCloud.textContent = ZH.sourceCloud;
       dom.opt2.textContent = ZH.opt2;
       dom.opt3.textContent = ZH.opt3;
       dom.opt5.textContent = ZH.opt5;
@@ -490,6 +508,7 @@
       dom.qAlphaLabel.textContent = ZH.allAlpha;
       dom.qDeployLabel.textContent = ZH.deploy;
       dom.qRunLabel.textContent = ZH.qualityRun;
+      dom.statusPath.placeholder = ZH.sourcePathHintLocal;
     }
 
     function fmtPct(v) {
@@ -559,6 +578,102 @@
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
+    }
+
+    function normalizeCloudManifest(payload) {
+      const status = String(payload?.status || "queued").toLowerCase();
+      let pipelineState = "idle";
+      if (status === "running") pipelineState = "running";
+      else if (status === "completed") pipelineState = "done";
+      else if (status === "failed") pipelineState = "error";
+
+      const progress = payload?.progress || {};
+      const tasksTotal = Number(progress.tasks_total || 0);
+      const tasksDone = Number(progress.tasks_done || 0);
+      const tasksPct = Number(progress.tasks_pct || (tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0));
+      const batch = payload?.batch || {};
+      const cycleCurrent = Number(batch.index || 0);
+      const cycleTotal = Math.max(1, Number(batch.total || 1));
+      const cyclePct = cycleTotal > 0 ? (cycleCurrent / cycleTotal) * 100 : 0;
+      const symbols = Array.isArray(batch.symbols) ? batch.symbols : [];
+
+      const symbolProgress = Array.isArray(payload?.symbol_progress)
+        ? payload.symbol_progress
+        : symbols.map((symbol) => ({
+            symbol,
+            done: status === "completed" ? 1 : 0,
+            total: 1,
+            pct: status === "completed" ? 100 : 0,
+            phase: status === "completed" ? "done" : status === "running" ? "running" : "pending"
+          }));
+
+      const checks = [
+        {
+          key: "batch_completed",
+          label: "Batch completed",
+          actual: status === "completed" ? 1 : 0,
+          target: 1,
+          passed: status === "completed"
+        }
+      ];
+
+      return {
+        updated_at_utc: payload?.updated_at_utc || null,
+        pipeline_state: pipelineState,
+        active_run_id: payload?.run_id || null,
+        active_processes: {},
+        round: {
+          index: Number(batch.index || 0) || null,
+          profile: payload?.source || "cloud",
+          started_at_utc: null
+        },
+        cycle: {
+          current: cycleCurrent,
+          total: cycleTotal,
+          pct: Number(cyclePct.toFixed(2)),
+          max_rounds_per_cycle: 1
+        },
+        progress: {
+          symbols_total: symbols.length,
+          cores_total: 0,
+          gates_total: 0,
+          tasks_total: tasksTotal,
+          tasks_done: tasksDone,
+          tasks_pct: Number(tasksPct.toFixed(2))
+        },
+        symbol_progress: symbolProgress,
+        speed: {
+          tasks_per_minute_recent: 0,
+          tasks_per_minute_global: 0
+        },
+        eta: {
+          seconds_remaining: payload?.eta?.seconds_remaining ?? null,
+          eta_utc: payload?.eta?.eta_utc || null,
+          confidence: payload?.eta?.confidence || "low",
+          method: "manifest",
+          validation_tail_seconds_assumed: 0
+        },
+        quality_snapshot: payload?.quality_snapshot || {},
+        targets: {
+          thresholds: {},
+          checks,
+          all_passed: checks.every((item) => Boolean(item.passed))
+        },
+        last_events: Array.isArray(payload?.events) ? payload.events : [],
+        warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+        log_files: [],
+        monitor_health: {
+          last_write_ok_utc: payload?.updated_at_utc || null,
+          consecutive_write_failures: 0
+        }
+      };
+    }
+
+    function normalizePayload(payload) {
+      if (payload && payload.schema === "lmo.cloud_run_manifest.v1") {
+        return normalizeCloudManifest(payload);
+      }
+      return payload;
     }
 
     function renderTargets(payload) {
@@ -696,15 +811,32 @@
     }
 
     async function loadOnce() {
-      state.statusPath = dom.statusPath.value.trim() || "/engine/artifacts/monitor/live_status.json";
+      state.statusPath = dom.statusPath.value.trim() || DEFAULT_LOCAL_STATUS_PATH;
       try {
         const payload = await fetchJson(state.statusPath);
-        render(payload);
+        const normalized = normalizePayload(payload);
+        render(normalized);
       } catch (err) {
         dom.statusMsg.textContent = `${ZH.localError}${err?.message || err}`;
         dom.stateBadge.className = "state error";
         dom.stateBadge.textContent = ZH.stateError;
         renderStaleNotice(ZH.staleLoadFail, "error");
+      }
+    }
+
+    function applySourceMode(mode) {
+      const selected = mode === "cloud" ? "cloud" : "local";
+      state.sourceMode = selected;
+      if (selected === "cloud") {
+        if (!dom.statusPath.value.trim() || dom.statusPath.value === DEFAULT_LOCAL_STATUS_PATH) {
+          dom.statusPath.value = DEFAULT_CLOUD_MANIFEST_PATH;
+        }
+        dom.statusPath.placeholder = ZH.sourcePathHintCloud;
+      } else {
+        if (!dom.statusPath.value.trim() || dom.statusPath.value === DEFAULT_CLOUD_MANIFEST_PATH) {
+          dom.statusPath.value = DEFAULT_LOCAL_STATUS_PATH;
+        }
+        dom.statusPath.placeholder = ZH.sourcePathHintLocal;
       }
     }
 
@@ -725,9 +857,14 @@
       state.intervalMs = Math.max(1000, sec * 1000);
       reschedule();
     });
+    dom.sourceMode.addEventListener("change", () => {
+      applySourceMode(dom.sourceMode.value);
+      loadOnce();
+    });
     dom.statusPath.addEventListener("change", loadOnce);
 
     applyStaticLabels();
+    applySourceMode(dom.sourceMode.value || "local");
     loadOnce();
     reschedule();
   </script>
