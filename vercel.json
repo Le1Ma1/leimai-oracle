@@ -12,7 +12,7 @@
   "crons": [
     {
       "path": "/api/internal/poll-chain",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 0 * * *"
     }
   ],
   "rewrites": [
