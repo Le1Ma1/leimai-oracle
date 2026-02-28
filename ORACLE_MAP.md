@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T14:44:10Z`
+- Last Updated (UTC): `2026-02-28T14:52:30Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -568,6 +568,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Environment wiring only; compute logic untouched.
 - Bai Ben (Minimalism) Review: Pass. Added one env assignment in existing batch setup cells.
 
+### [x] B19_6_NOTEBOOK_AUTO_INGEST_AND_VALIDATE_GUARD
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: runners now auto-ingest missing raw `1m` symbol data before iterate and skip/guard validate when summary has zero results, with stderr/stdout tails for direct diagnostics.
+- Read/Write Isolation Review: Pass. Notebook orchestration only; engine strategy modules unchanged.
+- Bai Ben (Minimalism) Review: Pass. Added pre-check + guarded invocation in existing execution cells.
+
 ## [BUSINESS_STATUS]
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
@@ -593,6 +599,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] 批次分片（5 檔）與 TopN 門檻不一致已修復
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
 - Business Value: 3-way batch 可直接跑，不再被 `Not enough symbols expected=15 got=5` 中止。
+
+### [x] 雲端批次 validate 全空候選問題已加防呆
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: 若批次資料未齊，runner 先自動補抓再迭代；若 summary 為空則停止 validate 並輸出可行動訊息，避免無效失敗迴圈。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.

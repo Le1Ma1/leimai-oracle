@@ -8,12 +8,13 @@ Use this folder to run matrix optimization on Kaggle CPU in batch mode.
 - Set `REPO_URL`, `GITHUB_TOKEN` (optional), `BRANCH`, `BATCH_INDEX`, `BATCH_TOTAL`.
 - Token requirement (fine-grained PAT): grant repository `Le1Ma1/leimai-oracle` with `Contents: Read`.
 - Set `GITHUB_USERNAME` to token owner (default `Le1Ma1`) for auth fallback mode.
-- `SKIP_INGEST` is informational in current iterate runner (iterate mode itself does not perform ingestion).
+- `SKIP_INGEST=True` no longer hard-fails on empty data: missing symbols are auto-ingested for safety.
 
 ## 2) Batch contract
 
 - Batch split is symbol based.
 - Runner auto-sets `ENGINE_TOP_N` to current batch size.
+- If batch symbols have no local raw `1m` data, runner auto-ingests missing symbols before iterate.
 - Keep `ENGINE_OPTIMIZATION_TIMEFRAMES=1m`.
 - Recommended: run 3 batches (`1/3`, `2/3`, `3/3`) and then merge artifacts locally.
 
