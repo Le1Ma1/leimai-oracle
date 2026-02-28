@@ -22,6 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const LOCALES = listLocales();
 const PREVIEW_DIR = path.join(__dirname, "preview");
+const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1";
 
 function parseDotEnv(content) {
   const out = {};
@@ -79,10 +80,11 @@ const CONFIG = {
   tronscanBase: (process.env.SUPPORT_TRONSCAN_API_BASE || "https://apilist.tronscanapi.com").replace(/\/+$/, ""),
   trongridBase: (process.env.SUPPORT_TRONGRID_API_BASE || "https://api.trongrid.io").replace(/\/+$/, ""),
   trongridApiKey: process.env.SUPPORT_TRONGRID_API_KEY || "",
+  cronSecret: process.env.CRON_SECRET || "",
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
 };
 
-const runtimeDir = process.env.SUPPORT_RUNTIME_DIR || path.join(__dirname, "runtime");
+const runtimeDir = process.env.SUPPORT_RUNTIME_DIR || (IS_VERCEL_RUNTIME ? "/tmp/support-runtime" : path.join(__dirname, "runtime"));
 const chainStatePath = process.env.SUPPORT_CHAIN_STATE_PATH || path.join(runtimeDir, "chain-state.json");
 const appStatePath = process.env.SUPPORT_APP_STATE_PATH || path.join(runtimeDir, "app-state.json");
 await ensureJsonFile(chainStatePath, DEFAULT_CHAIN_STATE);
@@ -141,6 +143,156 @@ function normalizeTxHash(raw) {
 
 function normalizeWallet(raw) {
   return String(raw || "").trim();
+}
+
+function getBearerToken(req) {
+  const auth = String(req.headers?.authorization || "");
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : "";
+}
+
+function isCronAuthorized(req) {
+  if (!CONFIG.cronSecret) return false;
+  const headerSecret = String(req.headers["x-cron-secret"] || "");
+  const bearer = getBearerToken(req);
+  return headerSecret === CONFIG.cronSecret || bearer === CONFIG.cronSecret;
+}
+
+function upsertReceipts(currentRows, incomingRows) {
+  const map = new Map();
+  for (const row of currentRows || []) {
+    if (!row || typeof row !== "object") continue;
+    const key = normalizeTxHash(row.tx_hash);
+    if (!key) continue;
+    map.set(key, row);
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  for (const row of incomingRows || []) {
+    if (!row || typeof row !== "object") continue;
+    const key = normalizeTxHash(row.tx_hash);
+    if (!key) continue;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, row);
+      inserted += 1;
+      continue;
+    }
+    const merged = {
+      ...prev,
+      ...row,
+      source: prev.source === row.source ? prev.source : "dual",
+      confirmations: Math.max(Number(prev.confirmations || 0), Number(row.confirmations || 0)),
+      amount: Number(prev.amount || 0) > 0 ? prev.amount : row.amount,
+      confirmed_at_utc: prev.confirmed_at_utc || row.confirmed_at_utc || null,
+      status: (prev.status === "verified" || row.status === "verified") ? "verified" : "pending",
+    };
+    map.set(key, merged);
+    updated += 1;
+  }
+
+  const rows = Array.from(map.values()).sort((a, b) => {
+    const aTs = Date.parse(a.confirmed_at_utc || "") || 0;
+    const bTs = Date.parse(b.confirmed_at_utc || "") || 0;
+    return bTs - aTs;
+  });
+  return { rows, inserted, updated };
+}
+
+function normalizeStatuses(rows, minConfirmations) {
+  return (rows || []).map((row) => {
+    const confirmations = Number(row.confirmations || 0);
+    const status = confirmations >= minConfirmations ? "verified" : (row.status === "verified" ? "verified" : "pending");
+    return { ...row, confirmations, status };
+  });
+}
+
+function updateSourceState(sourceState, result) {
+  const current = sourceState[result.source] || {
+    ok: false,
+    last_success_utc: null,
+    last_error_utc: null,
+    last_error: null,
+    last_count: 0,
+  };
+  if (result.ok) {
+    sourceState[result.source] = {
+      ...current,
+      ok: true,
+      last_success_utc: nowIso(),
+      last_error: null,
+      last_count: Array.isArray(result.transfers) ? result.transfers.length : 0,
+    };
+  } else {
+    sourceState[result.source] = {
+      ...current,
+      ok: false,
+      last_error_utc: nowIso(),
+      last_error: result.error || "unknown_error",
+      last_count: 0,
+    };
+  }
+}
+
+export async function pollChainNow() {
+  const chainState = await readJsonFile(chainStatePath, DEFAULT_CHAIN_STATE);
+  const appState = await readJsonFile(appStatePath, DEFAULT_APP_STATE);
+
+  const sourceConfig = {
+    supportAddress: CONFIG.supportAddress,
+    tronscanBase: CONFIG.tronscanBase,
+    trongridBase: CONFIG.trongridBase,
+    trongridApiKey: CONFIG.trongridApiKey,
+    fetchLimit: CONFIG.fetchLimit,
+    fetchTimeoutMs: CONFIG.fetchTimeoutMs,
+  };
+
+  const [tronscan, trongrid] = await Promise.all([
+    fetchTronscan(sourceConfig),
+    fetchTrongrid(sourceConfig),
+  ]);
+  updateSourceState(chainState.source_status || (chainState.source_status = {}), tronscan);
+  updateSourceState(chainState.source_status, trongrid);
+
+  const mergedRows = mergeTransfers(tronscan.transfers, trongrid.transfers)
+    .filter((row) => Number(row.amount || 0) >= CONFIG.minAmount)
+    .filter((row) => row.to_addr === CONFIG.supportAddress);
+  const normalizedRows = normalizeStatuses(mergedRows, CONFIG.minConfirmations);
+  const upserted = upsertReceipts(chainState.tx_receipts || [], normalizedRows);
+  chainState.tx_receipts = upserted.rows;
+
+  const board = buildLeaderboard(chainState, appState, { minAmount: CONFIG.minAmount, limit: 1 });
+  const newKing = board.king ? normalizeTxHash(board.king.tx_hash) : null;
+  const oldKing = normalizeTxHash(chainState.current_king_tx_hash);
+  if (newKing && newKing !== oldKing) {
+    appendEvent(chainState, "king_replaced", {
+      previous_king_tx_hash: oldKing || null,
+      new_king_tx_hash: newKing,
+      amount_usdt: board.king.amount_usdt,
+      wallet_masked: board.king.wallet_masked,
+    });
+  }
+  chainState.current_king_tx_hash = newKing || null;
+  chainState.meta = chainState.meta || {};
+  chainState.meta.chain = "TRON";
+  chainState.meta.token = "USDT";
+  chainState.meta.support_address = CONFIG.supportAddress;
+  if (!chainState.meta.created_at_utc) chainState.meta.created_at_utc = nowIso();
+  chainState.meta.updated_at_utc = nowIso();
+
+  await writeJsonAtomic(chainStatePath, chainState);
+
+  return {
+    ts_utc: nowIso(),
+    event: "SUPPORT_CHAIN_POLL",
+    tronscan_ok: tronscan.ok,
+    trongrid_ok: trongrid.ok,
+    merged: mergedRows.length,
+    inserted: upserted.inserted,
+    updated: upserted.updated,
+    king_tx_hash: newKing,
+  };
 }
 
 function ipFromReq(req) {
@@ -498,7 +650,7 @@ function declarationStatusPayload(content, status, note) {
   return { label: content.pendingText, note: note || "" };
 }
 
-const server = http.createServer(async (req, res) => {
+export async function handleRequest(req, res) {
   try {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || `localhost:${CONFIG.port}`}`);
     const { pathname, searchParams } = reqUrl;
@@ -607,6 +759,14 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         payload: buildKnowledgePayload(locale, board.rows, board.king, ads),
       });
+    }
+
+    if ((method === "POST" || method === "GET") && pathname === "/api/internal/poll-chain") {
+      if (!isCronAuthorized(req)) {
+        return jsonResponse(res, 401, { ok: false, error: "unauthorized_cron" });
+      }
+      const summary = await pollChainNow();
+      return jsonResponse(res, 200, { ok: true, ...summary });
     }
 
     const declarationStatusMatch = pathname.match(/^\/api\/v1\/declarations\/([A-Za-z0-9_-]+)\/status$/);
@@ -770,11 +930,21 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     return jsonResponse(res, 500, { ok: false, error: "internal_error", detail: String(error?.message || error) });
   }
-});
+}
 
-server.listen(CONFIG.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[support] server listening on http://localhost:${CONFIG.port}`);
-  // eslint-disable-next-line no-console
-  console.log(`[support] canonical site url: ${CONFIG.siteUrl}`);
-});
+export function createServer() {
+  return http.createServer((req, res) => {
+    void handleRequest(req, res);
+  });
+}
+
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+if (isDirectRun) {
+  const server = createServer();
+  server.listen(CONFIG.port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`[support] server listening on http://localhost:${CONFIG.port}`);
+    // eslint-disable-next-line no-console
+    console.log(`[support] canonical site url: ${CONFIG.siteUrl}`);
+  });
+}

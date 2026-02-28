@@ -48,6 +48,27 @@ node support/server.mjs
 node support/worker.mjs
 ```
 
+## Vercel Deployment (Serverless)
+
+- Entry function: `api/index.mjs`
+- Rewrite all routes to `api/index` via `vercel.json`
+- Cron refresh endpoint: `api/internal/poll-chain.mjs`
+
+Required env on Vercel:
+
+- `SUPPORT_TRC20_ADDRESS`
+- `SUPPORT_MIN_AMOUNT`
+- `SUPPORT_MIN_CONFIRMATIONS`
+- `SUPPORT_TRONSCAN_API_BASE`
+- `SUPPORT_TRONGRID_API_BASE`
+- `SUPPORT_TRONGRID_API_KEY` (optional)
+- `CRON_SECRET`
+
+Notes:
+
+- If `SUPPORT_RUNTIME_DIR` is not set in Vercel, runtime state falls back to `/tmp/support-runtime`.
+- `/tmp` is ephemeral; for production-grade persistence, replace JSON runtime storage with managed DB/KV.
+
 ## Admin Endpoints
 
 Use header `x-admin-token: <SUPPORT_ADMIN_TOKEN>`.

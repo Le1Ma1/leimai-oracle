@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T06:07:39Z`
+- Last Updated (UTC): `2026-02-28T07:06:59Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -492,6 +492,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Preview is read-only static surface and does not alter support runtime data.
 - Bai Ben (Minimalism) Review: Pass. One static preview directory + lightweight route mapping.
 
+### [x] S8_VERCEL_SERVERLESS_BRIDGE_AND_GLOBAL_REWRITE
+- Technical Dependency: `api/index.mjs`, `vercel.json`, `support/server.mjs`.
+- Business Value: migrates support runtime from local long-lived server shape to Vercel-invokable handler path, unblocking production deployment.
+- Read/Write Isolation Review: Pass. Request handling remains isolated in support module and is bridged by one serverless entrypoint.
+- Bai Ben (Minimalism) Review: Pass. Single bridge function + simple global rewrite contract.
+
+### [x] S9_INTERNAL_CRON_CHAIN_POLL_ENDPOINT
+- Technical Dependency: `api/internal/poll-chain.mjs`, `support/server.mjs`, `vercel.json`.
+- Business Value: replaces always-on worker dependency with authenticated poll endpoint + Vercel cron schedule for chain state refresh.
+- Read/Write Isolation Review: Pass. Internal poll endpoint is write-scoped and protected by secret auth.
+- Bai Ben (Minimalism) Review: Pass. Reuses existing chain poll logic without introducing new service layers.
+
 ## [BUSINESS_STATUS]
 
 ### [x] 前 15 交易標的與歷史 1m 數據完成
@@ -677,6 +689,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] 三模板示意已上線（待你選版）
 - Technical Dependency: `support/preview/*`, `support/server.mjs`, `support/.env.example`.
 - Business Value: 可直接用 `http://localhost:4310/preview/a|b|c` 比較三套 UIUX 方向，先決策再做正式落地，避免重工與風格漂移。
+
+### [x] Vercel 建置故障已定位並完成架構修正
+- Technical Dependency: `package.json`, `vercel.json`, `api/index.mjs`, `api/internal/poll-chain.mjs`, `support/server.mjs`.
+- Business Value: 已移除舊 Next build 依賴造成的 `precompute.ts` 錯誤，改為 Vercel Serverless 可執行形態並加上排程刷新入口。
 
 ## Governance Checks
 
