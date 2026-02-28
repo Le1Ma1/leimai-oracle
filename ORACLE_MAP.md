@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T14:20:06Z`
+- Last Updated (UTC): `2026-02-28T14:28:40Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -550,6 +550,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Only notebook bootstrap path changed.
 - Bai Ben (Minimalism) Review: Pass. Existing runner flow retained; authentication hardening added in-place.
 
+### [x] B19_3_COLAB_SECRETS_FIRST_AUTH_BOOTSTRAP
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/colab/README.md`.
+- Business Value: Colab runner now defaults to `google.colab.userdata.get()` for `GITHUB_TOKEN`/`GITHUB_USERNAME`, with explicit manual fallback and fail-fast diagnostics when token is empty.
+- Read/Write Isolation Review: Pass. Bootstrap auth layer only; no compute/strategy path changes.
+- Bai Ben (Minimalism) Review: Pass. Reused existing cell structure; added one secrets helper and one runtime guard.
+
 ## [BUSINESS_STATUS]
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
@@ -563,6 +569,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] Colab clone 失敗已完成 Auth Fallback 二次修復
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
 - Business Value: 若 PAT principal 不相容，runner 會自動 fallback；失敗訊息直接定位到 token scope/owner/repo access，降低排障時間。
+
+### [x] Colab 已切換 Secrets-First 驗證路徑
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/colab/README.md`.
+- Business Value: 預設從 Colab Secrets 讀取 token，避免 notebook 明文 token 與空字串誤跑；缺值會直接 fail-fast 提示補齊 Secret 名稱。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.

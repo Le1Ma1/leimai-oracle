@@ -6,7 +6,9 @@ Use `cloud/colab/runner.ipynb` when Kaggle resources are unavailable.
 
 - Keep the same batch contract as Kaggle (`BATCH_INDEX`, `BATCH_TOTAL`).
 - Keep `ENGINE_OPTIMIZATION_TIMEFRAMES=1m`.
-- Set `GITHUB_TOKEN` when repo clone needs auth.
+- Default auth source is Colab Secrets via `google.colab.userdata.get()`.
+- Add Secret `GITHUB_TOKEN` (required) and optional `GITHUB_USERNAME`.
+- Manual fallback is still available via `MANUAL_GITHUB_TOKEN` / `MANUAL_GITHUB_USERNAME` in notebook cell 1.
 - Token requirement (fine-grained PAT): grant repository `Le1Ma1/leimai-oracle` with `Contents: Read`.
 - Set `GITHUB_USERNAME` to token owner (default `Le1Ma1`) if clone auth fallback is needed.
 - Optional: `SKIP_INGEST=True` to run optimization only.
