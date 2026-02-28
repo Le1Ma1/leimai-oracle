@@ -11,7 +11,7 @@ Use `cloud/colab/runner.ipynb` when Kaggle resources are unavailable.
 - Manual fallback is still available via `MANUAL_GITHUB_TOKEN` / `MANUAL_GITHUB_USERNAME` in notebook cell 1.
 - Token requirement (fine-grained PAT): grant repository `Le1Ma1/leimai-oracle` with `Contents: Read`.
 - Set `GITHUB_USERNAME` to token owner (default `Le1Ma1`) if clone auth fallback is needed.
-- Optional: `SKIP_INGEST=True` to run optimization only.
+- `SKIP_INGEST` is informational in current iterate runner (iterate mode itself does not perform ingestion).
 - You can stage variables from `cloud/colab/env.template`.
 - Output manifest path:
   - `engine/artifacts/cloud/cloud_run_manifest.json`

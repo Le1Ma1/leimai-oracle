@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T14:28:40Z`
+- Last Updated (UTC): `2026-02-28T14:36:20Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -556,6 +556,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Bootstrap auth layer only; no compute/strategy path changes.
 - Bai Ben (Minimalism) Review: Pass. Reused existing cell structure; added one secrets helper and one runtime guard.
 
+### [x] B19_4_ITERATE_CLI_COMPAT_FIX_FOR_NOTEBOOK_RUNNERS
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`, `cloud/colab/README.md`, `cloud/kaggle/README.md`.
+- Business Value: removed unsupported `--skip-ingest` argument from iterate command path and added stderr/stdout tail logging for direct failure diagnostics.
+- Read/Write Isolation Review: Pass. Runner shell invocation only; no backend engine logic changed.
+- Bai Ben (Minimalism) Review: Pass. Patched existing execution cells and docs without new modules.
+
 ## [BUSINESS_STATUS]
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
@@ -573,6 +579,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] Colab 已切換 Secrets-First 驗證路徑
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/colab/README.md`.
 - Business Value: 預設從 Colab Secrets 讀取 token，避免 notebook 明文 token 與空字串誤跑；缺值會直接 fail-fast 提示補齊 Secret 名稱。
+
+### [x] Colab/Kaggle iterate 啟動錯誤（exit 2）已修復
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: 雲端代跑不再因無效 CLI 參數中止，且失敗時會直接印出可行動的 stderr 摘要，縮短排障迴圈。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
