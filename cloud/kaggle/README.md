@@ -6,6 +6,7 @@ Use this folder to run matrix optimization on Kaggle CPU in batch mode.
 
 - Open `cloud/kaggle/runner.ipynb` in Kaggle Notebook.
 - Set `REPO_URL`, `GITHUB_TOKEN` (optional), `BRANCH`, `BATCH_INDEX`, `BATCH_TOTAL`.
+- Token requirement (fine-grained PAT): grant repository `Le1Ma1/leimai-oracle` with `Contents: Read`.
 - Set `SKIP_INGEST=True` when raw 1m data is already complete.
 
 ## 2) Batch contract
