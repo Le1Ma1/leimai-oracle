@@ -5,7 +5,8 @@ Use this folder to run matrix optimization on Kaggle CPU in batch mode.
 ## 1) Start notebook
 
 - Open `cloud/kaggle/runner.ipynb` in Kaggle Notebook.
-- Set `REPO_URL`, `BRANCH`, `BATCH_INDEX`, `BATCH_TOTAL`.
+- Set `REPO_URL`, `GITHUB_TOKEN` (optional), `BRANCH`, `BATCH_INDEX`, `BATCH_TOTAL`.
+- Set `SKIP_INGEST=True` when raw 1m data is already complete.
 
 ## 2) Batch contract
 
@@ -18,6 +19,7 @@ Use this folder to run matrix optimization on Kaggle CPU in batch mode.
 Notebook writes:
 
 - `engine/artifacts/cloud/cloud_run_manifest.json`
+- Includes `quality_snapshot` auto-derived from latest `summary.json`, `validation_report.json`, `deploy_pool.json`.
 
 Monitor can read this path directly.
 

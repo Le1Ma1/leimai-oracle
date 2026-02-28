@@ -52,6 +52,146 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _resolve_optional_path(repo_root: Path, raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+    candidate = Path(str(raw_path).strip())
+    return candidate if candidate.is_absolute() else (repo_root / candidate)
+
+
+def _read_json_or_none(path: Path | None) -> dict | None:
+    if path is None or (not path.exists()) or (not path.is_file()):
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _derive_deploy_avg_alpha(payload: dict | None) -> float:
+    if not isinstance(payload, dict):
+        return 0.0
+    direct = payload.get("deploy_avg_alpha_vs_spot")
+    if direct is not None:
+        return _safe_float(direct, default=0.0)
+    rows = payload.get("symbols")
+    if not isinstance(rows, list):
+        return 0.0
+    values: list[float] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        rules = item.get("rules")
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            alpha = rule.get("alpha_vs_spot")
+            if alpha is not None:
+                values.append(_safe_float(alpha, default=0.0))
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
+def _derive_all_window_alpha(
+    validation_payload: dict | None,
+    summary_payload: dict | None,
+) -> float:
+    if isinstance(validation_payload, dict):
+        by_window = validation_payload.get("summary_by_window")
+        if isinstance(by_window, list):
+            for item in by_window:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("window")) == "all":
+                    return _safe_float(item.get("avg_alpha_vs_spot"), default=0.0)
+        legacy = validation_payload.get("all_window_alpha_vs_spot")
+        if legacy is not None:
+            return _safe_float(legacy, default=0.0)
+
+    if isinstance(summary_payload, dict):
+        health = summary_payload.get("health_dashboard")
+        if isinstance(health, dict):
+            gate_summaries = health.get("gate_summaries")
+            if isinstance(gate_summaries, dict):
+                gated = gate_summaries.get("gated")
+                if isinstance(gated, dict):
+                    value = gated.get("all_window_alpha_proxy")
+                    if value is not None:
+                        return _safe_float(value, default=0.0)
+                ungated = gate_summaries.get("ungated")
+                if isinstance(ungated, dict):
+                    value = ungated.get("all_window_alpha_proxy")
+                    if value is not None:
+                        return _safe_float(value, default=0.0)
+    return 0.0
+
+
+def _build_quality_snapshot(
+    summary_payload: dict | None,
+    validation_payload: dict | None,
+    deploy_payload: dict | None,
+) -> dict:
+    run_id = None
+    for payload in (summary_payload, validation_payload, deploy_payload):
+        if isinstance(payload, dict) and payload.get("run_id"):
+            run_id = str(payload.get("run_id"))
+            break
+
+    validation_pass_rate = 0.0
+    if isinstance(validation_payload, dict):
+        summary_by_gate = validation_payload.get("summary_by_gate_mode")
+        if isinstance(summary_by_gate, list) and summary_by_gate:
+            first = summary_by_gate[0]
+            if isinstance(first, dict):
+                validation_pass_rate = _safe_float(first.get("pass_rate"), default=0.0)
+        elif validation_payload.get("pass_rate") is not None:
+            validation_pass_rate = _safe_float(validation_payload.get("pass_rate"), default=0.0)
+        elif validation_payload.get("validation_pass_rate") is not None:
+            validation_pass_rate = _safe_float(validation_payload.get("validation_pass_rate"), default=0.0)
+
+    deploy_symbols = 0
+    deploy_rules = 0
+    if isinstance(deploy_payload, dict):
+        if deploy_payload.get("total_symbols") is not None:
+            deploy_symbols = _safe_int(deploy_payload.get("total_symbols"), default=0)
+        elif deploy_payload.get("deploy_symbols") is not None:
+            deploy_symbols = _safe_int(deploy_payload.get("deploy_symbols"), default=0)
+        if deploy_payload.get("total_rules") is not None:
+            deploy_rules = _safe_int(deploy_payload.get("total_rules"), default=0)
+        elif deploy_payload.get("deploy_rules") is not None:
+            deploy_rules = _safe_int(deploy_payload.get("deploy_rules"), default=0)
+
+    return {
+        "run_id": run_id,
+        "validation_pass_rate": validation_pass_rate,
+        "all_window_alpha_vs_spot": _derive_all_window_alpha(
+            validation_payload=validation_payload,
+            summary_payload=summary_payload,
+        ),
+        "deploy_symbols": deploy_symbols,
+        "deploy_rules": deploy_rules,
+        "deploy_avg_alpha_vs_spot": _derive_deploy_avg_alpha(deploy_payload),
+    }
+
+
 def _parse_symbols(symbols_csv: str | None) -> tuple[str, ...]:
     if not symbols_csv:
         return tuple(DEFAULT_SYMBOLS)
@@ -181,7 +321,35 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     symbols = _parse_symbols(args.symbols)
     batch = _pick_batch(symbols=symbols, batch_index=args.batch_index, batch_total=max(1, args.batch_total))
     status = _normalize_status(args.status)
-    run_id = str(args.run_id or _default_run_id(target=str(args.target), batch=batch))
+    summary_path = str(args.summary_path) if args.summary_path else None
+    validation_path = str(args.validation_path) if args.validation_path else None
+    deploy_path = str(args.deploy_path) if args.deploy_path else None
+
+    summary_payload = _read_json_or_none(_resolve_optional_path(repo_root=repo_root, raw_path=summary_path))
+    validation_payload = _read_json_or_none(_resolve_optional_path(repo_root=repo_root, raw_path=validation_path))
+    deploy_payload = _read_json_or_none(_resolve_optional_path(repo_root=repo_root, raw_path=deploy_path))
+    quality_snapshot = (
+        _build_quality_snapshot(
+            summary_payload=summary_payload,
+            validation_payload=validation_payload,
+            deploy_payload=deploy_payload,
+        )
+        if bool(args.auto_quality)
+        else {
+            "run_id": None,
+            "validation_pass_rate": 0.0,
+            "all_window_alpha_vs_spot": 0.0,
+            "deploy_symbols": 0,
+            "deploy_rules": 0,
+            "deploy_avg_alpha_vs_spot": 0.0,
+        }
+    )
+
+    run_id = str(
+        args.run_id
+        or quality_snapshot.get("run_id")
+        or _default_run_id(target=str(args.target), batch=batch)
+    )
     notes = [item.strip() for item in (args.note or []) if item.strip()]
 
     tasks_total = max(0, int(args.tasks_total))
@@ -217,19 +385,12 @@ def cmd_manifest(args: argparse.Namespace) -> int:
             "eta_utc": eta_utc,
             "confidence": str(args.confidence),
         },
-        "quality_snapshot": {
-            "run_id": None,
-            "validation_pass_rate": 0.0,
-            "all_window_alpha_vs_spot": 0.0,
-            "deploy_symbols": 0,
-            "deploy_rules": 0,
-            "deploy_avg_alpha_vs_spot": 0.0,
-        },
+        "quality_snapshot": quality_snapshot,
         "symbol_progress": symbol_progress,
         "outputs": {
-            "summary_json": str(args.summary_path) if args.summary_path else None,
-            "validation_report": str(args.validation_path) if args.validation_path else None,
-            "deploy_pool": str(args.deploy_path) if args.deploy_path else None,
+            "summary_json": summary_path,
+            "validation_report": validation_path,
+            "deploy_pool": deploy_path,
         },
         "notes": notes,
     }
@@ -273,6 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_manifest.add_argument("--summary-path", default=None)
     p_manifest.add_argument("--validation-path", default=None)
     p_manifest.add_argument("--deploy-path", default=None)
+    p_manifest.add_argument(
+        "--auto-quality",
+        action="store_true",
+        help="Extract quality snapshot from summary/validation/deploy artifacts.",
+    )
     p_manifest.add_argument("--output", default=None)
     p_manifest.add_argument("--note", action="append", default=None, help="Repeatable note field.")
     p_manifest.add_argument("--mirror-to-daily", action="store_true")

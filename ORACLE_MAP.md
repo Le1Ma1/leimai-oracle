@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T11:09:12Z`
+- Last Updated (UTC): `2026-02-28T13:42:00Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -532,7 +532,27 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Internal poll endpoint is write-scoped and protected by secret auth.
 - Bai Ben (Minimalism) Review: Pass. Reuses existing chain poll logic without introducing new service layers.
 
+### [x] B19_CLOUD_AUTO_QUALITY_MANIFEST
+- Technical Dependency: `scripts/cloud_dispatch.py`.
+- Business Value: cloud manifest now auto-populates quality snapshot from optimization artifacts (`summary/validation/deploy`) for monitor-ready decision signals.
+- Read/Write Isolation Review: Pass. Reads artifacts and writes one manifest file only.
+- Bai Ben (Minimalism) Review: Pass. One flag (`--auto-quality`) added to existing dispatcher, no new service layer.
+
+### [x] B19_1_NOTEBOOK_TOKEN_CLONE_AND_AUTO_QUALITY_WIRING
+- Technical Dependency: `cloud/kaggle/runner.ipynb`, `cloud/colab/runner.ipynb`, `cloud/kaggle/env.template`, `cloud/colab/env.template`.
+- Business Value: notebooks support private token clone and emit manifest with real quality metrics at batch completion.
+- Read/Write Isolation Review: Pass. Notebook runtime only updates backend artifacts and manifest paths.
+- Bai Ben (Minimalism) Review: Pass. Reused existing notebook flow and appended minimal operator controls.
+
 ## [BUSINESS_STATUS]
+
+### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
+- Technical Dependency: `scripts/cloud_dispatch.py --auto-quality`, `engine/artifacts/cloud/cloud_run_manifest.json`.
+- Business Value: monitor 可直接看到 `validation_pass_rate`、`all_window_alpha_vs_spot`、`deploy_symbols/rules/avg_alpha`，不再需要手動對照 json。
+
+### [x] Colab/Kaggle 代跑操作完成私有倉權限閉環
+- Technical Dependency: `cloud/kaggle/runner.ipynb`, `cloud/colab/runner.ipynb`, `cloud/*/README.md`.
+- Business Value: 可用 `GITHUB_TOKEN` 直接 clone 並跑完批次，產物回寫後即可用 monitor 審閱 Round-2。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
