@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T13:42:00Z`
+- Last Updated (UTC): `2026-02-28T14:20:06Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -544,6 +544,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Notebook runtime only updates backend artifacts and manifest paths.
 - Bai Ben (Minimalism) Review: Pass. Reused existing notebook flow and appended minimal operator controls.
 
+### [x] B19_2_CLOUD_CLONE_AUTH_FALLBACK_HARDENING
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`, `cloud/*/env.template`.
+- Business Value: clone bootstrap now uses Basic `http.extraHeader` with auth-principal fallback (`x-access-token` + `GITHUB_USERNAME`) and returns actionable diagnostics without token leakage.
+- Read/Write Isolation Review: Pass. Only notebook bootstrap path changed.
+- Bai Ben (Minimalism) Review: Pass. Existing runner flow retained; authentication hardening added in-place.
+
 ## [BUSINESS_STATUS]
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
@@ -553,6 +559,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] Colab/Kaggle 代跑操作完成私有倉權限閉環
 - Technical Dependency: `cloud/kaggle/runner.ipynb`, `cloud/colab/runner.ipynb`, `cloud/*/README.md`.
 - Business Value: 可用 `GITHUB_TOKEN` 直接 clone 並跑完批次，產物回寫後即可用 monitor 審閱 Round-2。
+
+### [x] Colab clone 失敗已完成 Auth Fallback 二次修復
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: 若 PAT principal 不相容，runner 會自動 fallback；失敗訊息直接定位到 token scope/owner/repo access，降低排障時間。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
