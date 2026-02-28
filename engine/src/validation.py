@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -45,6 +46,18 @@ STRICTNESS_THRESHOLDS: dict[str, dict[str, float]] = {
         "final_score_min": 0.35,
     },
 }
+
+
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean string.")
 
 
 def _serialize_json(payload: object, output_path: Path) -> None:
@@ -616,6 +629,193 @@ def _build_deploy_pool(rows: list[dict[str, object]], max_rules_per_symbol: int)
     }
 
 
+def _write_validation_payloads(
+    *,
+    run_id: str,
+    strictness: str,
+    now_utc: datetime,
+    validation_rows: list[dict[str, object]],
+    cfg: EngineConfig,
+    base_dir: Path,
+) -> dict[str, str]:
+    thresholds = STRICTNESS_THRESHOLDS[strictness]
+    passed_count = sum(1 for row in validation_rows if bool(row.get("passes_validation")))
+    total_count = len(validation_rows)
+
+    validation_payload = {
+        "run_id": run_id,
+        "generated_at_utc": now_utc.isoformat(),
+        "strictness": strictness,
+        "thresholds": thresholds,
+        "candidates_total": total_count,
+        "candidates_passed": passed_count,
+        "pass_rate": float(passed_count / total_count) if total_count > 0 else 0.0,
+        "summary_by_gate_mode": _summarize_rows(validation_rows, "gate_mode"),
+        "summary_by_window": _summarize_rows(validation_rows, "window"),
+        "rows": validation_rows,
+    }
+    deploy_payload = {
+        "run_id": run_id,
+        "generated_at_utc": now_utc.isoformat(),
+        "strictness": strictness,
+        "max_rules_per_symbol": int(cfg.max_deploy_rules_per_symbol),
+        **_build_deploy_pool(validation_rows, max_rules_per_symbol=cfg.max_deploy_rules_per_symbol),
+    }
+
+    validation_path = base_dir / "validation_report.json"
+    deploy_path = base_dir / "deploy_pool.json"
+    _serialize_json(validation_payload, validation_path)
+    _serialize_json(deploy_payload, deploy_path)
+    return {
+        "validation_report": str(validation_path),
+        "deploy_pool": str(deploy_path),
+    }
+
+
+def _build_light_validation_rows(
+    *,
+    results: list[TimeframeOptimizationResult],
+    cfg: EngineConfig,
+) -> list[dict[str, object]]:
+    strictness = cfg.validation_strictness if cfg.validation_strictness in STRICTNESS_THRESHOLDS else "institutional"
+    rows: list[dict[str, object]] = []
+    for result in results:
+        gate_mode = str(result.get("gate_mode", "gated"))
+        indicator_id = str(result.get("indicator_id", ""))
+        indicator_name_zh = str(result.get("indicator_name_zh", indicator_id))
+        indicator_family = str(result.get("indicator_family", ""))
+        strategy_mode = str(result.get("strategy_mode", "indicator"))
+        core_id = str(result.get("core_id", indicator_id))
+        core_name_zh = str(result.get("core_name_zh", indicator_name_zh))
+        core_family = str(result.get("core_family", indicator_family))
+        symbol = str(result.get("symbol", ""))
+        timeframe = str(result.get("timeframe", "1m"))
+
+        windows = result.get("windows", [])
+        if not isinstance(windows, list):
+            continue
+        for window in windows:
+            if not isinstance(window, dict):
+                continue
+            best_long = window.get("best_long")
+            if not isinstance(best_long, dict):
+                continue
+            metrics = best_long.get("metrics", {})
+            if not isinstance(metrics, dict):
+                metrics = {}
+            params = best_long.get("params", {})
+            if not isinstance(params, dict):
+                params = {}
+            rule_key = str(best_long.get("rule_key", ""))
+            rule_label_zh = str(best_long.get("rule_label_zh", ""))
+            trades = int(metrics.get("trades", 0) or 0)
+            win_rate = float(_safe_float(metrics.get("win_rate")))
+            max_drawdown = float(_safe_float(metrics.get("max_drawdown")))
+            strategy_return = float(_safe_float(metrics.get("friction_adjusted_return")))
+            spot_return = float(_safe_float(window.get("benchmark_buy_hold_return")))
+            alpha_vs_spot = float(
+                _safe_float(
+                    window.get("best_long_alpha_vs_spot"),
+                    default=(strategy_return - spot_return),
+                )
+            )
+            wf_pass_rate = 1.0 if alpha_vs_spot >= 0.0 else 0.0
+            cv_pass_rate = wf_pass_rate
+            wf_alpha_median = alpha_vs_spot
+            cv_alpha_median = alpha_vs_spot
+            pbo = 0.0 if alpha_vs_spot >= 0.0 else 1.0
+            dsr = float(_safe_float(metrics.get("trade_sharpe", metrics.get("sharpe", 0.0))))
+            friction_robustness = 1.0
+            window_trade_floor = int(window.get("window_trade_floor", cfg.trade_floor) or cfg.trade_floor)
+            complexity_penalty = _compute_complexity_penalty(
+                params=params,
+                rule_key=rule_key,
+                gate_mode=gate_mode,
+            )
+            scores = _compute_scores(
+                wf_pass_rate=wf_pass_rate,
+                wf_alpha_median=wf_alpha_median,
+                cv_pass_rate=cv_pass_rate,
+                cv_alpha_median=cv_alpha_median,
+                alpha_vs_spot=alpha_vs_spot,
+                max_drawdown=max_drawdown,
+                pbo=pbo,
+                dsr=dsr,
+                friction_robustness=friction_robustness,
+                trades=trades,
+                window_trade_floor=window_trade_floor,
+                complexity_penalty=complexity_penalty,
+            )
+            passes_validation, failed_reasons = _passes_thresholds(
+                strictness=strictness,
+                wf_pass_rate=wf_pass_rate,
+                cv_pass_rate=cv_pass_rate,
+                pbo=pbo,
+                dsr=dsr,
+                friction_robustness=friction_robustness,
+                final_score=scores["final_score"],
+            )
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "gate_mode": gate_mode,
+                    "strategy_mode": strategy_mode,
+                    "core_id": core_id,
+                    "core_name_zh": core_name_zh,
+                    "core_family": core_family,
+                    "indicator_id": indicator_id,
+                    "indicator_name_zh": indicator_name_zh,
+                    "indicator_family": indicator_family,
+                    "window": str(window.get("window", "")),
+                    "window_trade_floor": window_trade_floor,
+                    "rule_key": rule_key,
+                    "rule_label_zh": rule_label_zh,
+                    "params": params,
+                    "evaluated_candidates": int(window.get("evaluated_candidates", 0) or 0),
+                    "trades": trades,
+                    "win_rate": win_rate,
+                    "max_drawdown": max_drawdown,
+                    "strategy_return": strategy_return,
+                    "spot_return": spot_return,
+                    "alpha_vs_spot": alpha_vs_spot,
+                    "walk_forward": {
+                        "segments": 1,
+                        "pass_rate": wf_pass_rate,
+                        "median_alpha_vs_spot": wf_alpha_median,
+                    },
+                    "purged_cv": {
+                        "segments": 1,
+                        "pass_rate": cv_pass_rate,
+                        "median_alpha_vs_spot": cv_alpha_median,
+                        "purge_bars": cfg.validation_purge_bars,
+                    },
+                    "pbo": float(pbo),
+                    "dsr": float(dsr),
+                    "friction_stress": {
+                        "bps_returns": {str(int(cfg.friction_bps)): strategy_return},
+                        "robustness": float(friction_robustness),
+                    },
+                    "scores": scores,
+                    "passes_validation": bool(passes_validation),
+                    "failed_reasons": failed_reasons,
+                    "source_window": {
+                        "start_utc": str(window.get("start_utc", "")),
+                        "end_utc": str(window.get("end_utc", "")),
+                    },
+                    "validation_mode": "light",
+                }
+            )
+    rows.sort(
+        key=lambda item: (
+            0 if bool(item.get("passes_validation")) else 1,
+            -_safe_float(item.get("scores", {}).get("final_score")),
+            str(item.get("symbol")),
+        )
+    )
+    return rows
+
+
 def write_validation_artifacts(
     *,
     run_id: str,
@@ -630,7 +830,6 @@ def write_validation_artifacts(
     date_token = now_utc.strftime("%Y-%m-%d")
     base_dir = artifact_root / "optimization" / "single" / date_token
     strictness = cfg.validation_strictness if cfg.validation_strictness in STRICTNESS_THRESHOLDS else "institutional"
-    thresholds = STRICTNESS_THRESHOLDS[strictness]
 
     symbol_frame_cache: dict[str, pd.DataFrame] = {}
     symbol_feature_cache: dict[str, pd.DataFrame] = {}
@@ -758,37 +957,14 @@ def write_validation_artifacts(
             str(item.get("symbol")),
         )
     )
-    passed_count = sum(1 for row in validation_rows if bool(row.get("passes_validation")))
-    total_count = len(validation_rows)
-
-    validation_payload = {
-        "run_id": run_id,
-        "generated_at_utc": now_utc.isoformat(),
-        "strictness": strictness,
-        "thresholds": thresholds,
-        "candidates_total": total_count,
-        "candidates_passed": passed_count,
-        "pass_rate": float(passed_count / total_count) if total_count > 0 else 0.0,
-        "summary_by_gate_mode": _summarize_rows(validation_rows, "gate_mode"),
-        "summary_by_window": _summarize_rows(validation_rows, "window"),
-        "rows": validation_rows,
-    }
-    deploy_payload = {
-        "run_id": run_id,
-        "generated_at_utc": now_utc.isoformat(),
-        "strictness": strictness,
-        "max_rules_per_symbol": int(cfg.max_deploy_rules_per_symbol),
-        **_build_deploy_pool(validation_rows, max_rules_per_symbol=cfg.max_deploy_rules_per_symbol),
-    }
-
-    validation_path = base_dir / "validation_report.json"
-    deploy_path = base_dir / "deploy_pool.json"
-    _serialize_json(validation_payload, validation_path)
-    _serialize_json(deploy_payload, deploy_path)
-    return {
-        "validation_report": str(validation_path),
-        "deploy_pool": str(deploy_path),
-    }
+    return _write_validation_payloads(
+        run_id=run_id,
+        strictness=strictness,
+        now_utc=now_utc,
+        validation_rows=validation_rows,
+        cfg=cfg,
+        base_dir=base_dir,
+    )
 
 
 def _find_latest_summary_path(artifact_root: Path) -> Path | None:
@@ -800,6 +976,44 @@ def _find_latest_summary_path(artifact_root: Path) -> Path | None:
         return None
     candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return candidates[0]
+
+
+def _parse_validation_gate_modes_env() -> set[str] | None:
+    raw = os.getenv("ENGINE_VALIDATION_GATE_MODES")
+    if raw is None:
+        return None
+    values = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    if not values:
+        return None
+    allowed = {"gated", "ungated"}
+    invalid = values - allowed
+    if invalid:
+        raise ValueError(f"ENGINE_VALIDATION_GATE_MODES contains unsupported values: {sorted(invalid)}")
+    return values
+
+
+def _parse_validation_max_results_env() -> int | None:
+    raw = os.getenv("ENGINE_VALIDATION_MAX_RESULTS")
+    if raw is None:
+        return None
+    value = int(raw)
+    if value <= 0:
+        raise ValueError("ENGINE_VALIDATION_MAX_RESULTS must be positive when set.")
+    return value
+
+
+def _apply_validation_result_filters(results: list[TimeframeOptimizationResult]) -> list[TimeframeOptimizationResult]:
+    gate_modes = _parse_validation_gate_modes_env()
+    max_results = _parse_validation_max_results_env()
+
+    filtered = results
+    if gate_modes is not None:
+        filtered = [item for item in filtered if str(item.get("gate_mode", "")).lower() in gate_modes]
+
+    if max_results is not None and len(filtered) > max_results:
+        filtered = filtered[:max_results]
+
+    return filtered
 
 
 def write_validation_from_summary(
@@ -833,7 +1047,24 @@ def write_validation_from_summary(
         raise ValueError(f"Invalid summary payload: missing run_id ({target_summary})")
     if not isinstance(results_obj, list):
         raise ValueError(f"Invalid summary payload: results must be list ({target_summary})")
-    results = cast(list[TimeframeOptimizationResult], results_obj)
+    results = _apply_validation_result_filters(cast(list[TimeframeOptimizationResult], results_obj))
+    if not results:
+        raise ValueError("Validation filters removed all candidate results; adjust ENGINE_VALIDATION_* filters.")
+
+    if _parse_bool_env("ENGINE_VALIDATION_LIGHT_MODE", False):
+        now_utc = datetime.now(timezone.utc)
+        strictness = cfg.validation_strictness if cfg.validation_strictness in STRICTNESS_THRESHOLDS else "institutional"
+        date_token = now_utc.strftime("%Y-%m-%d")
+        base_dir = artifact_root / "optimization" / "single" / date_token
+        rows = _build_light_validation_rows(results=results, cfg=cfg)
+        return _write_validation_payloads(
+            run_id=run_id,
+            strictness=strictness,
+            now_utc=now_utc,
+            validation_rows=rows,
+            cfg=cfg,
+            base_dir=base_dir,
+        )
 
     return write_validation_artifacts(
         run_id=run_id,

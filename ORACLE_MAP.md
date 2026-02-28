@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T07:37:18Z`
+- Last Updated (UTC): `2026-02-28T11:09:12Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -453,6 +453,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. UI-only source binding; no mutation of engine training logic.
 - Bai Ben (Minimalism) Review: Pass. Implemented in existing monitor page with path presets.
 
+### [x] B10_28_VALIDATION_LIGHT_MODE_AND_FILTERS
+- Technical Dependency: `engine/src/validation.py`, `engine/.env.example`, `engine/README.md`.
+- Business Value: validation tail can be completed deterministically on constrained compute by using summary-driven light mode and optional gate/result filters.
+- Evidence: new env contracts `ENGINE_VALIDATION_LIGHT_MODE`, `ENGINE_VALIDATION_GATE_MODES`, `ENGINE_VALIDATION_MAX_RESULTS`; validate run produced `2026-02-28/validation_report.json` and `deploy_pool.json`.
+- Read/Write Isolation Review: Pass. Validation remains backend-only and does not couple to frontend/support modules.
+- Bai Ben (Minimalism) Review: Pass. Added optional runtime switches without changing default full-validation path.
+
 ### [ ] B11_CLICKHOUSE_WRITEBACK
 - Technical Dependency: future schema + idempotent writer.
 - Business Value: persistent query layer for SaaS APIs.
@@ -534,6 +541,14 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] 監控面板支援本地與雲端雙來源
 - Technical Dependency: `monitor/index.html`, `monitor/CLOUD.md`, `engine/artifacts/cloud/cloud_run_manifest.json`.
 - Business Value: 可在同一個 Monitor 介面切換查看本地迭代與雲端批次進度。
+
+### [x] 2026-02-28 矩陣訓練收斂並補齊驗證產物
+- Technical Dependency: `engine/artifacts/optimization/single/2026-02-28/summary.json`, `engine/artifacts/optimization/single/2026-02-28/validation_report.json`, `engine/artifacts/optimization/single/2026-02-28/deploy_pool.json`.
+- Business Value: 主段 `180` 任務完成後，已補齊 validation/deploy 交付面板所需核心檔案；當前快照為 `validation_pass_rate=0.7273`, `deploy_symbols=15`, `deploy_rules=29`, `deploy_avg_alpha_vs_spot=0.3804`。
+
+### [x] 雲端批次派工演練完成（3 批切分）
+- Technical Dependency: `scripts/cloud_dispatch.py`, `engine/artifacts/cloud/cloud_run_manifest.json`.
+- Business Value: Kaggle 主跑可直接按 `batch 1/3, 2/3, 3/3` 進行，降低單機長跑與中斷風險。
 
 ### [x] 前 15 交易標的與歷史 1m 數據完成
 - Technical Dependency: `engine/src/universe.py`, `engine/src/ingest_1m.py`, `engine/data/raw/symbol=*/timeframe=1m/*`.

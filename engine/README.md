@@ -84,6 +84,12 @@ Use an explicit summary path:
 python -m engine.src.main --mode validate --summary-path /engine/artifacts/optimization/single/2026-02-25/summary.json
 ```
 
+Optional runtime limiters for validation:
+
+- `ENGINE_VALIDATION_LIGHT_MODE=true` (summary-driven fast validation, skips full signal rebuild)
+- `ENGINE_VALIDATION_GATE_MODES=gated` (validate only one gate mode)
+- `ENGINE_VALIDATION_MAX_RESULTS=90` (cap number of result rows validated)
+
 ## Optimization Artifacts
 
 Single-indicator optimization output is written to:
