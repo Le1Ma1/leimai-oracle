@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "support:start": "node support/server.mjs",
+    "support:worker": "node support/worker.mjs",
+    "support:dev": "node --watch support/server.mjs",
+    "support:run-local": "powershell -ExecutionPolicy Bypass -File scripts/support_run_local.ps1",
+    "support:stop-local": "powershell -ExecutionPolicy Bypass -File scripts/support_stop_local.ps1",
     "prepare:brand": "node scripts/prepare-brand.mjs",
     "precompute": "tsx scripts/precompute.ts",
     "precompute:hybrid": "tsx scripts/precompute.ts --hybrid",

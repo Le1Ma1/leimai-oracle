@@ -1,0 +1,702 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import median
+from typing import Any
+
+
+DEFAULT_VALIDATION_SECONDS = 20 * 60
+MAX_LOG_FILES = 24
+RECENT_RATE_WINDOW = 8
+RECENT_EVENT_COUNT = 20
+MAX_HISTORY_ROWS = 480
+LOG_STALE_SECONDS = 180
+WRITE_RETRY_ATTEMPTS = 8
+WRITE_RETRY_SLEEP_SECONDS = 0.05
+WRITE_RETRY_BACKOFF = 1.8
+DEFAULT_SYMBOL_ORDER = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "LTCUSDT",
+    "LINKUSDT",
+    "BCHUSDT",
+    "TRXUSDT",
+    "ETCUSDT",
+    "XLMUSDT",
+    "EOSUSDT",
+    "XMRUSDT",
+    "ATOMUSDT",
+)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_iso_z(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return default
+    if out != out:
+        return default
+    return out
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _list_python_processes() -> list[dict[str, Any]]:
+    if os.name == "nt":
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            (
+                "Get-CimInstance Win32_Process "
+                "| Where-Object { $_.Name -match '^python(\\.exe)?$' } "
+                "| Select-Object ProcessId,CommandLine "
+                "| ConvertTo-Json -Compress"
+            ),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            return []
+        raw = proc.stdout.strip()
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return []
+        if isinstance(payload, dict):
+            return [payload]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    cmd = ["ps", "-eo", "pid,args"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in proc.stdout.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        rows.append({"ProcessId": _safe_int(parts[0], 0), "CommandLine": parts[1]})
+    return rows
+
+
+def _detect_active_processes(processes: list[dict[str, Any]]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in processes:
+        pid = _safe_int(row.get("ProcessId"), 0)
+        cmd = str(row.get("CommandLine") or "")
+        cmd_l = cmd.lower()
+        if pid <= 0:
+            continue
+        if "scripts/alpha_supervisor.py" in cmd_l or "scripts\\alpha_supervisor.py" in cmd_l:
+            out["alpha_supervisor_pid"] = pid
+        if "engine.src.main" in cmd_l and "--mode iterate" in cmd_l:
+            out["iterate_pid"] = pid
+        if "engine.src.main" in cmd_l and "--mode validate" in cmd_l:
+            out["validate_pid"] = pid
+    return out
+
+
+def _parse_cli_int_arg(command_line: str, flag: str, default: int) -> int:
+    pattern = rf"(?:^|\s){re.escape(flag)}\s+(\d+)"
+    match = re.search(pattern, command_line, flags=re.IGNORECASE)
+    if not match:
+        return default
+    return _safe_int(match.group(1), default)
+
+
+def _parse_cli_float_arg(command_line: str, flag: str, default: float) -> float:
+    pattern = rf"(?:^|\s){re.escape(flag)}\s+([0-9]*\.?[0-9]+)"
+    match = re.search(pattern, command_line, flags=re.IGNORECASE)
+    if not match:
+        return default
+    return _safe_float(match.group(1), default)
+
+
+def _parse_supervisor_targets(processes: list[dict[str, Any]]) -> dict[str, float | int]:
+    defaults: dict[str, float | int] = {
+        "target_pass_rate": 0.20,
+        "target_deploy_symbols": 8,
+        "target_deploy_rules": 16,
+        "target_all_alpha": 0.0,
+        "target_deploy_alpha": 0.0,
+        "cycles": 1,
+        "max_rounds": 1,
+    }
+    for row in processes:
+        cmd = str(row.get("CommandLine") or "")
+        cmd_l = cmd.lower()
+        if "scripts/alpha_supervisor.py" not in cmd_l and "scripts\\alpha_supervisor.py" not in cmd_l:
+            continue
+        return {
+            "target_pass_rate": _parse_cli_float_arg(cmd, "--target-pass-rate", float(defaults["target_pass_rate"])),
+            "target_deploy_symbols": _parse_cli_int_arg(cmd, "--target-deploy-symbols", int(defaults["target_deploy_symbols"])),
+            "target_deploy_rules": _parse_cli_int_arg(cmd, "--target-deploy-rules", int(defaults["target_deploy_rules"])),
+            "target_all_alpha": float(defaults["target_all_alpha"]),
+            "target_deploy_alpha": float(defaults["target_deploy_alpha"]),
+            "cycles": _parse_cli_int_arg(cmd, "--cycles", int(defaults["cycles"])),
+            "max_rounds": _parse_cli_int_arg(cmd, "--max-rounds", int(defaults["max_rounds"])),
+        }
+    return defaults
+
+
+def _list_out_logs(log_root: Path) -> list[Path]:
+    if not log_root.exists():
+        return []
+    return sorted(log_root.glob("*.out.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:MAX_LOG_FILES]
+
+
+def _parse_events(log_files: list[Path]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for path in log_files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line.startswith("{") or '"event"' not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(obj, dict) or "event" not in obj:
+                continue
+            ts = _parse_utc(obj.get("ts_utc"))
+            if ts is None:
+                continue
+            obj["_ts"] = ts
+            obj["_source"] = path.name
+            events.append(obj)
+    events.sort(key=lambda item: item["_ts"])
+    return events
+
+
+def _estimate_validation_tail_seconds(events: list[dict[str, Any]]) -> int:
+    by_run: dict[str, dict[str, datetime]] = {}
+    for event in events:
+        run_id = str(event.get("run_id") or "")
+        if not run_id:
+            continue
+        slot = by_run.setdefault(run_id, {})
+        ts = event["_ts"]
+        name = str(event.get("event"))
+        if name == "ITERATION_ROUND_START":
+            slot["start"] = ts
+        elif name == "ITERATION_SYMBOL_CORE_DONE":
+            prev = slot.get("last_core")
+            if prev is None or ts > prev:
+                slot["last_core"] = ts
+        elif name == "ITERATION_ROUND_END":
+            slot["round_end"] = ts
+
+    samples: list[float] = []
+    for slot in by_run.values():
+        last_core = slot.get("last_core")
+        round_end = slot.get("round_end")
+        if last_core is None or round_end is None:
+            continue
+        diff = (round_end - last_core).total_seconds()
+        if diff >= 0:
+            samples.append(diff)
+    if not samples:
+        return DEFAULT_VALIDATION_SECONDS
+    return int(max(60.0, median(samples)))
+
+
+def _latest_quality_snapshot(artifact_root: Path) -> dict[str, Any]:
+    single_root = artifact_root / "optimization" / "single"
+    if not single_root.exists():
+        return {}
+    validations = sorted(single_root.rglob("validation_report.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    deploys = sorted(single_root.rglob("deploy_pool.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    v_payload: dict[str, Any] = {}
+    d_payload: dict[str, Any] = {}
+    if validations:
+        try:
+            v_payload = json.loads(validations[0].read_text(encoding="utf-8"))
+        except Exception:
+            v_payload = {}
+    if deploys:
+        try:
+            d_payload = json.loads(deploys[0].read_text(encoding="utf-8"))
+        except Exception:
+            d_payload = {}
+
+    pass_rate = _safe_float(v_payload.get("pass_rate"), 0.0) if isinstance(v_payload, dict) else 0.0
+    all_alpha = 0.0
+    for row in v_payload.get("summary_by_window", []) if isinstance(v_payload, dict) else []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("window")) == "all":
+            all_alpha = _safe_float(row.get("avg_alpha_vs_spot"), 0.0)
+            break
+
+    deploy_alpha_samples: list[float] = []
+    if isinstance(d_payload, dict):
+        symbols = d_payload.get("symbols", [])
+        if isinstance(symbols, list):
+            for group in symbols:
+                if not isinstance(group, dict):
+                    continue
+                rules = group.get("rules", [])
+                if not isinstance(rules, list):
+                    continue
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    deploy_alpha_samples.append(_safe_float(rule.get("alpha_vs_spot"), 0.0))
+    deploy_avg_alpha = float(sum(deploy_alpha_samples) / len(deploy_alpha_samples)) if deploy_alpha_samples else 0.0
+
+    return {
+        "run_id": str(v_payload.get("run_id", d_payload.get("run_id", ""))) if isinstance(v_payload, dict) else "",
+        "validation_pass_rate": pass_rate,
+        "all_window_alpha_vs_spot": all_alpha,
+        "deploy_symbols": _safe_int(d_payload.get("total_symbols"), 0) if isinstance(d_payload, dict) else 0,
+        "deploy_rules": _safe_int(d_payload.get("total_rules"), 0) if isinstance(d_payload, dict) else 0,
+        "deploy_avg_alpha_vs_spot": deploy_avg_alpha,
+    }
+
+
+def _build_status(repo_root: Path) -> dict[str, Any]:
+    now = _now_utc()
+    artifact_root = repo_root / "engine" / "artifacts"
+    log_root = artifact_root / "logs"
+    monitor_root = artifact_root / "monitor"
+    monitor_root.mkdir(parents=True, exist_ok=True)
+
+    processes = _list_python_processes()
+    active_processes = _detect_active_processes(processes)
+    targets_cfg = _parse_supervisor_targets(processes)
+    iterate_active = "iterate_pid" in active_processes
+    supervisor_active = "alpha_supervisor_pid" in active_processes
+
+    log_files = _list_out_logs(log_root)
+    events = _parse_events(log_files)
+    validation_tail_seconds = _estimate_validation_tail_seconds(events)
+
+    round_starts = [event for event in events if str(event.get("event")) == "ITERATION_ROUND_START" and event.get("run_id")]
+    latest_start = round_starts[-1] if round_starts else None
+    active_run_id = str(latest_start.get("run_id")) if latest_start is not None else None
+
+    run_events: list[dict[str, Any]] = []
+    if active_run_id:
+        start_ts = latest_start["_ts"]
+        run_events = [event for event in events if str(event.get("run_id")) == active_run_id and event["_ts"] >= start_ts]
+
+    done_events = [event for event in run_events if str(event.get("event")) == "ITERATION_SYMBOL_CORE_DONE"]
+    done_keys = {
+        (
+            str(event.get("symbol", "")),
+            str(event.get("core_id", "")),
+            str(event.get("gate_mode", "")),
+        )
+        for event in done_events
+    }
+    tasks_done = len(done_keys)
+
+    symbols_total = _safe_int(latest_start.get("symbols"), 0) if latest_start else 0
+    cores_total = len(latest_start.get("signal_cores", [])) if latest_start and isinstance(latest_start.get("signal_cores"), list) else 0
+    gates_total = len(latest_start.get("gates", [])) if latest_start and isinstance(latest_start.get("gates"), list) else 0
+    tasks_total = max(0, symbols_total * cores_total * gates_total)
+    if tasks_total > 0:
+        tasks_done = min(tasks_done, tasks_total)
+    tasks_pct = float(tasks_done / tasks_total) * 100.0 if tasks_total > 0 else 0.0
+
+    done_by_symbol: dict[str, int] = {}
+    for event in done_events:
+        symbol = str(event.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        done_by_symbol.setdefault(symbol, 0)
+        done_by_symbol[symbol] += 1
+    per_symbol_total = max(0, cores_total * gates_total)
+    symbol_order: list[str] = list(DEFAULT_SYMBOL_ORDER[:symbols_total]) if symbols_total > 0 else []
+    for symbol in done_by_symbol.keys():
+        if symbol not in symbol_order:
+            symbol_order.append(symbol)
+    latest_done_symbol = str(done_events[-1].get("symbol") or "").upper() if done_events else ""
+    symbol_progress: list[dict[str, Any]] = []
+    for symbol in symbol_order:
+        done_count = min(done_by_symbol.get(symbol, 0), per_symbol_total)
+        pct = float(done_count / per_symbol_total * 100.0) if per_symbol_total > 0 else 0.0
+        if done_count >= per_symbol_total and per_symbol_total > 0:
+            phase = "done"
+        elif done_count > 0 or (iterate_active and symbol == latest_done_symbol):
+            phase = "running"
+        else:
+            phase = "pending"
+        symbol_progress.append(
+            {
+                "symbol": symbol,
+                "done": done_count,
+                "total": per_symbol_total,
+                "pct": round(pct, 2),
+                "phase": phase,
+            }
+        )
+
+    round_end = None
+    for event in reversed(run_events):
+        if str(event.get("event")) == "ITERATION_ROUND_END":
+            round_end = event
+            break
+    iteration_complete = None
+    for event in reversed(events):
+        if str(event.get("event")) == "ITERATION_COMPLETE":
+            iteration_complete = event
+            break
+
+    first_done_ts = done_events[0]["_ts"] if done_events else None
+    last_done_ts = done_events[-1]["_ts"] if done_events else None
+
+    global_rate = 0.0
+    if first_done_ts is not None and tasks_done > 0:
+        base_end = now if iterate_active and round_end is None else (last_done_ts or now)
+        elapsed_min = max((base_end - first_done_ts).total_seconds() / 60.0, 1.0 / 60.0)
+        global_rate = float(tasks_done / elapsed_min)
+
+    recent_rate = global_rate
+    if len(done_events) >= 2:
+        recent_slice = done_events[-RECENT_RATE_WINDOW:]
+        recent_start = recent_slice[0]["_ts"]
+        recent_end = recent_slice[-1]["_ts"]
+        recent_elapsed_min = max((recent_end - recent_start).total_seconds() / 60.0, 1.0 / 60.0)
+        recent_rate = float((len(recent_slice) - 1) / recent_elapsed_min)
+
+    warnings: list[str] = []
+    latest_event_ts = events[-1]["_ts"] if events else None
+    if latest_event_ts is not None and (iterate_active or supervisor_active):
+        stale_sec = (now - latest_event_ts).total_seconds()
+        if stale_sec > LOG_STALE_SECONDS:
+            warnings.append(f"log_stale_{int(stale_sec)}s")
+
+    pipeline_state = "idle"
+    if iterate_active:
+        if tasks_total > 0 and tasks_done < tasks_total:
+            pipeline_state = "running"
+        elif tasks_total > 0 and tasks_done >= tasks_total and round_end is None:
+            pipeline_state = "validation"
+        else:
+            pipeline_state = "finalizing"
+    elif supervisor_active:
+        pipeline_state = "finalizing"
+    elif iteration_complete is not None:
+        pipeline_state = "done"
+
+    seconds_remaining: int | None = None
+    eta_utc: str | None = None
+    if pipeline_state == "running" and tasks_total > 0:
+        remaining_tasks = max(0, tasks_total - tasks_done)
+        rate = recent_rate if recent_rate > 0 else global_rate
+        if rate > 0:
+            core_seconds = int((remaining_tasks / rate) * 60.0)
+            seconds_remaining = max(0, core_seconds + validation_tail_seconds)
+    elif pipeline_state == "validation":
+        if last_done_ts is not None:
+            elapsed = int((now - last_done_ts).total_seconds())
+            seconds_remaining = max(60, validation_tail_seconds - elapsed)
+        else:
+            seconds_remaining = validation_tail_seconds
+    elif pipeline_state == "finalizing":
+        seconds_remaining = 60
+
+    if seconds_remaining is not None:
+        eta_utc = _to_iso_z(datetime.fromtimestamp(now.timestamp() + float(seconds_remaining), tz=timezone.utc))
+
+    confidence = "low"
+    if seconds_remaining is not None and tasks_done >= 6 and global_rate > 0 and recent_rate > 0:
+        drift = abs(recent_rate - global_rate) / max(global_rate, 1e-9)
+        if drift < 0.15:
+            confidence = "high"
+        elif drift < 0.35:
+            confidence = "medium"
+
+    quality_snapshot = _latest_quality_snapshot(artifact_root)
+    target_checks = [
+        {
+            "key": "validation_pass_rate",
+            "label": f"Validation pass >= {float(targets_cfg['target_pass_rate']):.2f}",
+            "actual": _safe_float(quality_snapshot.get("validation_pass_rate"), 0.0),
+            "target": float(targets_cfg["target_pass_rate"]),
+        },
+        {
+            "key": "deploy_symbols",
+            "label": f"Deploy symbols >= {int(targets_cfg['target_deploy_symbols'])}",
+            "actual": float(_safe_int(quality_snapshot.get("deploy_symbols"), 0)),
+            "target": float(targets_cfg["target_deploy_symbols"]),
+        },
+        {
+            "key": "deploy_rules",
+            "label": f"Deploy rules >= {int(targets_cfg['target_deploy_rules'])}",
+            "actual": float(_safe_int(quality_snapshot.get("deploy_rules"), 0)),
+            "target": float(targets_cfg["target_deploy_rules"]),
+        },
+        {
+            "key": "all_window_alpha_vs_spot",
+            "label": "all-window alpha >= 0",
+            "actual": _safe_float(quality_snapshot.get("all_window_alpha_vs_spot"), 0.0),
+            "target": float(targets_cfg["target_all_alpha"]),
+        },
+        {
+            "key": "deploy_avg_alpha_vs_spot",
+            "label": "deploy avg alpha >= 0",
+            "actual": _safe_float(quality_snapshot.get("deploy_avg_alpha_vs_spot"), 0.0),
+            "target": float(targets_cfg["target_deploy_alpha"]),
+        },
+    ]
+    for item in target_checks:
+        item["passed"] = bool(float(item["actual"]) >= float(item["target"]))
+
+    recent_source = run_events if run_events else events
+    recent_events = recent_source[-RECENT_EVENT_COUNT:]
+    recent_events_payload = [
+        {
+            "ts_utc": _to_iso_z(event["_ts"]),
+            "event": str(event.get("event", "")),
+            "symbol": str(event.get("symbol", "")) or None,
+            "core_id": str(event.get("core_id", "")) or None,
+            "gate_mode": str(event.get("gate_mode", "")) or None,
+            "source": str(event.get("_source", "")),
+        }
+        for event in recent_events
+    ]
+
+    profile = str(latest_start.get("profile", "")) if latest_start else ""
+    cycle_total = max(1, _safe_int(targets_cfg.get("cycles"), 1))
+    cycle_current = 0
+    if latest_start is not None:
+        source_name = str(latest_start.get("_source", ""))
+        seen_run_ids: set[str] = set()
+        for event in events:
+            if str(event.get("_source", "")) != source_name:
+                continue
+            if str(event.get("event")) != "ITERATION_ROUND_START":
+                continue
+            rid = str(event.get("run_id") or "")
+            if rid:
+                seen_run_ids.add(rid)
+        cycle_current = len(seen_run_ids)
+    cycle_total = max(cycle_total, cycle_current if cycle_current > 0 else 1)
+    cycle_pct = float(cycle_current / cycle_total * 100.0) if cycle_total > 0 else 0.0
+
+    status = {
+        "updated_at_utc": _to_iso_z(now),
+        "pipeline_state": pipeline_state,
+        "active_run_id": active_run_id,
+        "active_processes": active_processes,
+        "round": {
+            "index": 1 if latest_start is not None else None,
+            "profile": profile or None,
+            "started_at_utc": _to_iso_z(latest_start["_ts"]) if latest_start is not None else None,
+        },
+        "cycle": {
+            "current": cycle_current,
+            "total": cycle_total,
+            "pct": round(cycle_pct, 2),
+            "max_rounds_per_cycle": _safe_int(targets_cfg.get("max_rounds"), 1),
+        },
+        "progress": {
+            "symbols_total": symbols_total,
+            "cores_total": cores_total,
+            "gates_total": gates_total,
+            "tasks_total": tasks_total,
+            "tasks_done": tasks_done,
+            "tasks_pct": round(tasks_pct, 2),
+        },
+        "symbol_progress": symbol_progress,
+        "speed": {
+            "tasks_per_minute_recent": round(recent_rate, 4),
+            "tasks_per_minute_global": round(global_rate, 4),
+        },
+        "eta": {
+            "seconds_remaining": seconds_remaining,
+            "eta_utc": eta_utc,
+            "confidence": confidence,
+            "method": "hybrid",
+            "validation_tail_seconds_assumed": int(validation_tail_seconds),
+        },
+        "quality_snapshot": quality_snapshot,
+        "targets": {
+            "thresholds": targets_cfg,
+            "checks": target_checks,
+            "all_passed": all(bool(item["passed"]) for item in target_checks),
+        },
+        "last_events": recent_events_payload,
+        "warnings": warnings,
+        "log_files": [path.name for path in log_files[:5]],
+    }
+    return status
+
+
+def _write_json(path: Path, payload: object) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    last_error: Exception | None = None
+    for attempt in range(1, WRITE_RETRY_ATTEMPTS + 1):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{attempt}")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(path)
+            return True
+        except (PermissionError, OSError) as error:
+            last_error = error
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            if attempt < WRITE_RETRY_ATTEMPTS:
+                backoff = WRITE_RETRY_SLEEP_SECONDS * (WRITE_RETRY_BACKOFF ** (attempt - 1))
+                time.sleep(backoff)
+
+    try:
+        path.write_text(content, encoding="utf-8")
+        return True
+    except (PermissionError, OSError) as error:
+        last_error = error
+
+    print(
+        f"[monitor][write_failed] path={path} attempts={WRITE_RETRY_ATTEMPTS} error={last_error}",
+        flush=True,
+    )
+    return False
+
+
+def _append_history(path: Path, status: dict[str, Any]) -> bool:
+    row = {
+        "updated_at_utc": status.get("updated_at_utc"),
+        "pipeline_state": status.get("pipeline_state"),
+        "active_run_id": status.get("active_run_id"),
+        "cycle_current": status.get("cycle", {}).get("current"),
+        "cycle_total": status.get("cycle", {}).get("total"),
+        "tasks_done": status.get("progress", {}).get("tasks_done"),
+        "tasks_total": status.get("progress", {}).get("tasks_total"),
+        "tasks_pct": status.get("progress", {}).get("tasks_pct"),
+        "eta_seconds_remaining": status.get("eta", {}).get("seconds_remaining"),
+        "validation_pass_rate": status.get("quality_snapshot", {}).get("validation_pass_rate"),
+        "deploy_symbols": status.get("quality_snapshot", {}).get("deploy_symbols"),
+        "deploy_rules": status.get("quality_snapshot", {}).get("deploy_rules"),
+        "targets_all_passed": status.get("targets", {}).get("all_passed"),
+    }
+    history: list[dict[str, Any]] = []
+    if path.exists():
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(parsed, list):
+                history = [item for item in parsed if isinstance(item, dict)]
+        except Exception:
+            history = []
+    if not history or history[-1] != row:
+        history.append(row)
+    history = history[-MAX_HISTORY_ROWS:]
+    return _write_json(path, history)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate live monitor status JSON from engine logs.")
+    parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval seconds.")
+    parser.add_argument("--once", action="store_true", help="Write one snapshot and exit.")
+    parser.add_argument("--repo-root", default=None, help="Optional repository root override.")
+    args = parser.parse_args()
+
+    if args.repo_root:
+        repo_root = Path(args.repo_root).resolve()
+    else:
+        repo_root = Path(__file__).resolve().parents[1]
+    monitor_root = repo_root / "engine" / "artifacts" / "monitor"
+    status_path = monitor_root / "live_status.json"
+    history_path = monitor_root / "live_history.json"
+
+    print(f"[monitor] repo_root={repo_root}")
+    print(f"[monitor] writing={status_path}")
+
+    last_write_ok_utc: str | None = None
+    consecutive_write_failures = 0
+    had_once_failure = False
+
+    while True:
+        try:
+            status = _build_status(repo_root)
+            status["monitor_health"] = {
+                "last_write_ok_utc": last_write_ok_utc,
+                "consecutive_write_failures": consecutive_write_failures,
+            }
+
+            status_ok = _write_json(status_path, status)
+            history_ok = _append_history(history_path, status)
+            write_ok = bool(status_ok and history_ok)
+
+            if write_ok:
+                last_write_ok_utc = str(status.get("updated_at_utc") or last_write_ok_utc)
+                consecutive_write_failures = 0
+            else:
+                consecutive_write_failures += 1
+                had_once_failure = True
+                print(
+                    f"[monitor][write_retry] failures={consecutive_write_failures} "
+                    f"updated_at={status.get('updated_at_utc')}",
+                    flush=True,
+                )
+        except KeyboardInterrupt:
+            break
+        except Exception as error:
+            consecutive_write_failures += 1
+            had_once_failure = True
+            print(
+                f"[monitor][loop_error] failures={consecutive_write_failures} error={error}",
+                flush=True,
+            )
+
+        if args.once:
+            break
+        time.sleep(max(0.2, float(args.interval)))
+    if args.once and had_once_failure:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

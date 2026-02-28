@@ -1,0 +1,806 @@
+﻿<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeiMai Oracle - Feature Native Command Center</title>
+  <style>
+    :root {
+      --bg: #050505;
+      --panel: #0a0f0a;
+      --line: #1f3a1f;
+      --line-soft: #143014;
+      --text: #d9ead8;
+      --muted: #8cb18a;
+      --accent: #39ff14;
+      --danger: #ff3131;
+      --warn: #ffd05a;
+      --cyan: #5affff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 10% -10%, #112611, transparent 40%), var(--bg);
+      color: var(--text);
+      font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+    }
+    .wrap { max-width: 1720px; margin: 0 auto; padding: 14px; }
+    .panel {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #0b120b 0%, #080d08 100%);
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .title {
+      color: #fff;
+      margin: 0 0 8px;
+      letter-spacing: .05em;
+      font-size: 22px;
+    }
+    .sub { color: var(--muted); font-size: 12px; }
+
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      padding: 2px 8px;
+      margin: 6px 6px 0 0;
+      font-size: 11px;
+      color: var(--accent);
+      background: #0b150b;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    input, select, button {
+      font-family: inherit;
+      background: #060b06;
+      color: var(--accent);
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    input { min-width: 540px; }
+    button:hover { cursor: pointer; background: #122312; }
+
+    .status { margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .ok { color: var(--accent); }
+    .error { color: #ff9b9b; }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .kpi {
+      border: 1px solid var(--line);
+      background: #081208;
+      padding: 8px;
+      min-height: 84px;
+    }
+    .kpi .k { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .kpi .v { color: var(--accent); font-size: 24px; font-weight: 700; line-height: 1.1; }
+    .kpi .v.warn { color: var(--warn); }
+    .kpi .v.danger { color: var(--danger); }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid3 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
+    .delta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+    .delta-card { border: 1px solid var(--line); background: #081108; padding: 8px; min-height: 80px; }
+    .delta-card .k { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .delta-card .v { font-size: 16px; font-weight: 700; color: #fff; }
+    .delta-card .s { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    .bar-wrap { margin-top: 8px; }
+    .bar-row { margin-bottom: 7px; }
+    .bar-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #fff;
+      margin-bottom: 2px;
+    }
+    .bar {
+      height: 10px;
+      border: 1px solid var(--line-soft);
+      background: #071007;
+      position: relative;
+    }
+    .bar > span {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, #1d5f1d, var(--accent));
+    }
+
+    .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line-soft); }
+    table { width: 100%; min-width: 880px; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; white-space: nowrap; }
+    th { background: #101710; color: #fff; position: sticky; top: 0; }
+    tr.clickable:hover { background: #132713; cursor: pointer; }
+    tr.active { background: #184518; }
+
+    .matrix table { min-width: 1320px; }
+    .cell {
+      min-width: 118px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      cursor: pointer;
+      vertical-align: top;
+    }
+    .cell .main { font-size: 12px; font-weight: 700; color: #fff; }
+    .cell .sub { font-size: 10px; color: var(--muted); line-height: 1.2; }
+    .cell .tiny { font-size: 9px; color: #7fb17a; margin-top: 3px; }
+    .cell .dual-main { font-size: 10px; line-height: 1.35; color: #cce6c9; }
+    .cell .dual-main b { color: #fff; font-size: 11px; }
+    .cell.na { background: #0a0d0a; color: #607f5f; cursor: default; }
+    .legend-inline { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .legend-inline b { color: #fff; }
+
+    .heat-pos-1 { background: rgba(57,255,20,.08); }
+    .heat-pos-2 { background: rgba(57,255,20,.16); }
+    .heat-pos-3 { background: rgba(57,255,20,.25); }
+    .heat-neg-1 { background: rgba(255,49,49,.08); }
+    .heat-neg-2 { background: rgba(255,49,49,.16); }
+    .heat-neg-3 { background: rgba(255,49,49,.25); }
+
+    .badge {
+      display: inline-block;
+      border: 1px solid var(--line);
+      padding: 1px 6px;
+      font-size: 10px;
+      margin-right: 4px;
+    }
+    .badge.pass { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+    .badge.fail { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    .kv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .kv { border: 1px solid var(--line); background: #091109; padding: 8px; min-height: 64px; }
+    .kv .k { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .kv .v { color: #fff; font-size: 13px; font-weight: 700; word-break: break-word; }
+
+    .muted { color: var(--muted); }
+    .pos { color: var(--accent); }
+    .neg { color: var(--danger); }
+
+    @media (max-width: 1320px) {
+      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .delta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid2, .grid3 { grid-template-columns: 1fr; }
+      .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      input { min-width: 100%; }
+    }
+    @media (max-width: 760px) {
+      .delta-grid { grid-template-columns: 1fr; }
+      .kpi-grid, .kv-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <h1 class="title">LeiMai Oracle / Feature-Native Command Center</h1>
+      <div class="sub">全量特徵驅動，訊號核競賽，驗證淘汰，上線候選一圖總覽。</div>
+      <div>
+        <span class="pill">MODE: FEATURE_NATIVE</span>
+        <span class="pill">PIPELINE: Explore -> Validate -> Deploy</span>
+        <span class="pill">TIMEFRAME LOCK: 1m</span>
+      </div>
+      <div class="toolbar">
+        <input id="summaryPath" aria-label="summary path">
+        <button id="loadBtn">載入</button>
+        <select id="gateMode"></select>
+        <select id="matrixMode"></select>
+        <select id="windowMode"></select>
+      </div>
+      <div class="legend-inline">
+        `gated` = 有風險閘門才進場；`ungated` = 不加閘門直接進場。<b>雙模式矩陣</b>可同格比較兩者差值。
+      </div>
+      <div id="status" class="status">初始化中...</div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 8px;color:#fff;">訓練狀態與總體健康</h2>
+      <div id="kpis" class="kpi-grid"></div>
+      <div id="deltaCards" class="delta-grid"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2 style="margin:0;color:#fff;">訊號核火力排名</h2>
+        <div class="sub">按超額回報加權平均，直接看誰在實戰最有存在感。</div>
+        <div id="coreRanking" class="bar-wrap"></div>
+      </div>
+      <div class="panel">
+        <h2 style="margin:0;color:#fff;">特徵家族貢獻</h2>
+        <div class="sub">看目前市場條件下，哪一類特徵在推動進場決策。</div>
+        <div id="familyRanking" class="bar-wrap"></div>
+      </div>
+    </div>
+
+    <div class="panel matrix">
+      <h2 style="margin:0;color:#fff;">全球矩陣地圖（窗口 x 幣種）</h2>
+      <div class="sub">每格顯示當前最佳訊號核與超額回報。點格可下鑽。</div>
+      <div id="matrixSummary" class="status"></div>
+      <div class="table-wrap">
+        <table id="matrixTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid3">
+      <div class="panel">
+        <h2 style="margin:0;color:#fff;">訊號核聯盟榜</h2>
+        <div class="table-wrap" style="margin-top:8px;">
+          <table id="coreTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>訊號核</th>
+                <th>家族</th>
+                <th>平均超額</th>
+                <th>通過率</th>
+                <th>樣本數</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 style="margin:0;color:#fff;">可上線池</h2>
+        <div class="table-wrap" style="margin-top:8px;">
+          <table id="deployTable">
+            <thead>
+              <tr>
+                <th>幣種</th>
+                <th>訊號核</th>
+                <th>策略原型</th>
+                <th>超額</th>
+                <th>分數</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0;color:#fff;">選中格子下鑽</h2>
+      <div id="detailTitle" class="status">請先點選矩陣中的任一格子。</div>
+      <div id="detailKv" class="kv-grid" style="margin-top:8px;"></div>
+      <div class="grid2" style="margin-top:8px;">
+        <div>
+          <h3 style="margin:0 0 6px;color:#fff;">Top 特徵</h3>
+          <div class="table-wrap">
+            <table id="topFeatureTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>特徵</th>
+                  <th>家族</th>
+                  <th>效用</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3 style="margin:0 0 6px;color:#fff;">剪枝候選</h3>
+          <div class="table-wrap">
+            <table id="pruneTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>特徵</th>
+                  <th>家族</th>
+                  <th>原因</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const WINDOW_ORDER = ["all", "360d", "90d", "30d"];
+
+    const state = {
+      summary: null,
+      explainability: null,
+      validation: null,
+      deploy: null,
+      gateMode: "gated",
+      matrixMode: "single",
+      windowMode: "all",
+      selectedKey: "",
+      summaryPath: "",
+    };
+
+    const dom = {
+      summaryPath: document.getElementById("summaryPath"),
+      loadBtn: document.getElementById("loadBtn"),
+      gateMode: document.getElementById("gateMode"),
+      matrixMode: document.getElementById("matrixMode"),
+      windowMode: document.getElementById("windowMode"),
+      status: document.getElementById("status"),
+      kpis: document.getElementById("kpis"),
+      deltaCards: document.getElementById("deltaCards"),
+      coreRanking: document.getElementById("coreRanking"),
+      familyRanking: document.getElementById("familyRanking"),
+      matrixSummary: document.getElementById("matrixSummary"),
+      matrixHead: document.querySelector("#matrixTable thead"),
+      matrixBody: document.querySelector("#matrixTable tbody"),
+      coreBody: document.querySelector("#coreTable tbody"),
+      deployBody: document.querySelector("#deployTable tbody"),
+      detailTitle: document.getElementById("detailTitle"),
+      detailKv: document.getElementById("detailKv"),
+      topFeatureBody: document.querySelector("#topFeatureTable tbody"),
+      pruneBody: document.querySelector("#pruneTable tbody"),
+    };
+
+    function pct(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "-";
+      return `${(n * 100).toFixed(2)}%`;
+    }
+
+    function signedPct(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "-";
+      const txt = `${(n * 100).toFixed(2)}%`;
+      if (n > 0) return `<span class="pos">+${txt}</span>`;
+      if (n < 0) return `<span class="neg">${txt}</span>`;
+      return txt;
+    }
+
+    function setStatus(msg, level = "normal") {
+      dom.status.className = "status";
+      if (level === "ok") dom.status.classList.add("ok");
+      if (level === "error") dom.status.classList.add("error");
+      dom.status.textContent = msg;
+    }
+
+    async function fetchJson(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${path}`);
+      return res.json();
+    }
+
+    function infer(base, name) {
+      const slash = base.lastIndexOf("/");
+      return slash < 0 ? "" : `${base.slice(0, slash)}/${name}`;
+    }
+
+    async function detectLatestSummaryPath() {
+      const now = new Date();
+      for (let i = 0; i < 10; i += 1) {
+        const d = new Date(now.getTime() - i * 86400000);
+        const yyyy = d.getUTCFullYear();
+        const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const dd = String(d.getUTCDate()).padStart(2, "0");
+        const path = `/engine/artifacts/optimization/single/${yyyy}-${mm}-${dd}/summary.json`;
+        try {
+          const r = await fetch(path, { method: "HEAD", cache: "no-store" });
+          if (r.ok) return path;
+        } catch {}
+      }
+      return "";
+    }
+
+    function rowsByGateWindow() {
+      const reports = state.explainability?.window_reports || [];
+      const target = reports.find(r => r.gate_mode === state.gateMode && r.window === state.windowMode);
+      return target?.symbols || [];
+    }
+
+    function allRowsByGate() {
+      const reports = state.explainability?.window_reports || [];
+      return reports.filter(r => r.gate_mode === state.gateMode).flatMap(r => (r.symbols || []).map(x => ({ ...x, __window: r.window })));
+    }
+
+    function rowsByGate(gateMode) {
+      const reports = state.explainability?.window_reports || [];
+      return reports.filter(r => r.gate_mode === gateMode).flatMap(r => (r.symbols || []).map(x => ({ ...x, __window: r.window })));
+    }
+
+    function buildLookupByGate(gateMode) {
+      const reports = state.explainability?.window_reports || [];
+      const gateReports = reports.filter(r => r.gate_mode === gateMode);
+      const map = new Map();
+      gateReports.forEach(report => {
+        (report.symbols || []).forEach(row => {
+          map.set(`${report.window}::${row.symbol}`, row);
+        });
+      });
+      return map;
+    }
+
+    function renderFilters() {
+      const gates = state.summary?.gate_modes || ["gated", "ungated"];
+      const windows = state.summary?.windows || WINDOW_ORDER;
+      const matrixModes = [
+        { id: "single", label: "單模式矩陣" },
+        { id: "dual", label: "雙模式矩陣" },
+      ];
+      dom.gateMode.innerHTML = gates.map(g => `<option value="${g}">${g}</option>`).join("");
+      dom.matrixMode.innerHTML = matrixModes.map(item => `<option value="${item.id}">${item.label}</option>`).join("");
+      dom.windowMode.innerHTML = windows.map(w => `<option value="${w}">${w}</option>`).join("");
+      if (!gates.includes(state.gateMode)) state.gateMode = gates[0] || "gated";
+      if (!windows.includes(state.windowMode)) state.windowMode = windows[0] || "all";
+      if (!matrixModes.map(item => item.id).includes(state.matrixMode)) state.matrixMode = "single";
+      dom.gateMode.value = state.gateMode;
+      dom.matrixMode.value = state.matrixMode;
+      dom.windowMode.value = state.windowMode;
+    }
+
+    function renderKpis() {
+      const rows = allRowsByGate();
+      const total = rows.length;
+      const pass = rows.filter(r => String(r.status) === "beat_spot").length;
+      const avgAlpha = total ? rows.reduce((s, r) => s + Number(r.performance?.alpha_vs_spot || 0), 0) / total : 0;
+      const avgReturn = total ? rows.reduce((s, r) => s + Number(r.performance?.strategy_return || 0), 0) / total : 0;
+      const deploySymbols = Number(state.deploy?.total_symbols || 0);
+      const deployRules = Number(state.deploy?.total_rules || 0);
+      const mode = String(state.summary?.strategy_mode || "indicator");
+      const passRate = total ? (pass / total) : 0;
+
+      dom.kpis.innerHTML = [
+        ["已覆蓋結果", `${total}`],
+        ["跑贏現貨", `${(passRate * 100).toFixed(1)}% (${pass}/${total})`],
+        ["平均超額", signedPct(avgAlpha)],
+        ["平均策略回報", signedPct(avgReturn)],
+        ["Deploy 覆蓋", `${deploySymbols} 幣 / ${deployRules} 規則`],
+        ["模式", mode],
+      ].map(([k, v], idx) => `<div class="kpi"><div class="k">${k}</div><div class="v ${idx===2 && avgAlpha<0 ? "danger" : ""}">${v}</div></div>`).join("");
+    }
+
+    function renderDeltaCards() {
+      const windows = state.summary?.delta_views?.gate_delta_by_window || [];
+      if (!Array.isArray(windows) || windows.length === 0) {
+        dom.deltaCards.innerHTML = `<div class="delta-card"><div class="k">金字塔差異</div><div class="s">目前資料沒有 gated/ungated 差異欄位。</div></div>`;
+        return;
+      }
+      dom.deltaCards.innerHTML = windows.map(item => {
+        const passDelta = Number(item.delta_pass_rate || 0);
+        const alphaDelta = Number(item.delta_avg_alpha_proxy || 0);
+        const gatedPass = Number(item.gated_pass_rate || 0);
+        const ungatedPass = Number(item.ungated_pass_rate || 0);
+        return `
+          <div class="delta-card">
+            <div class="k">窗口 ${item.window}</div>
+            <div class="v">${signedPct(passDelta)}</div>
+            <div class="s">通過率差：gated ${pct(gatedPass)} vs ungated ${pct(ungatedPass)}</div>
+            <div class="s">alpha 差：${signedPct(alphaDelta)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function aggregateByCore(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const key = String(row.core_id || row.indicator_id || "unknown");
+        if (!map.has(key)) {
+          map.set(key, {
+            core_id: key,
+            core_name_zh: String(row.core_name_zh || row.indicator_name_zh || key),
+            core_family: String(row.core_family || row.indicator_family || "-"),
+            samples: 0,
+            alpha_sum: 0,
+            pass: 0,
+          });
+        }
+        const slot = map.get(key);
+        slot.samples += 1;
+        slot.alpha_sum += Number(row.performance?.alpha_vs_spot || 0);
+        if (String(row.status) === "beat_spot") slot.pass += 1;
+      });
+      return Array.from(map.values()).map(item => ({
+        ...item,
+        avg_alpha: item.samples ? item.alpha_sum / item.samples : 0,
+        pass_rate: item.samples ? item.pass / item.samples : 0,
+      })).sort((a, b) => b.avg_alpha - a.avg_alpha);
+    }
+
+    function renderCoreRanking() {
+      const rows = allRowsByGate();
+      const data = aggregateByCore(rows).slice(0, 10);
+      const max = Math.max(...data.map(x => Math.abs(x.avg_alpha)), 0.001);
+      dom.coreRanking.innerHTML = data.map(item => {
+        const w = Math.max(3, Math.min(100, Math.abs(item.avg_alpha) / max * 100));
+        return `
+          <div class="bar-row">
+            <div class="bar-head"><span>${item.core_name_zh}</span><span>${signedPct(item.avg_alpha)}</span></div>
+            <div class="bar"><span style="width:${w.toFixed(1)}%"></span></div>
+          </div>
+        `;
+      }).join("") || `<div class="muted">沒有可顯示資料</div>`;
+
+      dom.coreBody.innerHTML = data.map((item, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${item.core_name_zh}</td>
+          <td>${item.core_family}</td>
+          <td>${signedPct(item.avg_alpha)}</td>
+          <td>${pct(item.pass_rate)}</td>
+          <td>${item.samples}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="6" class="muted">沒有資料</td></tr>`;
+    }
+
+    function renderFamilyRanking() {
+      const rows = rowsByGateWindow();
+      const agg = new Map();
+      rows.forEach(row => {
+        const fam = row.feature_diagnostics?.family_contribution || {};
+        Object.entries(fam).forEach(([k, v]) => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) return;
+          if (!agg.has(k)) agg.set(k, { k, sum: 0, count: 0 });
+          const item = agg.get(k);
+          item.sum += n;
+          item.count += 1;
+        });
+      });
+      const ranked = Array.from(agg.values()).map(x => ({ k: x.k, v: x.count ? x.sum / x.count : 0 }))
+        .sort((a, b) => b.v - a.v);
+      const max = Math.max(...ranked.map(x => x.v), 0.001);
+      dom.familyRanking.innerHTML = ranked.map(item => `
+        <div class="bar-row">
+          <div class="bar-head"><span>${item.k}</span><span>${(item.v * 100).toFixed(1)}%</span></div>
+          <div class="bar"><span style="width:${Math.max(3, Math.min(100, item.v / max * 100)).toFixed(1)}%"></span></div>
+        </div>
+      `).join("") || `<div class="muted">沒有家族貢獻資料</div>`;
+    }
+
+    function heatClass(alpha) {
+      const n = Number(alpha);
+      if (!Number.isFinite(n)) return "";
+      const a = Math.abs(n);
+      if (n >= 0) {
+        if (a >= 0.20) return "heat-pos-3";
+        if (a >= 0.08) return "heat-pos-2";
+        return "heat-pos-1";
+      }
+      if (a >= 0.20) return "heat-neg-3";
+      if (a >= 0.08) return "heat-neg-2";
+      return "heat-neg-1";
+    }
+
+    function renderMatrix() {
+      const reports = state.explainability?.window_reports || [];
+      const gatedLookup = buildLookupByGate("gated");
+      const ungatedLookup = buildLookupByGate("ungated");
+      const activeLookup = buildLookupByGate(state.gateMode);
+      const windows = WINDOW_ORDER.filter(w => reports.some(r => r.window === w));
+      const symbols = [...new Set(reports.flatMap(r => (r.symbols || []).map(s => s.symbol)))].sort();
+
+      dom.matrixHead.innerHTML = `<tr><th>Window \\ Symbol</th>${symbols.map(s => `<th>${s}</th>`).join("")}</tr>`;
+      dom.matrixBody.innerHTML = windows.map(window => {
+        const tds = symbols.map(symbol => {
+          const gatedRow = gatedLookup.get(`${window}::${symbol}`);
+          const ungatedRow = ungatedLookup.get(`${window}::${symbol}`);
+          const activeRow = activeLookup.get(`${window}::${symbol}`);
+          if (!gatedRow && !ungatedRow && !activeRow) return `<td class="cell na">N/A</td>`;
+
+          const clickRow = activeRow || gatedRow || ungatedRow;
+          const key = `${window}::${symbol}::${clickRow.core_id || clickRow.indicator_id}`;
+          const active = state.selectedKey === key ? "active" : "";
+
+          if (state.matrixMode === "dual") {
+            const gAlpha = Number(gatedRow?.performance?.alpha_vs_spot || 0);
+            const uAlpha = Number(ungatedRow?.performance?.alpha_vs_spot || 0);
+            const delta = gAlpha - uAlpha;
+            const label = clickRow.core_name_zh || clickRow.indicator_name_zh || clickRow.core_id || clickRow.indicator_id || "-";
+            return `
+              <td class="cell ${heatClass(delta)} ${active} clickable" data-key="${key}" data-window="${window}" data-symbol="${symbol}">
+                <div class="main">Δ ${signedPct(delta)}</div>
+                <div class="dual-main"><b>G:</b> ${signedPct(gAlpha)} | <b>U:</b> ${signedPct(uAlpha)}</div>
+                <div class="sub">${label}</div>
+                <div class="tiny">${clickRow.best_rule?.rule_label_zh || clickRow.best_rule?.rule_key || "-"}</div>
+              </td>
+            `;
+          }
+
+          const row = clickRow;
+          const alpha = Number(row.performance?.alpha_vs_spot || 0);
+          return `
+            <td class="cell ${heatClass(alpha)} ${active} clickable" data-key="${key}" data-window="${window}" data-symbol="${symbol}">
+              <div class="main">${signedPct(alpha)}</div>
+              <div class="sub">${row.core_name_zh || row.indicator_name_zh || row.core_id || row.indicator_id || "-"}</div>
+              <div class="tiny">${row.best_rule?.rule_label_zh || row.best_rule?.rule_key || "-"}</div>
+            </td>
+          `;
+        }).join("");
+        return `<tr><th>${window}</th>${tds}</tr>`;
+      }).join("");
+
+      const selectedWindow = state.windowMode;
+      const selectedRows = rowsByGate(state.gateMode).filter(r => r.__window === selectedWindow);
+      const selectedUngatedRows = rowsByGate("ungated").filter(r => r.__window === selectedWindow);
+      const winRate = selectedRows.length ? selectedRows.filter(r => String(r.status) === "beat_spot").length / selectedRows.length : 0;
+      const winRateUngated = selectedUngatedRows.length
+        ? selectedUngatedRows.filter(r => String(r.status) === "beat_spot").length / selectedUngatedRows.length
+        : 0;
+      if (state.matrixMode === "dual") {
+        dom.matrixSummary.textContent = `${selectedWindow}：gated ${pct(winRate)} vs ungated ${pct(winRateUngated)}，以「Δ alpha」著色。`;
+      } else {
+        dom.matrixSummary.textContent = `${state.gateMode} / ${selectedWindow}：通過率 ${(winRate * 100).toFixed(1)}%，覆蓋 ${selectedRows.length} 檔。`;
+      }
+
+      dom.matrixBody.querySelectorAll("td.clickable").forEach(td => {
+        td.addEventListener("click", () => {
+          state.selectedKey = td.getAttribute("data-key") || "";
+          renderDetail();
+          renderMatrix();
+        });
+      });
+    }
+
+    function resolveSelectedRow() {
+      if (!state.selectedKey) return null;
+      const [window, symbol, core] = state.selectedKey.split("::");
+      const reports = state.explainability?.window_reports || [];
+      const bucket = reports.find(r => r.gate_mode === state.gateMode && r.window === window);
+      if (!bucket) return null;
+      return (bucket.symbols || []).find(r => String(r.symbol) === symbol && String(r.core_id || r.indicator_id) === core) || null;
+    }
+
+    function renderDeploy() {
+      const symbols = state.deploy?.symbols || [];
+      const rows = [];
+      symbols.forEach(group => {
+        (group.rules || []).forEach(rule => {
+          rows.push({
+            symbol: group.symbol,
+            core_name_zh: rule.core_name_zh || rule.indicator_name_zh || rule.core_id || rule.indicator_id,
+            rule_label_zh: rule.rule_label_zh || rule.rule_key,
+            alpha: Number(rule.alpha_vs_spot || 0),
+            score: Number(rule.final_score || 0),
+          });
+        });
+      });
+      rows.sort((a, b) => b.alpha - a.alpha);
+      dom.deployBody.innerHTML = rows.map(row => `
+        <tr>
+          <td>${row.symbol}</td>
+          <td>${row.core_name_zh}</td>
+          <td>${row.rule_label_zh}</td>
+          <td>${signedPct(row.alpha)}</td>
+          <td>${row.score.toFixed(4)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="5" class="muted">目前無可上線候選</td></tr>`;
+    }
+
+    function renderDetail() {
+      const row = resolveSelectedRow();
+      if (!row) {
+        dom.detailTitle.textContent = "請先點選矩陣中的任一格子。";
+        dom.detailKv.innerHTML = "";
+        dom.topFeatureBody.innerHTML = "";
+        dom.pruneBody.innerHTML = "";
+        return;
+      }
+
+      dom.detailTitle.textContent = `${row.symbol} / ${row.core_name_zh || row.indicator_name_zh || row.core_id || row.indicator_id} / ${state.gateMode}`;
+      const best = row.best_rule || {};
+      dom.detailKv.innerHTML = [
+        ["策略原型", best.rule_label_zh || best.rule_key || "-"],
+        ["參數", best.params_text || "-"],
+        ["超額回報", signedPct(row.performance?.alpha_vs_spot)],
+        ["策略回報", signedPct(row.performance?.strategy_return)],
+        ["現貨回報", pct(row.performance?.spot_return)],
+        ["最大回撤", pct(row.performance?.max_drawdown)],
+        ["交易次數", String(Number(row.performance?.trades || 0))],
+        ["勝率", pct(row.performance?.win_rate)],
+        ["門檻", `oracle >= ${Number(row.oracle_threshold || 0).toFixed(4)} / conf >= ${Number(row.confidence_threshold || 0).toFixed(4)}`],
+      ].map(([k, v]) => `<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+      const top = row.feature_diagnostics?.top_features || [];
+      dom.topFeatureBody.innerHTML = top.slice(0, 20).map((x, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${x.name || "-"}</td>
+          <td>${x.family || "-"}</td>
+          <td>${Number(x.utility_score || 0).toFixed(5)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="4" class="muted">沒有資料</td></tr>`;
+
+      const prune = row.feature_diagnostics?.prune_candidates || [];
+      dom.pruneBody.innerHTML = prune.slice(0, 20).map((x, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${x.name || "-"}</td>
+          <td>${x.family || "-"}</td>
+          <td>${x.reason || "-"}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="4" class="muted">沒有資料</td></tr>`;
+    }
+
+    async function loadArtifacts(summaryPath) {
+      setStatus("讀取檔案中...");
+      state.summary = await fetchJson(summaryPath);
+      state.explainability = await fetchJson(infer(summaryPath, "explainability.json"));
+      try { state.validation = await fetchJson(infer(summaryPath, "validation_report.json")); } catch { state.validation = null; }
+      try { state.deploy = await fetchJson(infer(summaryPath, "deploy_pool.json")); } catch { state.deploy = null; }
+      state.summaryPath = summaryPath;
+      state.gateMode = (state.summary?.gate_modes || ["gated"])[0];
+      state.windowMode = (state.summary?.windows || ["all"])[0];
+      state.selectedKey = "";
+
+      dom.summaryPath.value = summaryPath;
+      renderFilters();
+      renderKpis();
+      renderDeltaCards();
+      renderCoreRanking();
+      renderFamilyRanking();
+      renderMatrix();
+      renderDeploy();
+      renderDetail();
+      setStatus(`已載入：${summaryPath}`, "ok");
+    }
+
+    async function boot() {
+      dom.loadBtn.addEventListener("click", async () => {
+        try {
+          const path = (dom.summaryPath.value || "").trim();
+          if (!path) throw new Error("請輸入 summary.json 路徑");
+          await loadArtifacts(path);
+        } catch (e) {
+          setStatus(`載入失敗：${String(e)}`, "error");
+        }
+      });
+
+      dom.gateMode.addEventListener("change", () => {
+        state.gateMode = dom.gateMode.value;
+        state.selectedKey = "";
+        renderKpis();
+        renderDeltaCards();
+        renderCoreRanking();
+        renderFamilyRanking();
+        renderMatrix();
+        renderDetail();
+      });
+
+      dom.matrixMode.addEventListener("change", () => {
+        state.matrixMode = dom.matrixMode.value;
+        state.selectedKey = "";
+        renderMatrix();
+        renderDetail();
+      });
+
+      dom.windowMode.addEventListener("change", () => {
+        state.windowMode = dom.windowMode.value;
+        renderFamilyRanking();
+        renderMatrix();
+        renderDetail();
+      });
+
+      try {
+        const detected = await detectLatestSummaryPath();
+        if (!detected) {
+          setStatus("找不到 summary.json，請先跑引擎。", "error");
+          return;
+        }
+        await loadArtifacts(detected);
+      } catch (e) {
+        setStatus(`初始化失敗：${String(e)}`, "error");
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

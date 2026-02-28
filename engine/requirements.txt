@@ -1,6 +1,7 @@
-vectorbt
 pandas
 numpy
+pyarrow
 ccxt
-clickhouse-connect
 python-dotenv
+apscheduler
+requests

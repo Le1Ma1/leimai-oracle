@@ -1,1 +1,1 @@
-"""LeiMai Oracle backend engine package."""
+"""LeiMai Oracle engine root package."""

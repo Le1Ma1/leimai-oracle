@@ -1,9 +1,0 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  body {
-    @apply bg-[#050505] text-[#39ff14] font-mono selection:bg-[#39ff14] selection:text-black;
-  }
-}
