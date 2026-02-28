@@ -6,6 +6,7 @@ Use `cloud/colab/runner.ipynb` when Kaggle resources are unavailable.
 
 - Keep the same batch contract as Kaggle (`BATCH_INDEX`, `BATCH_TOTAL`).
 - Keep `ENGINE_OPTIMIZATION_TIMEFRAMES=1m`.
+- Batch runner auto-sets `ENGINE_TOP_N` to current batch size (e.g. `5` for 3-way split).
 - Default auth source is Colab Secrets via `google.colab.userdata.get()`.
 - Add Secret `GITHUB_TOKEN` (required) and optional `GITHUB_USERNAME`.
 - Manual fallback is still available via `MANUAL_GITHUB_TOKEN` / `MANUAL_GITHUB_USERNAME` in notebook cell 1.

@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T14:36:20Z`
+- Last Updated (UTC): `2026-02-28T14:44:10Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -562,6 +562,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Runner shell invocation only; no backend engine logic changed.
 - Bai Ben (Minimalism) Review: Pass. Patched existing execution cells and docs without new modules.
 
+### [x] B19_5_BATCH_TOPN_ALIGNMENT_FOR_ITERATE_RUNNER
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: batch runners now set `ENGINE_TOP_N` to batch symbol count, preventing `expected=15, got=5` guard failures in split execution mode.
+- Read/Write Isolation Review: Pass. Environment wiring only; compute logic untouched.
+- Bai Ben (Minimalism) Review: Pass. Added one env assignment in existing batch setup cells.
+
 ## [BUSINESS_STATUS]
 
 ### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
@@ -583,6 +589,10 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] Colab/Kaggle iterate 啟動錯誤（exit 2）已修復
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
 - Business Value: 雲端代跑不再因無效 CLI 參數中止，且失敗時會直接印出可行動的 stderr 摘要，縮短排障迴圈。
+
+### [x] 批次分片（5 檔）與 TopN 門檻不一致已修復
+- Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
+- Business Value: 3-way batch 可直接跑，不再被 `Not enough symbols expected=15 got=5` 中止。
 
 ### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
 - Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.

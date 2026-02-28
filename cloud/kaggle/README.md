@@ -13,6 +13,7 @@ Use this folder to run matrix optimization on Kaggle CPU in batch mode.
 ## 2) Batch contract
 
 - Batch split is symbol based.
+- Runner auto-sets `ENGINE_TOP_N` to current batch size.
 - Keep `ENGINE_OPTIMIZATION_TIMEFRAMES=1m`.
 - Recommended: run 3 batches (`1/3`, `2/3`, `3/3`) and then merge artifacts locally.
 
