@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-02T19:43:40Z`
+- Last Updated (UTC): `2026-03-02T20:58:28Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -670,6 +670,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Control-plane secret configuration only; no application code-path mutation.
 - Bai Ben (Minimalism) Review: Pass. Reused existing workflow env contract without adding extra secret surface.
 
+### [x] B23_ORACLE_REPORTS_SCHEMA_EXTENSION
+- Technical Dependency: `supabase/schema_reports.sql`, existing `public.anomaly_events`.
+- Business Value: added `public.oracle_reports` as multilingual GEO-ready report sink with FK to anomaly events, JSON-LD payload, slug contract, and public-read/service-write RLS model.
+- Read/Write Isolation Review: Pass. DB extension isolated to report storage layer.
+- Bai Ben (Minimalism) Review: Pass. Single table extension with focused indices and trigger reuse.
+
+### [x] B23_1_REPORT_GENERATION_ENGINE_AND_WORKFLOW_CHAIN
+- Technical Dependency: `engine/src/generate_reports.py`, `.github/workflows/ingest_4h.yml`, `engine/.env.example`.
+- Business Value: ingestion pipeline now chains anomaly detection -> multilingual report generation (`en`, `zh-tw`) -> anomaly status transition to `processed`.
+- Read/Write Isolation Review: Pass. Backend worker-only module; no frontend route mutation.
+- Bai Ben (Minimalism) Review: Pass. One new script and one workflow step without extra orchestration services.
+
 ## [BUSINESS_STATUS]
 
 ### [x] 撠?撌脣?? Local-only ?瑁??箇?
@@ -955,6 +967,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: run status `completed/startup_failure`, jobs endpoint returns zero jobs.
 - 讀寫分離檢查: 通過（狀態觀測與控制平面排查）。
 - 白賁極簡檢查: 通過（未新增 workaround runner 服務）。
+
+### [x] Phase 1.2 Oracle Brain 已打通（Mock LLM to Supabase）
+- Technical Dependency: `supabase/schema_reports.sql`, `engine/src/generate_reports.py`, `.github/workflows/ingest_4h.yml`.
+- Business Value: 系統可從 `anomaly_events(status=new, severity!=low)` 自動生成雙語報告並寫入 `oracle_reports`，同步將來源事件標記為 `processed`，形成可擴展 GEO 內容供給鏈。
+- Evidence: realtime verification via Supabase REST: `oracle_reports=6`, processed medium events (`event_id` prefixes `1219f3fce868`, `c5af105b7746`, `76faeece61ac`).
+- 讀寫分離檢查: 通過（僅後端數據層新增寫入邏輯）。
+- 白賁極簡檢查: 通過（LLM 層預設 mock，保留 Gemini key 介面不強耦合）。
 
 ## Governance Checks
 

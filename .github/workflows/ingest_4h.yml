@@ -39,3 +39,17 @@ jobs:
           BINANCE_HTTP_RETRIES: "3"
         run: |
           python -m engine.src.ingest_market
+
+      - name: Generate oracle reports
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-1.5-flash
+          REPORT_USE_MOCK_LLM: "true"
+          REPORT_LOCALES: en,zh-tw
+          REPORT_HTTP_TIMEOUT_SEC: "20"
+          REPORT_HTTP_RETRIES: "3"
+          ORACLE_UNIQUE_ENTITY: LeiMai Liquidity Friction
+        run: |
+          python -m engine.src.generate_reports
