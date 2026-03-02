@@ -53,7 +53,8 @@
       background: #0b170b;
     }
     .state.running, .state.validation, .state.finalizing { color: var(--ok); border-color: var(--ok); }
-    .state.done { color: var(--cyan); border-color: var(--cyan); }
+    .state.completed { color: var(--cyan); border-color: var(--cyan); }
+    .state.stalled { color: var(--bad); border-color: var(--bad); }
     .state.idle { color: var(--muted); }
     .state.error { color: var(--bad); border-color: var(--bad); }
 
@@ -335,7 +336,8 @@
       stateRunning: "\u57f7\u884c\u4e2d",
       stateValidation: "\u9a57\u8b49\u4e2d",
       stateFinalizing: "\u6536\u6582\u6574\u7406",
-      stateDone: "\u5b8c\u6210",
+      stateCompleted: "\u5b8c\u6210",
+      stateStalled: "\u5361\u4f4f",
       stateError: "\u932f\u8aa4",
       localError: "\u8b80\u53d6\u5931\u6557\uff1a",
       staleSlow: "\u76e3\u63a7\u8cc7\u6599\u5ef6\u9072\uff1a\u6700\u8fd1\u66f4\u65b0\u8ddd\u4eca",
@@ -363,7 +365,8 @@
       running: ZH.stateRunning,
       validation: ZH.stateValidation,
       finalizing: ZH.stateFinalizing,
-      done: ZH.stateDone,
+      completed: ZH.stateCompleted,
+      stalled: ZH.stateStalled,
       idle: ZH.stateIdle,
       error: ZH.stateError
     };
@@ -554,7 +557,7 @@
 
     function clsByState(name) {
       if (!name) return "idle";
-      if (["running", "validation", "finalizing", "done", "idle", "error"].includes(name)) return name;
+      if (["running", "validation", "finalizing", "completed", "stalled", "idle", "error"].includes(name)) return name;
       return "idle";
     }
 
@@ -620,12 +623,17 @@
       let staleMessage = "";
       let staleLevel = "warn";
       if (Number.isFinite(staleSec) && staleSec !== null) {
-        if (staleSec > 30 && st === "running") {
+        if (staleSec > 30 && (st === "running" || st === "validation")) {
           staleMessage = `${ZH.staleDead} ${Math.floor(staleSec)} ${ZH.staleTip}`;
           staleLevel = "error";
-        } else if (staleSec > 10) {
+        } else if (staleSec > 10 && st !== "completed") {
           staleMessage = `${ZH.staleSlow} ${Math.floor(staleSec)} ${ZH.staleCut}`;
         }
+      }
+      const stallReason = payload?.stall_reason;
+      if (st === "stalled" && stallReason) {
+        staleMessage = staleMessage ? `${staleMessage} | stall_reason=${stallReason}` : `stall_reason=${stallReason}`;
+        staleLevel = "error";
       }
       if (writeFailures > 0) {
         const suffix = `${ZH.staleWrite} ${writeFailures} ${ZH.staleWriteTail}`;
@@ -694,6 +702,7 @@
 
       const msg = [];
       msg.push(`${ZH.statusState}=${STATE_LABELS[st] || st}`);
+      if (stallReason) msg.push(`stall=${stallReason}`);
       if (tasksTotal > 0) msg.push(`${ZH.statusProgress}=${tasksDone}/${tasksTotal}`);
       if (eta.seconds_remaining != null) msg.push(`${ZH.statusRemain}=${fmtDuration(Number(eta.seconds_remaining))}`);
       dom.statusMsg.textContent = msg.join(" | ");

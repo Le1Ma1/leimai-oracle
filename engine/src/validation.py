@@ -13,7 +13,7 @@ import pandas as pd
 from .aggregate import aggregate_timeframes
 from .config import EngineConfig
 from .feature_cores import build_feature_core_signals
-from .features import build_feature_set
+from .features import apply_winsor_bounds, build_feature_set, fit_winsor_bounds
 from .optimization import build_fusion_components
 from .single_indicators import build_indicator_signals
 from .storage import load_latest_partitioned_parquet
@@ -863,9 +863,11 @@ def write_validation_artifacts(
         indicator_id: str,
         rule_key: str,
         params: dict[str, int | float],
+        window_start_utc: pd.Timestamp | None = None,
     ) -> tuple[pd.Series, pd.Series, pd.Series]:
         params_token = json.dumps(params, sort_keys=True, ensure_ascii=True)
-        cache_key = "|".join([symbol, gate_mode, signal_source, indicator_id, rule_key, params_token])
+        start_token = window_start_utc.isoformat() if isinstance(window_start_utc, pd.Timestamp) else "none"
+        cache_key = "|".join([symbol, gate_mode, signal_source, indicator_id, rule_key, params_token, start_token])
         if cache_key in signal_cache:
             entry_cached, exit_cached = signal_cache[cache_key]
             frame, _ = _load_symbol_inputs(symbol)
@@ -875,8 +877,13 @@ def write_validation_artifacts(
         close = frame["close"].astype("float64")
         high = frame["high"].astype("float64")
         low = frame["low"].astype("float64")
+        aligned_features = feature_set.reindex(close.index, method="ffill").fillna(0.0)
+        if isinstance(window_start_utc, pd.Timestamp):
+            train_feature_frame = aligned_features.loc[aligned_features.index < window_start_utc]
+            winsor_bounds = fit_winsor_bounds(train_feature_frame) if not train_feature_frame.empty else {}
+            if winsor_bounds:
+                aligned_features = apply_winsor_bounds(aligned_features, bounds=winsor_bounds)
         if signal_source in {"feature_core", "feature_native"}:
-            aligned_features = feature_set.reindex(close.index, method="ffill").fillna(0.0)
             entry, exit_ = build_feature_core_signals(
                 core_id=indicator_id,
                 feature_df=aligned_features,
@@ -896,7 +903,6 @@ def write_validation_artifacts(
         entry = _coerce_bool_series(entry, close.index)
         exit_ = _coerce_bool_series(exit_, close.index)
         if gate_mode == "gated":
-            aligned_features = feature_set.reindex(close.index, method="ffill").fillna(0.0)
             fusion_components = build_fusion_components(feature_df=aligned_features, timeframe="1m").reindex(close.index).fillna(0.0)
             oracle = fusion_components.get("oracle_score", fusion_components["fusion_score"]).reindex(close.index).fillna(0.0)
             confidence = fusion_components.get(
@@ -921,6 +927,8 @@ def write_validation_artifacts(
             best_long = window.get("best_long")
             if not isinstance(best_long, dict):
                 continue
+            start_utc = pd.Timestamp(str(window.get("start_utc")), tz="UTC")
+            end_utc = pd.Timestamp(str(window.get("end_utc")), tz="UTC")
             params = best_long.get("params", {})
             if not isinstance(params, dict):
                 params = {}
@@ -931,9 +939,8 @@ def write_validation_artifacts(
                 indicator_id=str(result["indicator_id"]),
                 rule_key=str(best_long.get("rule_key", "")),
                 params=params,
+                window_start_utc=start_utc,
             )
-            start_utc = pd.Timestamp(str(window.get("start_utc")), tz="UTC")
-            end_utc = pd.Timestamp(str(window.get("end_utc")), tz="UTC")
             close_window = close_full.loc[(close_full.index >= start_utc) & (close_full.index <= end_utc)]
             if close_window.empty:
                 continue

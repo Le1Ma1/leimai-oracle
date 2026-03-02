@@ -768,6 +768,185 @@ def _build_feature_pruning_overview(results: Iterable[TimeframeOptimizationResul
     return out[:120]
 
 
+def _build_all_window_diagnostics(
+    results_by_gate_mode: dict[str, list[TimeframeOptimizationResult]],
+) -> dict[str, object]:
+    if not results_by_gate_mode:
+        return {
+            "default_gate_mode": "gated",
+            "all_window_rows": 0,
+            "symbol_alpha_contrib": [],
+            "core_alpha_contrib": [],
+            "trade_density_by_symbol_core": [],
+            "rejection_breakdown_all_window": {
+                "total_candidates": 0,
+                "kept_candidates": 0,
+                "low_trades": 0,
+                "low_credibility": 0,
+                "underperform_spot": 0,
+                "high_drawdown": 0,
+            },
+        }
+
+    default_gate = "gated" if "gated" in results_by_gate_mode else next(iter(results_by_gate_mode.keys()), "gated")
+    gate_results = results_by_gate_mode.get(default_gate, [])
+    symbol_stats: dict[str, dict[str, object]] = {}
+    core_stats: dict[str, dict[str, object]] = {}
+    trade_density_rows: list[dict[str, object]] = []
+    rejection = {
+        "total_candidates": 0,
+        "kept_candidates": 0,
+        "low_trades": 0,
+        "low_credibility": 0,
+        "underperform_spot": 0,
+        "high_drawdown": 0,
+    }
+    all_rows = 0
+
+    for result in gate_results:
+        symbol = str(result["symbol"])
+        core_id = str(result.get("core_id", result["indicator_id"]))
+        core_name_zh = str(result.get("core_name_zh", result.get("indicator_name_zh", core_id)))
+        core_family = str(result.get("core_family", result.get("indicator_family", "-")))
+
+        for window in result["windows"]:
+            if str(window.get("window")) != "all":
+                continue
+            all_rows += 1
+            best = window.get("best_long")
+            alpha = _safe_float(window.get("best_long_alpha_vs_spot"))
+            passes = bool(window.get("best_long_passes_objective"))
+            insufficient = bool(window.get("insufficient_statistical_significance"))
+            trades = int(best["metrics"]["trades"]) if best else 0
+
+            competition = _normalize_rule_competition(window)
+            rejected = cast(dict[str, int], competition.get("rejected_breakdown", {}))
+            total_candidates = int(competition.get("total_candidates", 0))
+            kept_candidates = int(competition.get("kept_candidates", 0))
+            rejection["total_candidates"] += total_candidates
+            rejection["kept_candidates"] += kept_candidates
+            rejection["low_trades"] += int(rejected.get("low_trades", 0))
+            rejection["low_credibility"] += int(rejected.get("low_credibility", 0))
+            rejection["underperform_spot"] += int(rejected.get("underperform_spot", 0))
+            rejection["high_drawdown"] += int(rejected.get("high_drawdown", 0))
+
+            symbol_slot = symbol_stats.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "samples": 0,
+                    "alpha_sum": 0.0,
+                    "pass_count": 0,
+                    "insufficient_count": 0,
+                    "trades_sum": 0,
+                    "total_candidates": 0,
+                    "kept_candidates": 0,
+                },
+            )
+            symbol_slot["samples"] = int(symbol_slot["samples"]) + 1
+            symbol_slot["alpha_sum"] = float(symbol_slot["alpha_sum"]) + alpha
+            symbol_slot["pass_count"] = int(symbol_slot["pass_count"]) + int(passes)
+            symbol_slot["insufficient_count"] = int(symbol_slot["insufficient_count"]) + int(insufficient)
+            symbol_slot["trades_sum"] = int(symbol_slot["trades_sum"]) + trades
+            symbol_slot["total_candidates"] = int(symbol_slot["total_candidates"]) + total_candidates
+            symbol_slot["kept_candidates"] = int(symbol_slot["kept_candidates"]) + kept_candidates
+
+            core_slot = core_stats.setdefault(
+                core_id,
+                {
+                    "core_id": core_id,
+                    "core_name_zh": core_name_zh,
+                    "core_family": core_family,
+                    "samples": 0,
+                    "alpha_sum": 0.0,
+                    "pass_count": 0,
+                    "insufficient_count": 0,
+                    "trades_sum": 0,
+                    "total_candidates": 0,
+                    "kept_candidates": 0,
+                },
+            )
+            core_slot["samples"] = int(core_slot["samples"]) + 1
+            core_slot["alpha_sum"] = float(core_slot["alpha_sum"]) + alpha
+            core_slot["pass_count"] = int(core_slot["pass_count"]) + int(passes)
+            core_slot["insufficient_count"] = int(core_slot["insufficient_count"]) + int(insufficient)
+            core_slot["trades_sum"] = int(core_slot["trades_sum"]) + trades
+            core_slot["total_candidates"] = int(core_slot["total_candidates"]) + total_candidates
+            core_slot["kept_candidates"] = int(core_slot["kept_candidates"]) + kept_candidates
+
+            keep_ratio = float(kept_candidates / total_candidates) if total_candidates > 0 else 0.0
+            trade_density_rows.append(
+                {
+                    "symbol": symbol,
+                    "core_id": core_id,
+                    "core_name_zh": core_name_zh,
+                    "core_family": core_family,
+                    "alpha_vs_spot": alpha,
+                    "trades": trades,
+                    "total_candidates": total_candidates,
+                    "kept_candidates": kept_candidates,
+                    "kept_ratio": keep_ratio,
+                    "low_trades_ratio": float(int(rejected.get("low_trades", 0)) / total_candidates) if total_candidates > 0 else 0.0,
+                    "low_credibility_ratio": float(int(rejected.get("low_credibility", 0)) / total_candidates) if total_candidates > 0 else 0.0,
+                    "passes_objective": passes,
+                    "insufficient_statistical_significance": insufficient,
+                }
+            )
+
+    symbol_alpha_contrib: list[dict[str, object]] = []
+    for row in symbol_stats.values():
+        samples = max(1, int(row["samples"]))
+        symbol_alpha_contrib.append(
+            {
+                "symbol": row["symbol"],
+                "samples": samples,
+                "avg_alpha_vs_spot": float(row["alpha_sum"]) / samples,
+                "pass_rate": float(row["pass_count"]) / samples,
+                "insufficient_rate": float(row["insufficient_count"]) / samples,
+                "avg_trades": float(row["trades_sum"]) / samples,
+                "kept_ratio": float(row["kept_candidates"]) / max(1, int(row["total_candidates"])),
+            }
+        )
+    symbol_alpha_contrib.sort(key=lambda item: (_safe_float(item.get("avg_alpha_vs_spot")), str(item.get("symbol", ""))))
+
+    core_alpha_contrib: list[dict[str, object]] = []
+    for row in core_stats.values():
+        samples = max(1, int(row["samples"]))
+        core_alpha_contrib.append(
+            {
+                "core_id": row["core_id"],
+                "core_name_zh": row["core_name_zh"],
+                "core_family": row["core_family"],
+                "samples": samples,
+                "avg_alpha_vs_spot": float(row["alpha_sum"]) / samples,
+                "pass_rate": float(row["pass_count"]) / samples,
+                "insufficient_rate": float(row["insufficient_count"]) / samples,
+                "avg_trades": float(row["trades_sum"]) / samples,
+                "kept_ratio": float(row["kept_candidates"]) / max(1, int(row["total_candidates"])),
+            }
+        )
+    core_alpha_contrib.sort(key=lambda item: (_safe_float(item.get("avg_alpha_vs_spot")), str(item.get("core_id", ""))))
+
+    trade_density_rows.sort(
+        key=lambda item: (
+            _safe_float(item.get("kept_ratio")),
+            -_safe_float(item.get("alpha_vs_spot")),
+            str(item.get("symbol", "")),
+            str(item.get("core_id", "")),
+        ),
+        reverse=True,
+    )
+
+    return {
+        "default_gate_mode": default_gate,
+        "all_window_rows": int(all_rows),
+        "symbol_alpha_contrib": symbol_alpha_contrib[:40],
+        "core_alpha_contrib": core_alpha_contrib[:40],
+        "trade_density_by_symbol_core": trade_density_rows[:200],
+        "rejection_breakdown_all_window": rejection,
+    }
+
+
 def _normalize_rule_competition(window: OptimizationWindowResult) -> dict[str, object]:
     rc = window.get("rule_competition")
     if not rc:
@@ -1053,6 +1232,7 @@ def write_optimization_artifacts(
     merged_feature_registry = _merge_feature_registry_entries(feature_registry or [])
     feature_importance_leaderboard = _build_feature_importance_overview(results)
     feature_pruning_candidates = _build_feature_pruning_overview(results)
+    all_window_diagnostics = _build_all_window_diagnostics(results_by_gate_mode)
     summary_payload = {
         **summary,
         "results_by_gate_mode": results_by_gate_mode,
@@ -1076,6 +1256,7 @@ def write_optimization_artifacts(
         "feature_registry": merged_feature_registry,
         "feature_importance_leaderboard": feature_importance_leaderboard,
         "feature_pruning_candidates": feature_pruning_candidates,
+        "all_window_diagnostics": all_window_diagnostics,
         "feature_learning_summary": {
             "registry_size": len(merged_feature_registry),
             "importance_ranked_features": len(feature_importance_leaderboard),

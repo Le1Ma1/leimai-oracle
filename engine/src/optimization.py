@@ -15,6 +15,7 @@ from .feature_cores import (
     get_core_name_zh,
     list_supported_cores,
 )
+from .features import apply_winsor_bounds, fit_winsor_bounds
 from .rsi_strategies import build_inverse_signals
 from .single_indicators import (
     build_indicator_signals,
@@ -571,20 +572,28 @@ def _aggregate_family_component(feature_df: pd.DataFrame, columns: list[str]) ->
     if not columns:
         return pd.Series(0.0, index=feature_df.index, dtype="float64")
     frame = feature_df[columns].astype("float64", copy=False)
-    mean = frame.mean(axis=0)
-    std = frame.std(axis=0).replace(0.0, np.nan).fillna(1e-9)
-    z = (frame - mean) / std
+    exp_mean = frame.expanding(min_periods=60).mean().shift(1)
+    exp_std = frame.expanding(min_periods=60).std(ddof=0).shift(1).replace(0.0, np.nan)
+    z = (frame - exp_mean) / exp_std
+    z = z.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return pd.Series(np.tanh(z).mean(axis=1), index=feature_df.index, dtype="float64")
 
 
-def _family_relevance(signal: pd.Series, target: pd.Series) -> float:
-    joined = pd.concat([signal.rename("x"), target.rename("y")], axis=1).dropna()
-    if joined.shape[0] < 200:
-        return 0.0
-    corr = float(joined["x"].corr(joined["y"]))
-    if not np.isfinite(corr):
-        return 0.0
-    return float(np.clip(abs(corr), 0.0, 1.0))
+def _causal_corr_ema(
+    signal: pd.Series,
+    ret_1m: pd.Series,
+    alpha: float = 0.02,
+    min_periods: int = 120,
+) -> pd.Series:
+    x = pd.to_numeric(signal, errors="coerce").astype("float64").shift(1).fillna(0.0)
+    y = pd.to_numeric(ret_1m, errors="coerce").astype("float64").fillna(0.0)
+    mx = x.ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+    my = y.ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+    cov = ((x - mx) * (y - my)).ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+    vx = ((x - mx).pow(2)).ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+    vy = ((y - my).pow(2)).ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+    corr = cov / np.sqrt(vx * vy + 1e-12)
+    return corr.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
 def build_fusion_components(feature_df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -624,34 +633,44 @@ def build_fusion_components(feature_df: pd.DataFrame, timeframe: str) -> pd.Data
     flow_raw = _aggregate_family_component(feature_df, flow_cols)
     timing_raw = _aggregate_family_component(feature_df, timing_cols)
 
-    target = pd.to_numeric(
+    ret_1m = pd.to_numeric(
         feature_df.get("trend__ret_log__1m", feature_df.get("ret_1m", pd.Series(0.0, index=feature_df.index))),
         errors="coerce",
     ).astype("float64")
-    target = target.shift(-1).fillna(0.0)
     base_weights = {"trend": 0.30, "oscillation": 0.20, "risk": 0.20, "flow": 0.20, "timing": 0.10}
-    relevance = {
-        "trend": _family_relevance(trend_raw, target),
-        "oscillation": _family_relevance(oscillation_raw, target),
-        "risk": _family_relevance(risk_raw, target),
-        "flow": _family_relevance(flow_raw, target),
-        "timing": _family_relevance(timing_raw, target),
-    }
-    weighted = {
-        key: float(base_weights[key] * (0.65 + 1.35 * relevance[key]))
-        for key in base_weights
-    }
-    weighted_sum = sum(weighted.values())
-    if weighted_sum <= 1e-12:
-        family_weights = base_weights
-    else:
-        family_weights = {key: float(value / weighted_sum) for key, value in weighted.items()}
+    corr_alpha = 0.02
+    weight_beta = 3.0
+    weight_floor = 0.05
+    corr_clip = 0.85
 
-    trend_component = family_weights["trend"] * trend_raw
-    oscillation_component = family_weights["oscillation"] * oscillation_raw
-    risk_component = -family_weights["risk"] * risk_raw.abs()
-    flow_component = family_weights["flow"] * flow_raw
-    timing_component = -family_weights["timing"] * timing_raw.abs()
+    relevance_df = pd.DataFrame(
+        {
+            "trend": _causal_corr_ema(trend_raw, ret_1m, alpha=corr_alpha).abs().clip(upper=corr_clip),
+            "oscillation": _causal_corr_ema(oscillation_raw, ret_1m, alpha=corr_alpha).abs().clip(upper=corr_clip),
+            "risk": _causal_corr_ema(risk_raw, ret_1m, alpha=corr_alpha).abs().clip(upper=corr_clip),
+            "flow": _causal_corr_ema(flow_raw, ret_1m, alpha=corr_alpha).abs().clip(upper=corr_clip),
+            "timing": _causal_corr_ema(timing_raw, ret_1m, alpha=corr_alpha).abs().clip(upper=corr_clip),
+        },
+        index=feature_df.index,
+    ).fillna(0.0)
+    weighted_scores = pd.DataFrame(
+        {
+            key: (0.65 + 1.35 * relevance_df[key]) * float(base_weights[key])
+            for key in base_weights
+        },
+        index=feature_df.index,
+    ).fillna(0.0)
+    logits = (weighted_scores * weight_beta).clip(lower=-8.0, upper=8.0)
+    exp_logits = np.exp(logits)
+    family_weights_df = exp_logits.div(exp_logits.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(value=base_weights)
+    family_weights_df = family_weights_df.clip(lower=weight_floor)
+    family_weights_df = family_weights_df.div(family_weights_df.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(value=base_weights)
+
+    trend_component = family_weights_df["trend"] * trend_raw
+    oscillation_component = family_weights_df["oscillation"] * oscillation_raw
+    risk_component = -family_weights_df["risk"] * risk_raw.abs()
+    flow_component = family_weights_df["flow"] * flow_raw
+    timing_component = -family_weights_df["timing"] * timing_raw.abs()
     fusion = trend_component + oscillation_component + risk_component + flow_component + timing_component
 
     signal_strength = _normalize_series_01(fusion.abs())
@@ -673,11 +692,11 @@ def build_fusion_components(feature_df: pd.DataFrame, timeframe: str) -> pd.Data
             "fusion_score": fusion.astype("float64", copy=False),
             "oracle_score": fusion.astype("float64", copy=False),
             "confidence": confidence.astype("float64", copy=False),
-            "family_weight_trend": pd.Series(family_weights["trend"], index=feature_df.index, dtype="float64"),
-            "family_weight_oscillation": pd.Series(family_weights["oscillation"], index=feature_df.index, dtype="float64"),
-            "family_weight_risk": pd.Series(family_weights["risk"], index=feature_df.index, dtype="float64"),
-            "family_weight_flow": pd.Series(family_weights["flow"], index=feature_df.index, dtype="float64"),
-            "family_weight_timing": pd.Series(family_weights["timing"], index=feature_df.index, dtype="float64"),
+            "family_weight_trend": family_weights_df["trend"].astype("float64", copy=False),
+            "family_weight_oscillation": family_weights_df["oscillation"].astype("float64", copy=False),
+            "family_weight_risk": family_weights_df["risk"].astype("float64", copy=False),
+            "family_weight_flow": family_weights_df["flow"].astype("float64", copy=False),
+            "family_weight_timing": family_weights_df["timing"].astype("float64", copy=False),
         },
         index=feature_df.index,
     )
@@ -900,12 +919,6 @@ def optimize_single_indicator_for_symbol_timeframe(
     high = price_frame["high"].astype("float64")
     low = price_frame["low"].astype("float64")
     aligned_features = _align_features_for_timeframe(feature_set_1m=feature_set_1m, timeframe=timeframe, target_index=close.index)
-    fusion_components_all = build_fusion_components(feature_df=aligned_features, timeframe=timeframe)
-    oracle_score_all = fusion_components_all.get("oracle_score", fusion_components_all["fusion_score"]).reindex(close.index).fillna(0.0)
-    confidence_all = fusion_components_all.get(
-        "confidence",
-        pd.Series(1.0, index=fusion_components_all.index, dtype="float64"),
-    ).reindex(close.index).fillna(1.0)
 
     indicator_name_zh, indicator_family = _resolve_strategy_meta(strategy_mode, strategy_id)
     drawdown_floor = -0.35
@@ -922,6 +935,19 @@ def optimize_single_indicator_for_symbol_timeframe(
         close_window = close.loc[window_mask]
         high_window = high.loc[window_mask]
         low_window = low.loc[window_mask]
+        train_feature_frame = aligned_features.loc[aligned_features.index < window_start]
+        winsor_bounds = fit_winsor_bounds(train_feature_frame) if not train_feature_frame.empty else {}
+        aligned_features_causal = (
+            apply_winsor_bounds(aligned_features, bounds=winsor_bounds)
+            if winsor_bounds
+            else aligned_features
+        )
+        fusion_components_all = build_fusion_components(feature_df=aligned_features_causal, timeframe=timeframe)
+        oracle_score_all = fusion_components_all.get("oracle_score", fusion_components_all["fusion_score"]).reindex(close.index).fillna(0.0)
+        confidence_all = fusion_components_all.get(
+            "confidence",
+            pd.Series(1.0, index=fusion_components_all.index, dtype="float64"),
+        ).reindex(close.index).fillna(1.0)
         oracle_window = oracle_score_all.reindex(close_window.index).fillna(0.0)
         confidence_window = confidence_all.reindex(close_window.index).fillna(1.0)
         fusion_components_window = fusion_components_all.reindex(close_window.index).fillna(0.0)
@@ -964,7 +990,7 @@ def optimize_single_indicator_for_symbol_timeframe(
             )
             continue
 
-        feature_window = aligned_features.reindex(close_window.index).fillna(0.0)
+        feature_window = aligned_features_causal.reindex(close_window.index).fillna(0.0)
         candidate_defs = _generate_strategy_candidates(
             strategy_mode=strategy_mode,
             strategy_id=strategy_id,

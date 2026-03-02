@@ -23,6 +23,26 @@ const __dirname = path.dirname(__filename);
 const LOCALES = listLocales();
 const PREVIEW_DIR = path.join(__dirname, "preview");
 const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1";
+const ROOT_CANONICAL_URL = "https://leimaitech.com/";
+const ANALYSIS_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "LTCUSDT",
+  "LINKUSDT",
+  "BCHUSDT",
+  "TRXUSDT",
+  "ETCUSDT",
+  "XLMUSDT",
+  "EOSUSDT",
+  "XMRUSDT",
+  "ATOMUSDT",
+];
+const ANALYSIS_WINDOWS = ["2020-now", "360d", "90d", "30d"];
+const ANALYSIS_THEMES = ["regime", "liquidity", "friction"];
 
 function parseDotEnv(content) {
   const out = {};
@@ -413,6 +433,311 @@ function formatMoney(v) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function buildAnalysisCatalog() {
+  const items = [];
+  for (const symbol of ANALYSIS_SYMBOLS) {
+    for (const windowKey of ANALYSIS_WINDOWS) {
+      for (const theme of ANALYSIS_THEMES) {
+        const symbolBase = symbol.replace("USDT", "");
+        const slug = `${symbolBase.toLowerCase()}-${windowKey}-${theme}`;
+        items.push({
+          slug,
+          symbol,
+          windowKey,
+          theme,
+          title: `${symbolBase} ${windowKey.toUpperCase()} ${theme.toUpperCase()} Analysis`,
+          summary: `Market structure snapshot for ${symbol} in ${windowKey} window, focused on ${theme} dynamics.`,
+        });
+      }
+    }
+  }
+  return items;
+}
+
+const ANALYSIS_CATALOG = buildAnalysisCatalog();
+const ANALYSIS_MAP = new Map(ANALYSIS_CATALOG.map((row) => [row.slug, row]));
+
+function normalizeAnalysisPath(pathname) {
+  return String(pathname || "").replace(/\/+$/, "");
+}
+
+function renderOuroborosDocument({ title, description, bodyHtml, jsonLd }) {
+  const ldPayload = typeof jsonLd === "string" ? jsonLd : JSON.stringify(jsonLd || {});
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:url" content="${escapeHtml(ROOT_CANONICAL_URL)}">
+  <meta property="og:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:title" content="${escapeHtml(title)}">
+  <meta property="twitter:description" content="${escapeHtml(description)}">
+  <meta property="twitter:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
+  <link rel="canonical" href="${escapeHtml(ROOT_CANONICAL_URL)}">
+  <script type="application/ld+json">${ldPayload}</script>
+  <link rel="stylesheet" href="/assets/ouroboros.css">
+</head>
+<body>
+  ${bodyHtml}
+  <script src="/assets/ouroboros.js"></script>
+</body>
+</html>`;
+}
+
+function renderRootLandingPage() {
+  const topRows = ANALYSIS_CATALOG.slice(0, 12);
+  const cardHtml = topRows
+    .map(
+      (row) => `<a class="matrix-card" href="/analysis/${escapeHtml(row.slug)}" data-slug="${escapeHtml(row.slug)}">
+        <div class="card-top">
+          <span>${escapeHtml(row.symbol)}</span>
+          <span>${escapeHtml(row.windowKey.toUpperCase())}</span>
+        </div>
+        <div class="card-mid">${escapeHtml(row.theme.toUpperCase())}</div>
+        <div class="card-sub">${escapeHtml(row.summary)}</div>
+      </a>`,
+    )
+    .join("");
+
+  const bodyHtml = `<main class="site-wrap">
+    <header class="hero">
+      <div class="hero-kicker">LEIMAI ORACLE / OUROBOROS CORE</div>
+      <h1>Root Authority Engine for Predictive Crypto Intelligence</h1>
+      <p>Single authority endpoint for entity identity, analysis distribution, and GEO-grade indexing.</p>
+      <div class="hero-cta-row">
+        <a class="btn btn-main" href="/analysis/">Open Analysis Matrix</a>
+        <a class="btn" href="https://leimaitech.com/" target="_blank" rel="noopener">Main Domain</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>Analysis Matrix Snapshot</h2>
+      <p class="muted">90 pSEO-ready pages mapped across symbol x window x theme.</p>
+      <div class="matrix-grid">${cardHtml}</div>
+    </section>
+  </main>`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        name: "LeiMai Oracle",
+        url: ROOT_CANONICAL_URL,
+        description: "Root authority endpoint for LeiMai Oracle Ouroboros entity.",
+      },
+      {
+        "@type": "CollectionPage",
+        name: "Ouroboros Analysis Matrix",
+        url: `${CONFIG.siteUrl}/analysis/`,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+      },
+    ],
+  };
+
+  return renderOuroborosDocument({
+    title: "LeiMai Oracle | Ouroboros Root Authority",
+    description:
+      "Root authority node for LeiMai Oracle. Access analysis matrix and pSEO pages for regime, liquidity, and friction research.",
+    bodyHtml,
+    jsonLd,
+  });
+}
+
+function renderAnalysisIndexPage() {
+  const cardHtml = ANALYSIS_CATALOG.map(
+    (row) => `<a class="matrix-card" href="/analysis/${escapeHtml(row.slug)}" data-filter="${escapeHtml(`${row.symbol} ${row.windowKey} ${row.theme}`)}">
+      <div class="card-top">
+        <span>${escapeHtml(row.symbol)}</span>
+        <span>${escapeHtml(row.windowKey.toUpperCase())}</span>
+      </div>
+      <div class="card-mid">${escapeHtml(row.theme.toUpperCase())}</div>
+      <div class="card-sub">${escapeHtml(row.summary)}</div>
+    </a>`,
+  ).join("");
+
+  const bodyHtml = `<main class="site-wrap">
+    <header class="hero hero-compact">
+      <div class="hero-kicker">ANALYSIS MATRIX</div>
+      <h1>pSEO Research Pages</h1>
+      <p>Symbol x window x theme index for scalable coverage and GEO citation density.</p>
+      <div class="hero-cta-row">
+        <input id="analysisSearch" class="input" type="search" placeholder="Filter: BTCUSDT 90d liquidity">
+        <a class="btn" href="/">Back to Root</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>All Analysis Pages</h2>
+      <p class="muted">Current total: ${ANALYSIS_CATALOG.length} pages</p>
+      <div id="analysisCards" class="matrix-grid">${cardHtml}</div>
+    </section>
+  </main>`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: "LeiMai Oracle Analysis Matrix",
+    url: `${CONFIG.siteUrl}/analysis/`,
+    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+  };
+
+  return renderOuroborosDocument({
+    title: "LeiMai Oracle | Analysis Matrix",
+    description: "Structured pSEO matrix for symbol/window/theme analysis coverage.",
+    bodyHtml,
+    jsonLd,
+  });
+}
+
+function renderAnalysisDetailPage(item) {
+  const symbolBase = item.symbol.replace("USDT", "");
+  const bodyHtml = `<main class="site-wrap">
+    <header class="hero hero-compact">
+      <div class="hero-kicker">ANALYSIS DETAIL</div>
+      <h1>${escapeHtml(symbolBase)} / ${escapeHtml(item.windowKey.toUpperCase())} / ${escapeHtml(item.theme.toUpperCase())}</h1>
+      <p>${escapeHtml(item.summary)}</p>
+      <div class="hero-cta-row">
+        <a class="btn btn-main" href="/analysis/">Back to Analysis Matrix</a>
+        <a class="btn" href="/">Root</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>Signal Frame</h2>
+      <div class="kv-grid">
+        <div class="kv-item"><span>Symbol</span><strong>${escapeHtml(item.symbol)}</strong></div>
+        <div class="kv-item"><span>Window</span><strong>${escapeHtml(item.windowKey.toUpperCase())}</strong></div>
+        <div class="kv-item"><span>Theme</span><strong>${escapeHtml(item.theme.toUpperCase())}</strong></div>
+        <div class="kv-item"><span>Route</span><strong>/analysis/${escapeHtml(item.slug)}</strong></div>
+      </div>
+    </section>
+  </main>`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: item.title,
+    description: item.summary,
+    mainEntityOfPage: `${CONFIG.siteUrl}/analysis/${item.slug}`,
+    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+    author: { "@type": "Organization", name: "LeiMai Oracle" },
+  };
+
+  return renderOuroborosDocument({
+    title: `LeiMai Oracle | ${item.title}`,
+    description: item.summary,
+    bodyHtml,
+    jsonLd,
+  });
+}
+
+function goneResponse(res, pathname) {
+  const html = renderOuroborosDocument({
+    title: "410 Gone | LeiMai Oracle",
+    description: "This legacy route has been permanently removed.",
+    bodyHtml: `<main class="site-wrap">
+      <section class="panel">
+        <div class="hero-kicker">410 GONE</div>
+        <h1>Legacy route removed</h1>
+        <p>Path <code>${escapeHtml(pathname)}</code> has been permanently decommissioned.</p>
+        <div class="hero-cta-row">
+          <a class="btn btn-main" href="/">Go to root</a>
+          <a class="btn" href="/analysis/">Analysis matrix</a>
+        </div>
+      </section>
+    </main>`,
+    jsonLd: {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      name: "410 Gone",
+      url: ROOT_CANONICAL_URL,
+      description: "Legacy route removed.",
+    },
+  });
+  res.writeHead(410, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Robots-Tag": "noindex, nofollow",
+  });
+  res.end(html);
+}
+
+async function handleOuroborosRoutes({ method, pathname, res }) {
+  if (method !== "GET") {
+    goneResponse(res, pathname);
+    return true;
+  }
+
+  if (pathname === "/assets/ouroboros.css") {
+    const css = await fs.readFile(path.join(__dirname, "web", "ouroboros.css"), "utf-8");
+    textResponse(res, 200, css, "text/css; charset=utf-8");
+    return true;
+  }
+  if (pathname === "/assets/ouroboros.js") {
+    const js = await fs.readFile(path.join(__dirname, "web", "ouroboros.js"), "utf-8");
+    textResponse(res, 200, js, "application/javascript; charset=utf-8");
+    return true;
+  }
+  if (pathname === "/assets/social-card.svg") {
+    textResponse(res, 200, buildSocialCardSvg(), "image/svg+xml; charset=utf-8");
+    return true;
+  }
+  if (pathname === "/robots.txt") {
+    textResponse(res, 200, buildRobots(CONFIG.siteUrl));
+    return true;
+  }
+  if (pathname === "/sitemap.xml") {
+    const analysisPaths = ANALYSIS_CATALOG.map((row) => `/analysis/${row.slug}`);
+    textResponse(res, 200, buildSitemap(CONFIG.siteUrl, analysisPaths), "application/xml; charset=utf-8");
+    return true;
+  }
+  if (pathname === "/llms.txt") {
+    textResponse(res, 200, buildLlmsTxt(CONFIG.siteUrl, CONFIG.mainSiteUrl));
+    return true;
+  }
+  if (pathname === "/") {
+    textResponse(res, 200, renderRootLandingPage(), "text/html; charset=utf-8");
+    return true;
+  }
+
+  const normalized = normalizeAnalysisPath(pathname);
+  if (normalized === "/analysis") {
+    textResponse(res, 200, renderAnalysisIndexPage(), "text/html; charset=utf-8");
+    return true;
+  }
+  if (normalized.startsWith("/analysis/")) {
+    const slug = normalized.slice("/analysis/".length).trim().toLowerCase();
+    const entry = ANALYSIS_MAP.get(slug);
+    if (!entry) {
+      textResponse(
+        res,
+        404,
+        renderOuroborosDocument({
+          title: "Not Found | Analysis",
+          description: "Requested analysis page does not exist.",
+          bodyHtml: `<main class="site-wrap"><section class="panel"><h1>Analysis page not found</h1><a class="btn btn-main" href="/analysis/">Back to analysis index</a></section></main>`,
+          jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
+        }),
+        "text/html; charset=utf-8",
+      );
+      return true;
+    }
+    textResponse(res, 200, renderAnalysisDetailPage(entry), "text/html; charset=utf-8");
+    return true;
+  }
+
+  goneResponse(res, pathname);
+  return true;
+}
+
 function renderPage({ locale, section, content, leaderboard, king, ads, sourceStatus }) {
   const pagePath = section ? `/${section}` : "";
   const seo = buildPageSeo({
@@ -655,6 +980,8 @@ export async function handleRequest(req, res) {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || `localhost:${CONFIG.port}`}`);
     const { pathname, searchParams } = reqUrl;
     const method = (req.method || "GET").toUpperCase();
+    const routed = await handleOuroborosRoutes({ method, pathname, res });
+    if (routed) return;
 
     if (method === "GET" && pathname === "/assets/styles.css") {
       const css = await fs.readFile(path.join(__dirname, "web", "styles.css"), "utf-8");

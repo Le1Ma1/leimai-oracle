@@ -1,38 +1,30 @@
-import { getHreflangUrls } from "./content.mjs";
-
 function normalizeBase(baseUrl) {
   return String(baseUrl || "").replace(/\/+$/, "");
 }
 
-function normalizePath(pagePath = "") {
-  const p = String(pagePath || "").trim();
-  if (!p || p === "/") return "";
-  return p.startsWith("/") ? p : `/${p}`;
+const ROOT_CANONICAL = "https://leimaitech.com/";
+
+function normalizeAnalysisPaths(paths) {
+  if (!Array.isArray(paths)) return [];
+  return paths
+    .map((p) => String(p || "").trim())
+    .filter(Boolean)
+    .map((p) => (p.startsWith("/") ? p : `/${p}`))
+    .map((p) => p.replace(/\/+$/, ""))
+    .filter((p) => p && p !== "/");
 }
 
-export function buildCanonical(baseUrl, locale, pagePath = "") {
-  const root = normalizeBase(baseUrl);
-  const suffix = normalizePath(pagePath);
-  return `${root}/${locale}${suffix}`;
+export function buildCanonical() {
+  return ROOT_CANONICAL;
 }
 
-export function buildSitemap(baseUrl) {
+export function buildSitemap(baseUrl, analysisPaths = []) {
   const root = normalizeBase(baseUrl);
-  const pages = [
-    "/en",
-    "/zh-tw",
-    "/zh-cn",
-    "/en/rules",
-    "/zh-tw/rules",
-    "/zh-cn/rules",
-    "/en/faq",
-    "/zh-tw/faq",
-    "/zh-cn/faq",
-  ];
+  const pages = ["/", ...normalizeAnalysisPaths(analysisPaths)];
   const lastmod = new Date().toISOString();
   const body = pages
     .map((page) => {
-      const priority = page.includes("/faq") || page.includes("/rules") ? "0.7" : "0.9";
+      const priority = page === "/" ? "1.0" : "0.8";
       return `  <url><loc>${root}${page}</loc><lastmod>${lastmod}</lastmod><changefreq>hourly</changefreq><priority>${priority}</priority></url>`;
     })
     .join("\n");
@@ -44,9 +36,11 @@ export function buildRobots(baseUrl) {
   return [
     "User-agent: *",
     "Allow: /",
+    "Allow: /analysis/",
+    "Disallow: /api/",
+    "Disallow: /preview/",
     "",
     `Sitemap: ${root}/sitemap.xml`,
-    `Sitemap: ${root}/llms.txt`,
     "",
   ].join("\n");
 }
@@ -55,23 +49,19 @@ export function buildLlmsTxt(baseUrl, mainSiteUrl) {
   const root = normalizeBase(baseUrl);
   const main = normalizeBase(mainSiteUrl);
   return [
-    "# LeiMai Throne",
+    "# LeiMai Oracle / Ouroboros",
     "",
     "## Intent",
-    "- Public support and proof-of-wealth leaderboard for LeiMai Oracle.",
-    "- Ranking is based on highest single verified USDT (TRC20) transfer.",
-    "- This property is not investment advice and has no guaranteed return.",
+    "- Public-facing oracle hub for market intelligence and narrative analysis.",
+    "- Root authority property for LeiMai Oracle entity graph.",
+    "- Research content only. Not investment advice.",
     "",
     "## Entry pages",
-    `- ${root}/en`,
-    `- ${root}/zh-tw`,
-    `- ${root}/zh-cn`,
+    `- ${root}/`,
+    `- ${root}/analysis/`,
     "",
-    "## APIs",
-    `- ${root}/api/v1/leaderboard`,
-    `- ${root}/api/v1/king`,
-    `- ${root}/api/v1/health`,
-    `- ${root}/api/v1/knowledge`,
+    "## Canonical policy",
+    `- Canonical URL: ${ROOT_CANONICAL}`,
     "",
     "## Related project",
     `- ${main}`,
@@ -88,7 +78,10 @@ function mapOgLocale(locale) {
 export function buildPageSeo({ baseUrl, locale, content, king, leaderboard, pagePath = "" }) {
   const canonical = buildCanonical(baseUrl, locale, pagePath);
   const root = normalizeBase(baseUrl);
-  const hreflangs = getHreflangUrls(baseUrl);
+  const hreflangs = [
+    { hreflang: "x-default", href: `${root}/` },
+    { hreflang: "en", href: `${root}/` },
+  ];
   const image = `${root}/assets/social-card.svg`;
   const kingAmount = king ? Number(king.amount_usdt || 0).toFixed(2) : "0.00";
   const list = Array.isArray(leaderboard) ? leaderboard : [];
@@ -98,8 +91,8 @@ export function buildPageSeo({ baseUrl, locale, content, king, leaderboard, page
     "@graph": [
       {
         "@type": "WebSite",
-        name: "LeiMai Throne",
-        url: `${root}/${locale}`,
+        name: "LeiMai Oracle",
+        url: `${root}/`,
         inLanguage: locale,
         description: content.description,
       },
@@ -111,8 +104,8 @@ export function buildPageSeo({ baseUrl, locale, content, king, leaderboard, page
         description: content.description,
         isPartOf: {
           "@type": "WebSite",
-          name: "LeiMai Throne",
-          url: `${root}/${locale}`,
+          name: "LeiMai Oracle",
+          url: `${root}/`,
         },
       },
       {

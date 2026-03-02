@@ -147,7 +147,7 @@ def _parse_cli_int_arg(command_line: str, flag: str, default: int) -> int:
 
 
 def _parse_cli_float_arg(command_line: str, flag: str, default: float) -> float:
-    pattern = rf"(?:^|\s){re.escape(flag)}\s+([0-9]*\.?[0-9]+)"
+    pattern = rf"(?:^|\s){re.escape(flag)}\s+([+-]?[0-9]*\.?[0-9]+)"
     match = re.search(pattern, command_line, flags=re.IGNORECASE)
     if not match:
         return default
@@ -161,6 +161,7 @@ def _parse_supervisor_targets(processes: list[dict[str, Any]]) -> dict[str, floa
         "target_deploy_rules": 16,
         "target_all_alpha": 0.0,
         "target_deploy_alpha": 0.0,
+        "stable_rounds": 2,
         "cycles": 1,
         "max_rounds": 1,
     }
@@ -173,8 +174,9 @@ def _parse_supervisor_targets(processes: list[dict[str, Any]]) -> dict[str, floa
             "target_pass_rate": _parse_cli_float_arg(cmd, "--target-pass-rate", float(defaults["target_pass_rate"])),
             "target_deploy_symbols": _parse_cli_int_arg(cmd, "--target-deploy-symbols", int(defaults["target_deploy_symbols"])),
             "target_deploy_rules": _parse_cli_int_arg(cmd, "--target-deploy-rules", int(defaults["target_deploy_rules"])),
-            "target_all_alpha": float(defaults["target_all_alpha"]),
-            "target_deploy_alpha": float(defaults["target_deploy_alpha"]),
+            "target_all_alpha": _parse_cli_float_arg(cmd, "--target-all-alpha", float(defaults["target_all_alpha"])),
+            "target_deploy_alpha": _parse_cli_float_arg(cmd, "--target-deploy-alpha", float(defaults["target_deploy_alpha"])),
+            "stable_rounds": _parse_cli_int_arg(cmd, "--stable-rounds", int(defaults["stable_rounds"])),
             "cycles": _parse_cli_int_arg(cmd, "--cycles", int(defaults["cycles"])),
             "max_rounds": _parse_cli_int_arg(cmd, "--max-rounds", int(defaults["max_rounds"])),
         }
@@ -300,6 +302,105 @@ def _latest_quality_snapshot(artifact_root: Path) -> dict[str, Any]:
     }
 
 
+def _load_json(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_quality_snapshot(
+    *,
+    validation_payload: dict[str, Any],
+    deploy_payload: dict[str, Any],
+    summary_payload: dict[str, Any],
+) -> dict[str, Any]:
+    pass_rate = _safe_float(validation_payload.get("pass_rate"), 0.0)
+    all_alpha = 0.0
+    for row in validation_payload.get("summary_by_window", []) if isinstance(validation_payload.get("summary_by_window"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("window")) == "all":
+            all_alpha = _safe_float(row.get("avg_alpha_vs_spot"), 0.0)
+            break
+
+    if all_alpha == 0.0:
+        health = (
+            summary_payload.get("executive_report", {})
+            .get("window_health_by_gate", {})
+            .get("gated", {})
+            .get("all", {})
+        )
+        if isinstance(health, dict):
+            all_alpha = _safe_float(health.get("avg_strategy_return"), 0.0) - _safe_float(health.get("avg_spot_return"), 0.0)
+
+    deploy_alpha_samples: list[float] = []
+    for group in deploy_payload.get("symbols", []) if isinstance(deploy_payload.get("symbols"), list) else []:
+        if not isinstance(group, dict):
+            continue
+        for rule in group.get("rules", []) if isinstance(group.get("rules"), list) else []:
+            if not isinstance(rule, dict):
+                continue
+            deploy_alpha_samples.append(_safe_float(rule.get("alpha_vs_spot"), 0.0))
+    deploy_avg_alpha = float(sum(deploy_alpha_samples) / len(deploy_alpha_samples)) if deploy_alpha_samples else 0.0
+
+    run_id = str(
+        summary_payload.get("run_id")
+        or validation_payload.get("run_id")
+        or deploy_payload.get("run_id")
+        or ""
+    )
+    return {
+        "run_id": run_id,
+        "validation_pass_rate": pass_rate,
+        "all_window_alpha_vs_spot": all_alpha,
+        "deploy_symbols": _safe_int(deploy_payload.get("total_symbols"), 0),
+        "deploy_rules": _safe_int(deploy_payload.get("total_rules"), 0),
+        "deploy_avg_alpha_vs_spot": deploy_avg_alpha,
+    }
+
+
+def _quality_snapshot_from_summary(summary_path: Path | None) -> dict[str, Any]:
+    if summary_path is None or not summary_path.exists():
+        return {}
+    summary_payload = _load_json(summary_path)
+    base_dir = summary_path.parent
+    validation_payload = _load_json(base_dir / "validation_report.json")
+    deploy_payload = _load_json(base_dir / "deploy_pool.json")
+    if not summary_payload and not validation_payload and not deploy_payload:
+        return {}
+    return _extract_quality_snapshot(
+        validation_payload=validation_payload,
+        deploy_payload=deploy_payload,
+        summary_payload=summary_payload,
+    )
+
+
+def _latest_quality_snapshot_for_run(artifact_root: Path, preferred_run_id: str | None = None) -> dict[str, Any]:
+    single_root = artifact_root / "optimization" / "single"
+    if not single_root.exists():
+        return {}
+
+    summary_files = sorted(single_root.rglob("summary.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if preferred_run_id:
+        for summary_path in summary_files:
+            payload = _load_json(summary_path)
+            if str(payload.get("run_id", "")) != str(preferred_run_id):
+                continue
+            snapshot = _quality_snapshot_from_summary(summary_path)
+            if snapshot:
+                return snapshot
+
+    if summary_files:
+        snapshot = _quality_snapshot_from_summary(summary_files[0])
+        if snapshot:
+            return snapshot
+    return _latest_quality_snapshot(artifact_root)
+
+
 def _build_status(repo_root: Path) -> dict[str, Any]:
     now = _now_utc()
     artifact_root = repo_root / "engine" / "artifacts"
@@ -406,25 +507,45 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
         recent_elapsed_min = max((recent_end - recent_start).total_seconds() / 60.0, 1.0 / 60.0)
         recent_rate = float((len(recent_slice) - 1) / recent_elapsed_min)
 
+    stale_threshold_sec = LOG_STALE_SECONDS
+    if iterate_active:
+        if tasks_done <= 0:
+            stale_threshold_sec = max(stale_threshold_sec, 900)
+        else:
+            stale_threshold_sec = max(stale_threshold_sec, 420)
+
     warnings: list[str] = []
     latest_event_ts = events[-1]["_ts"] if events else None
-    if latest_event_ts is not None and (iterate_active or supervisor_active):
-        stale_sec = (now - latest_event_ts).total_seconds()
-        if stale_sec > LOG_STALE_SECONDS:
-            warnings.append(f"log_stale_{int(stale_sec)}s")
+    last_event_age_sec: int | None = None
+    if latest_event_ts is not None:
+        age_sec = (now - latest_event_ts).total_seconds()
+        last_event_age_sec = int(max(0.0, age_sec))
+        if (iterate_active or supervisor_active) and age_sec > stale_threshold_sec:
+            warnings.append(f"log_stale_{int(age_sec)}s")
 
+    stale_active = bool(last_event_age_sec is not None and last_event_age_sec > stale_threshold_sec)
+    round_completed = bool(round_end is not None)
     pipeline_state = "idle"
+    stall_reason: str | None = None
     if iterate_active:
         if tasks_total > 0 and tasks_done < tasks_total:
-            pipeline_state = "running"
-        elif tasks_total > 0 and tasks_done >= tasks_total and round_end is None:
-            pipeline_state = "validation"
+            pipeline_state = "stalled" if stale_active else "running"
+            if stale_active:
+                stall_reason = "no_progress_events_while_running"
+        elif tasks_total > 0 and tasks_done >= tasks_total and not round_completed:
+            pipeline_state = "stalled" if stale_active else "validation"
+            if stale_active:
+                stall_reason = "no_round_end_after_tasks_done"
         else:
-            pipeline_state = "finalizing"
+            pipeline_state = "stalled" if stale_active else "finalizing"
+            if stale_active:
+                stall_reason = "no_new_events_after_round_end"
     elif supervisor_active:
-        pipeline_state = "finalizing"
-    elif iteration_complete is not None:
-        pipeline_state = "done"
+        pipeline_state = "stalled" if stale_active else "finalizing"
+        if stale_active:
+            stall_reason = "supervisor_no_new_events"
+    elif iteration_complete is not None or round_completed:
+        pipeline_state = "completed"
 
     seconds_remaining: int | None = None
     eta_utc: str | None = None
@@ -454,7 +575,20 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
         elif drift < 0.35:
             confidence = "medium"
 
-    quality_snapshot = _latest_quality_snapshot(artifact_root)
+    round_end_summary_path: Path | None = None
+    if isinstance(round_end, dict):
+        summary_raw = round_end.get("summary")
+        if isinstance(summary_raw, str) and summary_raw.strip():
+            round_end_summary_path = Path(summary_raw)
+            if not round_end_summary_path.is_absolute():
+                round_end_summary_path = (repo_root / round_end_summary_path).resolve()
+    quality_snapshot = _quality_snapshot_from_summary(round_end_summary_path)
+    if not quality_snapshot:
+        quality_snapshot = _latest_quality_snapshot_for_run(artifact_root, preferred_run_id=active_run_id)
+    quality_snapshot_run_id = str(quality_snapshot.get("run_id", "") or "")
+    quality_snapshot_is_active_run = bool(active_run_id and quality_snapshot_run_id == str(active_run_id))
+    if active_run_id and not quality_snapshot_is_active_run and (iterate_active or supervisor_active):
+        warnings.append("quality_snapshot_from_previous_run")
     target_checks = [
         {
             "key": "validation_pass_rate",
@@ -476,13 +610,13 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
         },
         {
             "key": "all_window_alpha_vs_spot",
-            "label": "all-window alpha >= 0",
+            "label": f"all-window alpha >= {float(targets_cfg['target_all_alpha']):.2f}",
             "actual": _safe_float(quality_snapshot.get("all_window_alpha_vs_spot"), 0.0),
             "target": float(targets_cfg["target_all_alpha"]),
         },
         {
             "key": "deploy_avg_alpha_vs_spot",
-            "label": "deploy avg alpha >= 0",
+            "label": f"deploy avg alpha >= {float(targets_cfg['target_deploy_alpha']):.2f}",
             "actual": _safe_float(quality_snapshot.get("deploy_avg_alpha_vs_spot"), 0.0),
             "target": float(targets_cfg["target_deploy_alpha"]),
         },
@@ -525,12 +659,17 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
     status = {
         "updated_at_utc": _to_iso_z(now),
         "pipeline_state": pipeline_state,
+        "stall_reason": stall_reason,
+        "last_event_age_sec": last_event_age_sec,
+        "stale_threshold_sec": stale_threshold_sec,
         "active_run_id": active_run_id,
         "active_processes": active_processes,
         "round": {
             "index": 1 if latest_start is not None else None,
             "profile": profile or None,
             "started_at_utc": _to_iso_z(latest_start["_ts"]) if latest_start is not None else None,
+            "completed": round_completed,
+            "completed_at_utc": _to_iso_z(round_end["_ts"]) if isinstance(round_end, dict) else None,
         },
         "cycle": {
             "current": cycle_current,
@@ -559,6 +698,12 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
             "validation_tail_seconds_assumed": int(validation_tail_seconds),
         },
         "quality_snapshot": quality_snapshot,
+        "quality_snapshot_is_active_run": quality_snapshot_is_active_run,
+        "causal_contract": {
+            "causal_mode": True,
+            "winsorize_mode": "fold_safe",
+            "fusion_mode": "online_lagged",
+        },
         "targets": {
             "thresholds": targets_cfg,
             "checks": target_checks,
@@ -609,6 +754,7 @@ def _append_history(path: Path, status: dict[str, Any]) -> bool:
     row = {
         "updated_at_utc": status.get("updated_at_utc"),
         "pipeline_state": status.get("pipeline_state"),
+        "stall_reason": status.get("stall_reason"),
         "active_run_id": status.get("active_run_id"),
         "cycle_current": status.get("cycle", {}).get("current"),
         "cycle_total": status.get("cycle", {}).get("total"),

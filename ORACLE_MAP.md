@@ -1,8 +1,8 @@
-# ORACLE_MAP
+﻿# ORACLE_MAP
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-02-28T15:12:54Z`
+- Last Updated (UTC): `2026-03-02T19:05:00Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -13,6 +13,48 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Business Value: Persistent governance baseline for autonomous implementation.
 - Read/Write Isolation Review: Pass.
 - Bai Ben (Minimalism) Review: Pass.
+
+### [x] G0_1_SUPERVISOR_TARGET_STABILITY_CONTRACT
+- Technical Dependency: `scripts/alpha_supervisor.py`, `scripts/progress_monitor.py`.
+- Business Value: supervisor now supports explicit alpha targets and consecutive-hit early-stop (`stable_rounds`) to avoid one-round luck exits.
+- Read/Write Isolation Review: Pass. Changes are isolated to local orchestration/monitor scripts.
+- Bai Ben (Minimalism) Review: Pass. Added only target controls needed by current optimization contract.
+
+### [x] G0_2_MONITOR_STATE_MACHINE_HARDENING
+- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`.
+- Business Value: monitor now distinguishes `running/validation/finalizing/stalled/completed`, exposes `stall_reason`, `last_event_age_sec`, and `round.completed` for operational clarity.
+- Read/Write Isolation Review: Pass. Monitoring-only contract; no strategy mutation.
+- Bai Ben (Minimalism) Review: Pass. Added state fields only; no new runtime service.
+
+### [x] B10_18_ALL_WINDOW_DIAGNOSTICS_CONTRACT
+- Technical Dependency: `engine/src/reporting.py`, `engine/artifacts/optimization/single/*/summary.json`.
+- Business Value: summary now includes `all_window_diagnostics` (symbol/core alpha contribution, rejection breakdown, symbol-core trade density) to target all-window alpha bottlenecks directly.
+- Read/Write Isolation Review: Pass. Pure artifact extension in engine backend.
+- Bai Ben (Minimalism) Review: Pass. One focused diagnostics payload reused by review/monitor layers.
+
+### [x] B15_1_ITERATION_OBJECTIVE_BALANCE_AND_DELTA_CONTRACT
+- Technical Dependency: `engine/src/iterate_optimize.py`, `engine/artifacts/optimization/single/iterations/*`.
+- Business Value: iteration report now emits `objective_balance_score`, `delta_vs_prev_round`, and `stability_streak` to make convergence quality explicit round-by-round.
+- Read/Write Isolation Review: Pass. Iteration metadata only; no frontend coupling.
+- Bai Ben (Minimalism) Review: Pass. Added lightweight numeric fields to existing report schema.
+
+### [x] B21_CAUSAL_FEATURE_PIPELINE_HARDENING
+- Technical Dependency: `engine/src/features.py`, `engine/src/optimization.py`, `engine/src/validation.py`.
+- Business Value: removed non-causal fill path (`bfill`), shifted dynamic shock/jump thresholds by one bar, and enforced fold-safe winsorization (`fit(train) -> apply`) in optimization/validation paths.
+- Read/Write Isolation Review: Pass. Backend data/feature pipeline only; no frontend runtime mutation.
+- Bai Ben (Minimalism) Review: Pass. Surgical changes on existing feature/fusion interfaces.
+
+### [x] B21_1_CAUSAL_FUSION_ONLINE_LAGGED_WEIGHTS
+- Technical Dependency: `engine/src/optimization.py::build_fusion_components`.
+- Business Value: replaced future-looking `target.shift(-1)` relevance weighting with lagged online correlation weighting using only realized history up to t.
+- Read/Write Isolation Review: Pass. Fusion score contract upgraded in-place.
+- Bai Ben (Minimalism) Review: Pass. Kept same output keys (`fusion_score/oracle_score/confidence` + family weights).
+
+### [x] B21_2_CAUSAL_ACCEPTANCE_TESTS
+- Technical Dependency: `engine/tests/test_causal_contract.py`.
+- Business Value: added minimal acceptance suite for no-future features, fold-safe winsor bounds, causal fusion consistency, and purged CV embargo effect.
+- Read/Write Isolation Review: Pass. Test-only module.
+- Bai Ben (Minimalism) Review: Pass. Single focused test file.
 
 ### [x] R0_REPOSITORY_RESET_BASELINE
 - Technical Dependency: repository reset + whitelist retention mechanism.
@@ -295,7 +337,7 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] B10_12_REVIEW_PYRAMID_GATE_DELTA_LAYER
 - Technical Dependency: `review/index.html`, `engine/src/reporting.py`.
 - Business Value: introduces a top-level gated-vs-ungated difference layer so users can see pass-rate and alpha deltas before entering detailed matrices.
-- Evidence: `summary.json` now includes `delta_views.gate_delta_by_window`; review renders `金字塔差異總覽`.
+- Evidence: `summary.json` now includes `delta_views.gate_delta_by_window`; review renders `??憛榆?啁蜇閬窯.
 - Read/Write Isolation Review: Pass.
 - Bai Ben (Minimalism) Review: Pass.
 
@@ -309,14 +351,14 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] B10_16_REVIEW_UNIFIED_MATRIX_ATLAS
 - Technical Dependency: `review/index.html`, `engine/src/reporting.py`.
 - Business Value: consolidates multidimensional comparison into one atlas (`window x symbol x indicator x gate-delta`) with sortable axis (`symbol/metric/rank-shift/pass-rate`) to reduce scan latency for operator decisions.
-- Evidence: review panel `Unified Matrix Atlas（單圖整合）` with `hmSortFilter`, `hmTimeframeBadge`, G/U pass flags, rank-shift tags, and dual mini-bars in each cell.
+- Evidence: review panel `Unified Matrix Atlas嚗???` with `hmSortFilter`, `hmTimeframeBadge`, G/U pass flags, rank-shift tags, and dual mini-bars in each cell.
 - Read/Write Isolation Review: Pass. Static frontend reads existing artifact JSON only.
 - Bai Ben (Minimalism) Review: Pass. Reuses one panel and existing payload without new runtime module.
 
 ### [x] B10_17_REVIEW_FEATURE_CONVERGENCE_INTELLIGENCE_LAYER
 - Technical Dependency: `review/index.html`, `review/README.md`, `engine/src/reporting.py`.
 - Business Value: adds feature convergence cockpit (family contribution ranking, top-importance features, prune candidates, plain-language weakness/improvement/advantage insights) and explicit high-dimensional two-bar feature family mapping for faster operator interpretation.
-- Evidence: review panel `特徵收斂總覽（家族 / 排名 / 剪枝）`, tables `featureFamilyTable/featureTopTable/featurePruneTable`, and guide block `featureConvergenceGuide`.
+- Evidence: review panel `?孵噩?嗆?蝮質汗嚗振??/ ?? / ?芣?嚗, tables `featureFamilyTable/featureTopTable/featurePruneTable`, and guide block `featureConvergenceGuide`.
 - Read/Write Isolation Review: Pass. Static review layer only reads existing artifact contracts.
 - Bai Ben (Minimalism) Review: Pass. Implemented in one panel with existing JSON sources; no new service/module introduced.
 
@@ -344,7 +386,7 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] B10_18_REVIEW_FEATURE_NATIVE_DUAL_GATE_MATRIX
 - Technical Dependency: `review/index.html`.
 - Business Value: dashboard now provides one unified matrix with `single gate / dual gate` modes and same-cell `gated vs ungated` delta view for direct visual comparison.
-- Evidence: `review/index.html` includes `matrixMode` selector, delta cards, and dual-cell render (`Δ alpha`, `G/U` values).
+- Evidence: `review/index.html` includes `matrixMode` selector, delta cards, and dual-cell render (`? alpha`, `G/U` values).
 - Read/Write Isolation Review: Pass. Static review layer only reads artifact JSON.
 - Bai Ben (Minimalism) Review: Pass. One file update, no framework/runtime coupling.
 
@@ -449,7 +491,7 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] B10_27_MONITOR_SOURCE_TOGGLE_LOCAL_CLOUD
 - Technical Dependency: `monitor/index.html`, `monitor/CLOUD.md`.
 - Business Value: operators can switch between live local monitor stream and cloud manifest stream without manual page rewiring.
-- Evidence: toolbar source selector (`本地 Monitor` / `雲端 Manifest`) and schema normalization for `lmo.cloud_run_manifest.v1`.
+- Evidence: toolbar source selector (`?砍 Monitor` / `?脩垢 Manifest`) and schema normalization for `lmo.cloud_run_manifest.v1`.
 - Read/Write Isolation Review: Pass. UI-only source binding; no mutation of engine training logic.
 - Bai Ben (Minimalism) Review: Pass. Implemented in existing monitor page with path presets.
 
@@ -586,249 +628,266 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Cleanup affects artifact cache only.
 - Bai Ben (Minimalism) Review: Pass. Historical clutter removed with one clear retention contract.
 
+### [x] W1_OUROBOROS_ROOT_ROUTING_410
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.css`, `support/web/ouroboros.js`, `api/index.mjs`.
+- Business Value: Enforced hard route whitelist: only `/` and `/analysis/*` are public entry routes; all legacy noise paths now return `410 Gone`.
+- Read/Write Isolation Review: Pass. Change isolated to web routing and static rendering layer.
+- Bai Ben (Minimalism) Review: Pass. Reused existing server runtime; added only one focused route policy.
+
+### [x] W1_1_CANONICAL_ROOT_CONSOLIDATION
+- Technical Dependency: `support/lib/seo.mjs`, `support/server.mjs`, `vercel.json`, `api/internal/poll-chain.mjs`.
+- Business Value: Canonical is now uniformly fixed to `https://leimaitech.com/`; sitemap/robots aligned to root authority and analysis namespace; legacy cron endpoint decommissioned.
+- Read/Write Isolation Review: Pass. SEO and platform config updated without touching engine training pipeline.
+- Bai Ben (Minimalism) Review: Pass. Surgical edits to existing config and SEO helpers only.
+
 ## [BUSINESS_STATUS]
 
-### [x] 專案已切換為 Local-only 執行基線
+### [x] 撠?撌脣?? Local-only ?瑁??箇?
 - Technical Dependency: `monitor/index.html`, `engine/README.md`, removed `cloud/*` and cloud scripts.
-- Business Value: 後續 R2/R3 迭代只走本地資料、本地訓練、本地審閱，不再受雲端同步與權限問題干擾。
-
-### [x] R1 產物完成收斂保留策略
+- Business Value: 敺? R2/R3 餈凋誨?芾粥?砍鞈???啗?蝺氬?啣祟?梧?銝??蝡臬?甇亥?甈???撟脫??
+### [x] R1 ?Ｙ摰??嗆?靽?蝑
 - Technical Dependency: `engine/artifacts/optimization/single/2026-02-28`, `engine/artifacts/optimization/single/iterations`.
-- Business Value: 僅保留最新可用基準與決策摘要，便於快速審閱與連續迭代。
-
-### [x] Cloud 批次已可寫入真實品質快照（非 0 佔位）
-- Technical Dependency: `scripts/cloud_dispatch.py --auto-quality`, `engine/artifacts/cloud/cloud_run_manifest.json`.
-- Business Value: monitor 可直接看到 `validation_pass_rate`、`all_window_alpha_vs_spot`、`deploy_symbols/rules/avg_alpha`，不再需要手動對照 json。
-
-### [x] Colab/Kaggle 代跑操作完成私有倉權限閉環
-- Technical Dependency: `cloud/kaggle/runner.ipynb`, `cloud/colab/runner.ipynb`, `cloud/*/README.md`.
-- Business Value: 可用 `GITHUB_TOKEN` 直接 clone 並跑完批次，產物回寫後即可用 monitor 審閱 Round-2。
-
-### [x] Colab clone 失敗已完成 Auth Fallback 二次修復
+- Business Value: ?????啣?典皞?瘙箇???嚗噶?澆翰?祟?梯????餈凋誨??
+### [x] Cloud ?寞活撌脣撖怠?祕?釭敹怎嚗? 0 雿?嚗?- Technical Dependency: `scripts/cloud_dispatch.py --auto-quality`, `engine/artifacts/cloud/cloud_run_manifest.json`.
+- Business Value: monitor ?舐?亦???`validation_pass_rate`?all_window_alpha_vs_spot`?deploy_symbols/rules/avg_alpha`嚗???閬?????json??
+### [x] Colab/Kaggle 隞????摰?蝘???????- Technical Dependency: `cloud/kaggle/runner.ipynb`, `cloud/colab/runner.ipynb`, `cloud/*/README.md`.
+- Business Value: ?舐 `GITHUB_TOKEN` ?湔 clone 銝西?摰甈∴??Ｙ?神敺?舐 monitor 撖拚 Round-2??
+### [x] Colab clone 憭望?撌脣???Auth Fallback 鈭活靽桀儔
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
-- Business Value: 若 PAT principal 不相容，runner 會自動 fallback；失敗訊息直接定位到 token scope/owner/repo access，降低排障時間。
-
-### [x] Colab 已切換 Secrets-First 驗證路徑
+- Business Value: ??PAT principal 銝摰對?runner ???fallback嚗仃???舐?亙?雿 token scope/owner/repo access嚗?雿?????
+### [x] Colab 撌脣???Secrets-First 撽?頝臬?
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/colab/README.md`.
-- Business Value: 預設從 Colab Secrets 讀取 token，避免 notebook 明文 token 與空字串誤跑；缺值會直接 fail-fast 提示補齊 Secret 名稱。
-
-### [x] Colab/Kaggle iterate 啟動錯誤（exit 2）已修復
+- Business Value: ?身敺?Colab Secrets 霈??token嚗??notebook ?? token ?征摮葡隤方?嚗撩?潭??湔 fail-fast ?內鋆? Secret ?迂??
+### [x] Colab/Kaggle iterate ???航炊嚗xit 2嚗歇靽桀儔
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
-- Business Value: 雲端代跑不再因無效 CLI 參數中止，且失敗時會直接印出可行動的 stderr 摘要，縮短排障迴圈。
-
-### [x] 批次分片（5 檔）與 TopN 門檻不一致已修復
+- Business Value: ?脩垢隞??銝????CLI ?銝剜迫嚗?憭望????湔?啣?航??? stderr ??嚗葬?剜??艘??
+### [x] ?寞活??嚗? 瑼???TopN ?瑼颱?銝?游歇靽桀儔
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
-- Business Value: 3-way batch 可直接跑，不再被 `Not enough symbols expected=15 got=5` 中止。
-
-### [x] 雲端批次 validate 全空候選問題已加防呆
+- Business Value: 3-way batch ?舐?亥?嚗??◤ `Not enough symbols expected=15 got=5` 銝剜迫??
+### [x] ?脩垢?寞活 validate ?函征???撌脣??脣?
 - Technical Dependency: `cloud/colab/runner.ipynb`, `cloud/kaggle/runner.ipynb`.
-- Business Value: 若批次資料未齊，runner 先自動補抓再迭代；若 summary 為空則停止 validate 並輸出可行動訊息，避免無效失敗迴圈。
-
-### [x] 雲端加速路線完成第一階段落地（Kaggle 主跑 / Colab 備援）
-- Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
-- Business Value: 筆電 CPU 慢速問題可切換到免費雲端批次訓練，保持 1m-only 矩陣契約不變。
-
-### [x] 監控面板支援本地與雲端雙來源
+- Business Value: ?交甈∟??朣?runner ?????餈凋誨嚗 summary ?箇征??甇?validate 銝西撓?箏銵?閮嚗??仃?艘??
+### [x] ?脩垢?楝蝺??洵銝?挾?賢嚗aggle 銝餉? / Colab ?嚗?- Technical Dependency: `cloud/kaggle/*`, `cloud/colab/*`, `scripts/cloud_dispatch.py`.
+- Business Value: 蝑 CPU ?ａ?憿???啣?鞎駁蝡舀甈∟?蝺湛?靽? 1m-only ?拚憟?銝???
+### [x] ???Ｘ?舀?砍?蝡舫?靘?
 - Technical Dependency: `monitor/index.html`, `monitor/CLOUD.md`, `engine/artifacts/cloud/cloud_run_manifest.json`.
-- Business Value: 可在同一個 Monitor 介面切換查看本地迭代與雲端批次進度。
-
-### [x] 2026-02-28 矩陣訓練收斂並補齊驗證產物
-- Technical Dependency: `engine/artifacts/optimization/single/2026-02-28/summary.json`, `engine/artifacts/optimization/single/2026-02-28/validation_report.json`, `engine/artifacts/optimization/single/2026-02-28/deploy_pool.json`.
-- Business Value: 主段 `180` 任務完成後，已補齊 validation/deploy 交付面板所需核心檔案；當前快照為 `validation_pass_rate=0.7273`, `deploy_symbols=15`, `deploy_rules=29`, `deploy_avg_alpha_vs_spot=0.3804`。
-
-### [x] 雲端批次派工演練完成（3 批切分）
+- Business Value: ?臬????Monitor 隞???亦??砍餈凋誨?蝡舀甈⊿脣漲??
+### [x] 2026-02-28 ?拚閮毀?嗆?銝西?朣?霅??- Technical Dependency: `engine/artifacts/optimization/single/2026-02-28/summary.json`, `engine/artifacts/optimization/single/2026-02-28/validation_report.json`, `engine/artifacts/optimization/single/2026-02-28/deploy_pool.json`.
+- Business Value: 銝餅挾 `180` 隞餃?摰?敺?撌脰?朣?validation/deploy 鈭支??Ｘ???詨?瑼?嚗?翰?抒 `validation_pass_rate=0.7273`, `deploy_symbols=15`, `deploy_rules=29`, `deploy_avg_alpha_vs_spot=0.3804`??
+### [x] ?脩垢?寞活瘣曉極瞍毀摰?嚗? ?孵???
 - Technical Dependency: `scripts/cloud_dispatch.py`, `engine/artifacts/cloud/cloud_run_manifest.json`.
-- Business Value: Kaggle 主跑可直接按 `batch 1/3, 2/3, 3/3` 進行，降低單機長跑與中斷風險。
-
-### [x] 前 15 交易標的與歷史 1m 數據完成
+- Business Value: Kaggle 銝餉??舐?交? `batch 1/3, 2/3, 3/3` ?脰?嚗?雿璈頝?銝剜憸券??
+### [x] ??15 鈭斗?璅??風??1m ?豢?摰?
 - Technical Dependency: `engine/src/universe.py`, `engine/src/ingest_1m.py`, `engine/data/raw/symbol=*/timeframe=1m/*`.
-- Business Value: 2020-01-01 至今可直接進行硬擬合，不需再重抓基礎盤。
-
-### [x] 統計顯著性判定已修復
+- Business Value: 2020-01-01 ?喃??舐?仿脰?蝖祆??銝????蝷??
+### [x] 蝯梯?憿航??批摰歇靽桀儔
 - Technical Dependency: `engine/src/optimization.py`.
-- Business Value: 系統不再把「打不贏現貨」誤判為「樣本不足」，回測解讀更精準。
-
-### [x] 目標優先最佳參選擇已上線
-- Technical Dependency: `engine/src/optimization.py::_prioritize_objective_candidates`.
-- Business Value: 當存在可打贏現貨組合時，最佳參會優先呈現該組合，避免誤導性的次優輸出。
-
-### [x] Phase B 迭代品質門檻達標
-- Technical Dependency: `engine/src/iterate_optimize.py`, `engine/src/main.py`.
-- Business Value: 一輪即達標並自動收斂；`gated=0.9167`、`ungated=0.9833`、`insufficient=0`。
-
-### [x] 本地審閱面板可直接查看最新結果
-- Technical Dependency: `review/index.html`, `engine/artifacts/optimization/single/2026-02-24/summary.json`.
-- Business Value: 可即時審閱最終輸出，支援交付前人工品檢。
-
-### [x] 特徵權重與信號來源可視化已上線
-- Technical Dependency: `engine/src/optimization.py`, `engine/src/reporting.py`, `review/index.html`.
-- Business Value: 可直接查看趨勢/能量/本質/時間懲罰對信號的占比，避免黑盒感。
-
-### [x] 特徵層升級為五大家族並引入流動性自適應特徵
+- Business Value: 蝟餌絞銝???銝??曇疏?炊?斤?見?砌?頞喋??葫閫???渡移皞?
+### [x] ?格??芸??雿喳??豢?撌脖?蝺?- Technical Dependency: `engine/src/optimization.py::_prioritize_objective_candidates`.
+- Business Value: ?嗅??典???曇疏蝯????雿喳?????曇府蝯?嚗?炊撠抒?甈∪頛詨??
+### [x] Phase B 餈凋誨?釭?瑼駁?璅?- Technical Dependency: `engine/src/iterate_optimize.py`, `engine/src/main.py`.
+- Business Value: 銝頛芸??銝西???`gated=0.9167`?ungated=0.9833`?insufficient=0`??
+### [x] ?砍撖拚?Ｘ?舐?交???啁???- Technical Dependency: `review/index.html`, `engine/artifacts/optimization/single/2026-02-24/summary.json`.
+- Business Value: ?臬?祟?望?蝯撓?綽??舀鈭支??犖撌亙?瑼Ｕ?
+### [x] ?孵噩甈??縑??皞閬?撌脖?蝺?- Technical Dependency: `engine/src/optimization.py`, `engine/src/reporting.py`, `review/index.html`.
+- Business Value: ?舐?交?隅???賡?/?祈釭/???脩蔑撠縑????嚗??????
+### [x] ?孵噩撅文?蝝鈭之摰嗆?銝血??交??扯?拇??孵噩
 - Technical Dependency: `engine/src/features.py`, `engine/src/run_once.py`, `engine/src/iterate_optimize.py`.
-- Business Value: 從低維指標導向升級為 `趨勢/震盪/風險/流動性/時序` 全特徵導向，且新增可追溯的 `feature_registry` 供後續淘汰迭代。
-- Evidence: `engine/artifacts/optimization/single/2026-02-26/summary.json` -> `feature_registry`（109 欄）。
-
-### [x] 硬門檻交易次數已改為連續可信度懲罰
-- Technical Dependency: `engine/src/optimization.py`, `engine/src/validation.py`.
-- Business Value: 不再使用 `trades > 100` 一刀切，改為 soft penalty 評分，降低邊界樣本的先見偏誤。
-- Evidence: `rule_competition.rejected_breakdown` 新增 `low_credibility` 且 gated/ungated 仍可正常產出最佳候選。
-
-### [x] 特徵訓練淘汰層（重要度與剪枝候選）已落地
+- Business Value: 敺?蝬剜?璅???蝝 `頞典/?/憸券/瘚?????` ?函敺萄???銝憓餈賣滲??`feature_registry` 靘?蝥?瘙啗翮隞??- Evidence: `engine/artifacts/optimization/single/2026-02-26/summary.json` -> `feature_registry`嚗?09 甈???
+### [x] 蝖祇?瑼颱漱?活?詨歇?寧????臭縑摨行蝵?- Technical Dependency: `engine/src/optimization.py`, `engine/src/validation.py`.
+- Business Value: 銝?雿輻 `trades > 100` 銝????寧 soft penalty 閰?嚗?雿??見?祉????炊??- Evidence: `rule_competition.rejected_breakdown` ?啣? `low_credibility` 銝?gated/ungated 隞甇?虜?Ｗ?雿喳??
+### [x] ?孵噩閮毀瘛掠撅歹???摨西??芣??嚗歇?賢
 - Technical Dependency: `engine/src/optimization.py`, `engine/src/reporting.py`, `engine/src/types.py`.
-- Business Value: 每窗口可輸出 top feature 與 prune candidates，支援「先整合後淘汰」的自動化迭代閉環。
-- Evidence: `summary.json` -> `feature_importance_leaderboard` / `feature_pruning_candidates`; `explainability.json` -> `feature_diagnostics`.
+- Business Value: 瘥???頛詨 top feature ??prune candidates嚗?氬??游?敺?瘙啜??芸??翮隞???啜?- Evidence: `summary.json` -> `feature_importance_leaderboard` / `feature_pruning_candidates`; `explainability.json` -> `feature_diagnostics`.
 
-### [x] 回測可驗證性提升（事件抽樣 + 無未來資訊審計）
+### [x] ?葫?舫?霅扳???鈭辣?賣見 + ?⊥靘?閮祟閮?
 - Technical Dependency: `engine/src/optimization.py`, `engine/src/reporting.py`, `engine/artifacts/optimization/single/2026-02-24/events/*`.
-- Business Value: 可人工追蹤模型入場/出場並檢查是否存在未來資訊污染。
-
-### [x] 單指標全量競賽已上線（8 指標）
-- Technical Dependency: `engine/src/single_indicators.py`, `engine/src/optimization.py`, `engine/src/run_once.py`, `engine/.env.example`.
-- Business Value: 不再侷限 RSI，可直接比較各指標在同窗口下的最佳規則與超額回報。
-
-### [x] 審閱面板改為白話多指標版
+- Business Value: ?臭犖撌亥蕭頩斗芋????箏銝行炎?交?血??冽靘?閮情??
+### [x] ?格?璅?奎鞈賢歇銝?嚗? ??嚗?- Technical Dependency: `engine/src/single_indicators.py`, `engine/src/optimization.py`, `engine/src/run_once.py`, `engine/.env.example`.
+- Business Value: 銝?靘琿? RSI嚗?湔瘥???璅???????雿唾???頞????
+### [x] 撖拚?Ｘ?寧?質店憭?璅?
 - Technical Dependency: `review/index.html`, `review/README.md`, `engine/src/reporting.py`.
-- Business Value: 可直接查看「符號 x 指標」矩陣、規則辭典、特徵權重白話標籤，非技術審閱可落地。
-
-### [x] Phase C 驗證淘汰層已上線
+- Business Value: ?舐?交?泵??x ???????冪?詻敺菜??閰望?蝐歹???銵祟?勗?賢??
+### [x] Phase C 撽?瘛掠撅文歇銝?
 - Technical Dependency: `engine/src/validation.py`, `engine/src/run_once.py`, `engine/src/iterate_optimize.py`.
-- Business Value: 候選規則不再直接視為可上線策略，先經過可遷移/統計可信/摩擦魯棒性驗證。
-
-### [x] Deploy Pool 最小執行層已上線
-- Technical Dependency: `engine/src/validation.py`, `engine/.env.example`.
-- Business Value: 每檔最多保留 2 條規則，將策略複雜度壓回可控範圍，符合白賁極簡原則。
-
-### [x] Deploy Pool 已加上 alpha 下限保護
+- Business Value: ?閬?銝??湔閬?臭?蝺??伐?????瑞宏/蝯梯??臭縑/?拇擳舀??折?霅?
+### [x] Deploy Pool ?撠銵惜撌脖?蝺?- Technical Dependency: `engine/src/validation.py`, `engine/.env.example`.
+- Business Value: 瘥??憭???2 璇???撠??亥??漲憯??舀蝭?嚗泵?鞈扔蝪∪???
+### [x] Deploy Pool 撌脣?銝?alpha 銝?靽風
 - Technical Dependency: `engine/src/validation.py::_build_deploy_pool`, `engine/artifacts/optimization/single/2026-02-25/deploy_pool.json`.
-- Business Value: 上線候選不再出現超額為負的規則，決策更直觀且更貼近「打贏現貨」目標。
-
-### [x] 迭代決策可追溯日誌已上線
+- Business Value: 銝??銝??箇頞??箄?????瘙箇??渡閫銝鞎潸???韐鞎具璅?
+### [x] 餈凋誨瘙箇??航蕭皞舀隤歇銝?
 - Technical Dependency: `engine/src/iterate_optimize.py`, `engine/artifacts/optimization/single/iterations/*`.
-- Business Value: 每輪瓶頸與調參方向可追蹤，避免黑箱式反覆試錯。
-
-### [x] Validation 可獨立重建且已修正雙模式漏算
+- Business Value: 瘥憚?園?矽??餈質馱嚗??蝞勗???閰阡??
+### [x] Validation ?舐蝡?撱箔?撌脖耨甇??璅∪?瞍?
 - Technical Dependency: `engine/src/validation.py`, `engine/src/main.py`, `engine/artifacts/optimization/single/2026-02-25/*`.
-- Business Value: `validate` 模式改為優先讀取 `results_by_gate_mode`，避免只驗證 `gated` 的漏算風險；目前 `summary / validation / deploy` run_id 已完全一致。
-
-### [x] 審閱面板升級為一致性防呆 + 白話導覽
+- Business Value: `validate` 璅∪??寧?芸?霈??`results_by_gate_mode`嚗?撽? `gated` ??蝞◢?迎??桀? `summary / validation / deploy` run_id 撌脣??其??氬?
+### [x] 撖拚?Ｘ???箔??湔折??+ ?質店撠汗
 - Technical Dependency: `review/index.html`, `review/README.md`.
-- Business Value: 可直接看到資料是否同一輪、用四步驟白話理解結果，降低決策誤判與術語障礙。
-
-### [x] 金字塔差異視圖與超矩陣切片已上線
+- Business Value: ?舐?亦??啗???血?銝頛芥?郊撽閰梁?閫??????瘙箇?隤文??隤?蝷?
+### [x] ??憛榆?啗???頞????歇銝?
 - Technical Dependency: `review/index.html`, `engine/src/reporting.py`, `engine/artifacts/optimization/single/2026-02-25/summary.json`.
-- Business Value: 先看宏觀差異（gated vs ungated）再下鑽矩陣，符合人類決策路徑；多維比較可讀性顯著提升。
-
-### [x] 多維矩陣已整合成單一 Atlas 視圖
+- Business Value: ??摰?撌桃嚗ated vs ungated嚗?銝?拚嚗泵?犖憿捱蝑楝敺?憭雁瘥??航??折＊????
+### [x] 憭雁?拚撌脫???桐? Atlas 閬?
 - Technical Dependency: `review/index.html`, `engine/src/reporting.py`, `engine/artifacts/optimization/single/*/summary.json`.
-- Business Value: 以單圖就能比較窗口、幣種、指標、gated/ungated 差異與名次變化，顯著降低審閱成本並提升決策速度。
-
-### [x] 特徵收斂總覽與白話剪枝審閱已上線
+- Business Value: 隞亙?停?賣?頛???馳蝔柴?璅ated/ungated 撌桃??甈∟???憿航???撖拚?銝行??捱蝑漲??
+### [x] ?孵噩?嗆?蝮質汗?閰勗?祟?勗歇銝?
 - Technical Dependency: `review/index.html`, `review/README.md`, `engine/artifacts/optimization/single/*/summary.json`, `engine/artifacts/optimization/single/*/explainability.json`.
-- Business Value: 可直接在前端查看特徵家族貢獻排名、Top 重要度、剪枝候選與白話缺點/改善/優勢摘要，並明確展示「兩根 K 高維特徵」歸屬家族，降低術語門檻與審閱成本。
-
-### [x] 迭代門檻參數化與健康儀表已落地
+- Business Value: ?舐?亙?垢?亦??孵噩摰嗆?鞎Ｙ???op ??摨艾??閰梁撩暺??孵?/?芸??嚗蒂?Ⅱ撅內???K 擃雁?孵噩?飛撅砍振????銵??瑼餉?撖拚???
+### [x] 餈凋誨?瑼餃??詨??摨瑕?銵典歇?賢
 - Technical Dependency: `engine/src/config.py`, `engine/src/iterate_optimize.py`, `engine/src/reporting.py`, `review/index.html`.
-- Business Value: 可直接以門檻驅動迭代停止條件，並在前端用紅綠式指標快速判斷是否達標。
-- Evidence: `iter_r1_cbaa4494575e`, `engine/artifacts/optimization/single/iterations/2026-02-26/iteration_20260226T015905Z_6798768a.json`.
+- Business Value: ?舐?乩誑?瑼駁??翮隞??甇Ｘ?隞塚?銝血?垢?函?蝬???敹恍?瑟?阡?璅?- Evidence: `iter_r1_cbaa4494575e`, `engine/artifacts/optimization/single/iterations/2026-02-26/iteration_20260226T015905Z_6798768a.json`.
 
-### [x] 新合約欄位已完成 smoke 驗證
+### [x] ?啣?蝝?雿歇摰? smoke 撽?
 - Technical Dependency: `engine/artifacts/optimization/single/2026-02-26/*`.
-- Business Value: 新增的 `health_dashboard / rank_shift / heatmap payload / indicator overview` 已可被審閱面板讀取，資料契約可用。
-- Evidence: `run_id=0ecf1f527d20437186eb5b115e1ea5b9`.
+- Business Value: ?啣???`health_dashboard / rank_shift / heatmap payload / indicator overview` 撌脣鋡怠祟?梢?輯???鞈?憟??舐??- Evidence: `run_id=0ecf1f527d20437186eb5b115e1ea5b9`.
 
-### [x] Feature-Native 六核引擎已完成契約驗證
-- Technical Dependency: `engine/src/feature_cores.py`, `engine/src/optimization.py`, `engine/src/reporting.py`, `engine/artifacts/optimization/single/2026-02-26/summary.json`.
-- Business Value: 從「指標清單」升級為「訊號核清單」，前端與報告可直接讀 `strategy_mode=feature_native` 與 `signal_cores`，便於後續純特徵化迭代。
-- Evidence: `run_id=4745ff586edc4560bdff53db2a450a88`, `strategy_mode=feature_native`.
+### [x] Feature-Native ?剜撘?撌脣???蝝?霅?- Technical Dependency: `engine/src/feature_cores.py`, `engine/src/optimization.py`, `engine/src/reporting.py`, `engine/artifacts/optimization/single/2026-02-26/summary.json`.
+- Business Value: 敺?璅??柴?蝝???皜???垢???湔霈 `strategy_mode=feature_native` ??`signal_cores`嚗噶?澆?蝥??孵噩?翮隞??- Evidence: `run_id=4745ff586edc4560bdff53db2a450a88`, `strategy_mode=feature_native`.
 
-### [x] 審閱面板升級為雙模式矩陣（單 gate / 雙 gate）
-- Technical Dependency: `review/index.html`.
-- Business Value: 一張矩陣內即可比較 `gated` 與 `ungated` 的同格差值（Δ alpha），降低審閱切換成本與誤讀。
-- Evidence: `matrixMode` 選單 + `deltaCards` + 雙模式 cell（`G/U` + `Δ`）。
+### [x] 撖拚?Ｘ???粹?璅∪??拚嚗 gate / ??gate嚗?- Technical Dependency: `review/index.html`.
+- Business Value: 銝撘萇???喳瘥? `gated` ??`ungated` ???澆榆?潘?? alpha嚗???撖拚????炊霈??- Evidence: `matrixMode` ?詨 + `deltaCards` + ?芋撘?cell嚗G/U` + `?`嚗?
+### [x] 憿臬? 15 撟???株?甇瑕蝚西?摰孵?璈撌脰??- Technical Dependency: `engine/src/config.py`, `engine/src/universe.py`, `engine/src/iterate_optimize.py`, `engine/.env.example`.
+- Business Value: ?臬摰? `BTC,ETH,BNB,XRP,ADA,DOGE,LTC,LINK,BCH,TRX,ETC,XLM,EOS,XMR,ATOM`嚗????單?撣潸?鈭斗?????僕?整?- Evidence: `ENGINE_UNIVERSE_SYMBOLS` ?舀憿臬?閬?嚗EOSUSDT/XMRUSDT` 撌脰?朣??1m parquet??
+### [x] Alpha-first Aggressive ???單撌脖?蝺?- Technical Dependency: `scripts/alpha_supervisor.py`, `engine/README.md`.
+- Business Value: ?芸?鋆撩鞈?????aggressive ??銵翮隞?蒂頛詨 alpha ??嚗?雿犖撌交?雿??祈?瞍郊憸券??- Evidence: `python scripts/alpha_supervisor.py --max-rounds 2`.
 
-### [x] 顯式 15 幣清單與歷史符號容忍機制已落地
-- Technical Dependency: `engine/src/config.py`, `engine/src/universe.py`, `engine/src/iterate_optimize.py`, `engine/.env.example`.
-- Business Value: 可固定跑 `BTC,ETH,BNB,XRP,ADA,DOGE,LTC,LINK,BCH,TRX,ETC,XLM,EOS,XMR,ATOM`，不再受即時市值與交易狀態變動干擾。
-- Evidence: `ENGINE_UNIVERSE_SYMBOLS` 支援顯式覆蓋；`EOSUSDT/XMRUSDT` 已補齊本地 1m parquet。
-
-### [x] Alpha-first Aggressive 監督腳本已上線
-- Technical Dependency: `scripts/alpha_supervisor.py`, `engine/README.md`.
-- Business Value: 自動補缺資料、套用 aggressive 參數、執行迭代並輸出 alpha 摘要，降低人工操作成本與漏步風險。
-- Evidence: `python scripts/alpha_supervisor.py --max-rounds 2`.
-
-### [x] Alpha-first 自適應自治監督器已升級
-- Technical Dependency: `scripts/alpha_supervisor.py`.
-- Business Value: 每個 cycle 會依 `gated/ungated` 差異、`low_credibility` 拒絕率、validation 表現自動調整 gate 與可信度門檻，最後一輪切回 institutional 驗證定稿。
-- Evidence: 新增參數 `--cycles/--target-deploy-symbols/--target-deploy-rules/--target-pass-rate` 與 cycle metrics 輸出。
-
-### [x] Feature-Native 的 trade floor 自適應已修正
+### [x] Alpha-first ?芷?瘝餌??撌脣?蝝?- Technical Dependency: `scripts/alpha_supervisor.py`.
+- Business Value: 瘥?cycle ?? `gated/ungated` 撌桃?low_credibility` ???alidation 銵函?芸?隤踵 gate ?靽∪漲?瑼鳴??敺?頛芸???institutional 撽?摰阮??- Evidence: ?啣?? `--cycles/--target-deploy-symbols/--target-deploy-rules/--target-pass-rate` ??cycle metrics 頛詨??
+### [x] Feature-Native ??trade floor ?芷?歇靽格迤
 - Technical Dependency: `engine/src/iterate_optimize.py`.
-- Business Value: 自動監督器調整 `ENGINE_TRADE_FLOOR` 不再被 baseline profile 蓋掉，調參迭代可直接反映到實際回測/驗證行為。
-- Evidence: `_clone_config_for_profile` 在 `feature_native` 模式改用 `cfg.trade_floor`。
-
-### [x] 即時監控面板已上線（不用看 log）
-- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`, `monitor/README.md`, `engine/artifacts/monitor/live_status.json`.
-- Business Value: 可直接白話查看「目前進度、剩餘時間 ETA、近期事件、品質快照」，大幅降低人工監控成本。
-- Evidence: `python scripts/progress_monitor.py --interval 2` + `http://localhost:8787/monitor/`。
-
-### [x] 監控面板已加 Symbol 完成熱圖與目標燈號
-- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`.
-- Business Value: 可即時看每個幣目前完成度（heatmap）與 cycle 目標是否達標（燈號），不需要再解讀技術 log。
-- Evidence: `engine/artifacts/monitor/live_status.json` 已有 `symbol_progress` 與 `targets.checks`，前端已可視化。
-
-### [x] 監控面板已改為繁中白話與本地時間
+- Business Value: ?芸????刻矽??`ENGINE_TRADE_FLOOR` 銝?鋡?baseline profile ??嚗矽?翮隞??湔???啣祕??皜?撽?銵??- Evidence: `_clone_config_for_profile` ??`feature_native` 璅∪??寧 `cfg.trade_floor`??
+### [x] ?單????Ｘ撌脖?蝺?銝??log嚗?- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`, `monitor/README.md`, `engine/artifacts/monitor/live_status.json`.
+- Business Value: ?舐?亦閰望??脣漲?擗???ETA????隞嗚?鞈芸翰?扼?憭批???鈭箏極?????- Evidence: `python scripts/progress_monitor.py --interval 2` + `http://localhost:8787/monitor/`??
+### [x] ???Ｘ撌脣? Symbol 摰??勗??璅???- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`.
+- Business Value: ?臬??瘥馳?桀?摰?摨佗?heatmap嚗? cycle ?格??臬??嚗???嚗??閬?閫???銵?log??- Evidence: `engine/artifacts/monitor/live_status.json` 撌脫? `symbol_progress` ??`targets.checks`嚗?蝡臬歇?航???
+### [x] ???Ｘ撌脫?箇?銝剔閰梯??砍??
 - Technical Dependency: `monitor/index.html`, `monitor/README.md`.
-- Business Value: 你可直接用中文讀懂進度與 ETA，且時間以本地顯示，避免 UTC 換算造成判讀錯誤。
-- Evidence: 監控頁標題/KPI/表格/按鈕/狀態訊息已中文化；更新時間、預估完成時間、事件時間改為本地時間顯示。
+- Business Value: 雿?湔?其葉???脣漲??ETA嚗???隞交?圈＊蝷綽??踹? UTC ?????方??航炊??- Evidence: ????憿?KPI/銵冽/??/????臬歇銝剜????湔????隡啣?????隞嗆???箸?唳??＊蝷箝?
+### [x] ??蝔???瑼捆?航?閮毀?芸葆??撌脖?蝺?- Technical Dependency: `scripts/progress_monitor.py`, `scripts/alpha_supervisor.py`, `monitor/index.html`.
+- Business Value: ?喃蝙 Windows ?剜??銋?????銝剜嚗??芾??? supervisor ??圈??ｇ?撠梯????單??脣漲??- Evidence: `progress_monitor` ?啣??岫/??輯?銝葉?瑁艘??`alpha_supervisor` ?啣??芸??? monitor嚗onitor ?垢?啣?鞈???霅衣內??
+### [ ] Alpha-first ?券??剜?芣祥餈凋誨?脰?銝哨?adaptive cycles嚗?- Technical Dependency: `scripts/alpha_supervisor.py`, `engine/src/main.py --mode iterate`.
+- Business Value: ?格??舀??券? 15 撟? `all/360d/90d/30d` ??`alpha_vs_spot` ?典?嚗蒂蝬剜??舫蝵脫?閬???- Evidence: background run started at `2026-02-28` with log `engine/artifacts/logs/alpha_supervisor_autopilot_20260228_092535.out.log`.
 
-### [x] 監控程序抗鎖檔容錯與訓練自帶啟停已上線
-- Technical Dependency: `scripts/progress_monitor.py`, `scripts/alpha_supervisor.py`, `monitor/index.html`.
-- Business Value: 即使 Windows 短暫鎖檔也不會讓監控中斷；你只要啟動 supervisor 與刷新頁面，就能持續看到即時進度。
-- Evidence: `progress_monitor` 新增重試/退避與不中斷迴圈；`alpha_supervisor` 新增自動啟停 monitor；monitor 前端新增資料過舊警示。
-
-### [ ] Alpha-first 全量六核自治迭代進行中（adaptive cycles）
-- Technical Dependency: `scripts/alpha_supervisor.py`, `engine/src/main.py --mode iterate`.
-- Business Value: 目標是把全量 15 幣在 `all/360d/90d/30d` 的 `alpha_vs_spot` 推升，並維持可部署池覆蓋。
-- Evidence: background run started at `2026-02-28` with log `engine/artifacts/logs/alpha_supervisor_autopilot_20260228_092535.out.log`.
-
-### [ ] ClickHouse 寫回與 SaaS 推播待接續
-- Technical Dependency: B11 + B12.
-- Business Value: 打通即時服務化交付鏈路。
-
-### [x] 支援競榜站 MVP 已獨立落地（support.leimaitech.com 路徑）
-- Technical Dependency: `support/server.mjs`, `support/worker.mjs`, `support/.env.example`, `support/README.md`.
-- Business Value: 在主模型訓練期間先行啟動打賞/支持現金流與品牌導流，不等待主站完工。
-
-### [x] 三語 SEO/GEO 資產與機器可讀接口已上線
-- Technical Dependency: `support/lib/seo.mjs`, `support/lib/content.mjs`, `/sitemap.xml`, `/robots.txt`, `/llms.txt`, `/api/v1/knowledge`.
-- Business Value: 在不違反平台政策前提下最大化冷流量可見度，並為主站 Pro/Elite 提供穩定導流入口。
-
-### [x] 宣言先審後發與廣告位機制已落地
-- Technical Dependency: `support/lib/moderation.mjs`, `support/server.mjs` admin endpoints.
-- Business Value: 保留高淨值用戶宣言與廣告投放空間，並以先審後發控制品牌與合規風險。
-
-### [x] Support 站點 Apex 視覺版已完成
+### [ ] ClickHouse 撖怠???SaaS ?冽敺蝥?- Technical Dependency: B11 + B12.
+- Business Value: ?????鈭支??楝??
+### [x] ?舀蝡嗆?蝡?MVP 撌脩蝡?堆?support.leimaitech.com 頝臬?嚗?- Technical Dependency: `support/server.mjs`, `support/worker.mjs`, `support/.env.example`, `support/README.md`.
+- Business Value: ?其蜓璅∪?閮毀????????/?舀??暸?瘚???撠?嚗?蝑?銝餌?摰極??
+### [x] 銝? SEO/GEO 鞈???典霈?亙撌脖?蝺?- Technical Dependency: `support/lib/seo.mjs`, `support/lib/content.mjs`, `/sitemap.xml`, `/robots.txt`, `/llms.txt`, `/api/v1/knowledge`.
+- Business Value: ?其???撟喳?輻???銝?憭批??瑟??閬漲嚗蒂?箔蜓蝡?Pro/Elite ??蝛拙?撠??亙??
+### [x] 摰???祟敺?誨??璈撌脰??- Technical Dependency: `support/lib/moderation.mjs`, `support/server.mjs` admin endpoints.
+- Business Value: 靽?擃楊?潛?嗅恐閮?誨???曄征??銝虫誑?祟敺?批????閬◢?芥?
+### [x] Support 蝡? Apex 閬死?歇摰?
 - Technical Dependency: `support/web/styles.css`, `support/web/app.js`, `support/server.mjs`.
-- Business Value: 首屏改為高辨識王座面板，新增即時同步狀態與王座改寫提示，桌機/手機體驗一致。
-
-### [x] 三語內容與 SEO/GEO 已修復
-- Technical Dependency: `support/lib/content.mjs`, `support/lib/seo.mjs`, `support/server.mjs`.
-- Business Value: 繁中/簡中亂碼已清除，`sitemap.xml`、`robots.txt`、`llms.txt` 與 `knowledge` 端點可直接投入導流。
-
-### [x] 本地一鍵啟停流程已上線
+- Business Value: 擐??寧擃儘霅?摨折?選??啣??單??郊????漣?孵神?內嚗?璈???擃?銝?氬?
+### [x] 銝??批捆??SEO/GEO 撌脖耨敺?- Technical Dependency: `support/lib/content.mjs`, `support/lib/seo.mjs`, `support/server.mjs`.
+- Business Value: 蝜葉/蝪∩葉鈭Ⅳ撌脫??歹?`sitemap.xml`?robots.txt`?llms.txt` ??`knowledge` 蝡舫??舐?交??亙?瘚?
+### [x] ?砍銝?萄???蝔歇銝?
 - Technical Dependency: `scripts/support_run_local.ps1`, `scripts/support_stop_local.ps1`, `package.json`.
-- Business Value: 以 `npm run support:run-local` / `npm run support:stop-local` 完成本地啟停，縮短迭代週期。
-
-### [x] 三模板示意已上線（待你選版）
+- Business Value: 隞?`npm run support:run-local` / `npm run support:stop-local` 摰??砍??嚗葬?剛翮隞?望???
+### [x] 銝芋?輻內?歇銝?嚗?雿??
 - Technical Dependency: `support/preview/*`, `support/server.mjs`, `support/.env.example`.
-- Business Value: 可直接用 `http://localhost:4310/preview/a|b|c` 比較三套 UIUX 方向，先決策再做正式落地，避免重工與風格漂移。
-
-### [x] Vercel 建置故障已定位並完成架構修正
+- Business Value: ?舐?亦 `http://localhost:4310/preview/a|b|c` 瘥?銝? UIUX ?孵?嚗?瘙箇???甇???賢嚗??撌亥?憸冽瞍宏??
+### [x] Vercel 撱箇蔭??撌脣?雿蒂摰??嗆?靽格迤
 - Technical Dependency: `package.json`, `vercel.json`, `api/index.mjs`, `api/internal/poll-chain.mjs`, `support/server.mjs`.
-- Business Value: 已移除舊 Next build 依賴造成的 `precompute.ts` 錯誤，改為 Vercel Serverless 可執行形態並加上排程刷新入口。
+- Business Value: 撌脩宏?方? Next build 靘陷????`precompute.ts` ?航炊嚗??Vercel Serverless ?臬銵耦?蒂?????瑟?亙??
+### [x] 監督器門檻強化已落地
+- Technical Dependency: `scripts/alpha_supervisor.py`, `scripts/progress_monitor.py`.
+- Business Value: 已加入可配置 `target_all_alpha`、`target_deploy_alpha` 與 `stable_rounds`，並同步到監控面板目標檢核，避免單輪偶發達標誤判。
+
+### [ ] 本地嚴格 R2 自動迭代進行中
+- Technical Dependency: `scripts/alpha_supervisor.py --skip-ingest --cycles 8 --max-rounds 2 --target-pass-rate 0.70 --target-deploy-symbols 12 --target-deploy-rules 24 --target-all-alpha 0.00 --target-deploy-alpha 0.00 --stable-rounds 2`.
+- Business Value: 以 15 檔、1m-only、四窗口（all/360d/90d/30d）持續迭代，目標是取得可穩定連續達標的 deploy 結果。
+- Evidence: active processes `alpha_supervisor` PID `11564`, `engine iterate` PID `14100`; log `engine/artifacts/logs/alpha_supervisor_autopilot_20260228_233701.out.log`.
+
+### [x] 監控狀態機與完成判定已修補
+- Technical Dependency: `scripts/progress_monitor.py`, `monitor/index.html`.
+- Business Value: 已可清楚辨識 `completed/stalled`，並回報卡住原因，避免「其實跑完但看起來還在跑」的誤判。
+
+### [x] all-window 診斷載荷已進 summary
+- Technical Dependency: `engine/src/reporting.py`, `engine/artifacts/optimization/single/2026-03-01/summary.json`.
+- Business Value: 可直接看 all-window 拖累來源（symbol/core）與拒絕原因分解，後續調參可針對瓶頸而非盲目擴參。
+- Evidence: run_id `ca5803af15c945e38ef0e45ecefe02a8` has `all_window_diagnostics`.
+
+### [x] iteration 回報新增收斂品質欄位
+- Technical Dependency: `engine/src/iterate_optimize.py`, `engine/artifacts/optimization/single/iterations/2026-03-01/iteration_20260301T052107Z_a976e477.json`.
+- Business Value: 每輪可追蹤 `objective_balance_score`、`delta_vs_prev_round`、`stability_streak`，利於自動迭代監督。
+
+### [ ] 新一輪本地自動迭代已重啟（監督中）
+- Technical Dependency: `scripts/alpha_supervisor.py --skip-ingest --cycles 6 --max-rounds 2 --target-pass-rate 0.70 --target-deploy-symbols 12 --target-deploy-rules 24 --target-all-alpha 0.00 --target-deploy-alpha 0.00 --stable-rounds 2`.
+- Business Value: 以最新監控/診斷契約持續迭代，目標修復 all-window alpha 並維持 deploy 穩定。
+- Evidence: active processes `alpha_supervisor` PID `11292`, `engine iterate` PID `30416`; log `engine/artifacts/logs/alpha_supervisor_autopilot_20260301_132144.out.log`.
+
+### [x] 因果重構已落地並重新啟動本地迭代
+- Technical Dependency: `engine/src/features.py`, `engine/src/optimization.py`, `engine/src/validation.py`, `scripts/progress_monitor.py`.
+- Business Value: 特徵/融合/驗證路徑已切換為因果版，監控輸出新增 `causal_contract`，避免舊 run 的 time-travel 偏差繼續污染決策。
+- Evidence: test `python -m unittest engine.tests.test_causal_contract -v` 全數通過；active run `iter_r1_06529f4be8bd`; PIDs `alpha_supervisor=4704`, `iterate=19364`, `progress_monitor=18136`.
+
+### [x] B21_3_SUPERVISOR_SYMBOL_OVERRIDE_RUNTIME
+- Technical Dependency: `scripts/alpha_supervisor.py`.
+- Business Value: supervisor supports explicit `--symbols` selection and derives `ENGINE_UNIVERSE_SYMBOLS` / `ENGINE_TOP_N` from that list, removing hardcoded 15-symbol override.
+- Read/Write Isolation Review: Pass. Runtime orchestration only.
+- Bai Ben (Minimalism) Review: Pass. Single-argument extension; no engine strategy mutation.
+
+### [x] B21_4_BTC_PRIORITY_SWITCH_RUNTIME
+- Technical Dependency: `scripts/alpha_supervisor.py`, `scripts/progress_monitor.py`, `engine/artifacts/monitor/live_status.json`.
+- Business Value: execution lane switched from 4-symbol run to BTC-first single-symbol training lane to accelerate production-readiness for BTC.
+- Read/Write Isolation Review: Pass. Changes are orchestration/runtime-process switching only; no frontend or strategy-code mutation in this step.
+- Bai Ben (Minimalism) Review: Pass. Reused existing supervisor/monitor contracts and only changed runtime scope/targets.
+
+### [x] B21_5_VALIDATE_REBUILD_SYNC_FOR_BTC_R1
+- Technical Dependency: `engine/src/main.py --mode validate`, `engine/artifacts/optimization/single/2026-03-02/*`.
+- Business Value: rebuilt validation/deploy artifacts from BTC R1 summary to remove stale run mismatch and recover decision-consistent metrics.
+- Read/Write Isolation Review: Pass. Backend artifact regeneration only; no UI/runtime code mutation.
+- Bai Ben (Minimalism) Review: Pass. Reused existing validate-only mode without introducing new modules.
+
+### [x] B21_6_BTC_PHASE_RUNNER_AUTOPILOT
+- Technical Dependency: `scripts/btc_phase_runner.py`, `scripts/alpha_supervisor.py`, `engine/src/main.py --mode validate`.
+- Business Value: added a deterministic phase orchestrator for BTC that auto-sequences `bootstrap_recovery -> bootstrap_plus -> institutional_55 -> institutional_65 -> institutional_70` using artifact-aligned validation/deploy metrics.
+- Read/Write Isolation Review: Pass. Orchestration-only; no strategy core or frontend code mutation.
+- Bai Ben (Minimalism) Review: Pass. Reuses existing supervisor and validate-only paths with one thin coordinator script.
+
+### [x] 4 檔訓練模式已切換（BTC/ETH/BNB/XRP）
+- Technical Dependency: `scripts/alpha_supervisor.py --symbols BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT ...`, `engine/artifacts/monitor/live_status.json`.
+- Business Value: 訓練宇宙從 15 檔縮到 4 檔，`tasks_total` 由 180 降為 48，便於快速迭代與驗證。
+- Evidence: active run `iter_r1_26d063ae33e3`; monitor shows `symbols_total=4`, `tasks_total=48`; targets aligned to `deploy_symbols>=4`, `deploy_rules>=8`.
+
+### [x] BTC 優先訓練模式已啟動（單檔先上架）
+- Technical Dependency: `scripts/alpha_supervisor.py --symbols BTCUSDT --skip-ingest --cycles 6 --max-rounds 2 --target-pass-rate 0.70 --target-deploy-symbols 1 --target-deploy-rules 4 --target-all-alpha 0.00 --target-deploy-alpha 0.00 --stable-rounds 2 --with-monitor --monitor-interval 2`, `engine/artifacts/monitor/live_status.json`.
+- Business Value: 依產品策略改為 BTC 先行，將單輪任務縮至 `tasks_total=12`，優先取得可上架 BTC deploy 候選，再擴展 ETH。
+- Evidence: active run `iter_r1_2d737fcad4b6`; monitor shows `symbols_total=1`, `tasks_total=12`, `target_deploy_symbols=1`, `target_deploy_rules=4`.
+- 讀寫分離檢查: 通過（僅後端運行時調度變更，前端與資料契約未被污染）。
+- 白賁極簡檢查: 通過（復用既有監督/監控流程，僅調整符號範圍與目標門檻）。
+
+### [x] BTC R1 驗證重建完成，決策基準已校正
+- Technical Dependency: `python -m engine.src.main --mode validate --summary-path engine/artifacts/optimization/single/2026-03-02/summary.json`.
+- Business Value: 同步完成 BTC R1 的 validation/deploy，消除先前「summary 新、validation 舊」的決策污染；目前基準為 `pass_rate=0.3571`, `deploy_symbols=1`, `deploy_rules=2`。
+- Evidence: `validation_report.json` 與 `deploy_pool.json` 皆對齊 `run_id=iter_r1_2d737fcad4b6`。
+- 讀寫分離檢查: 通過（僅產物重建，無前端與策略代碼改動）。
+- 白賁極簡檢查: 通過（使用既有 validate-only 模式，無新增模組）。
+
+### [x] BTC Bootstrap 續跑已啟動（先可上架再強化）
+- Technical Dependency: `scripts/alpha_supervisor.py --symbols BTCUSDT --skip-ingest --cycles 3 --max-rounds 2 --target-pass-rate 0.40 --target-deploy-symbols 1 --target-deploy-rules 2 --target-all-alpha -20.00 --target-deploy-alpha -1.00 --stable-rounds 1 --with-monitor --monitor-interval 2`, `engine/artifacts/monitor/live_status.json`.
+- Business Value: 先衝可上架候選（非空 deploy pool + 正向部署品質），縮短等待時間，再銜接 institutional 門檻。
+- Evidence: active run `iter_r1_afc805b2eb0b`; monitor targets updated to bootstrap profile.
+- 讀寫分離檢查: 通過（純運行時調度參數變更）。
+- 白賁極簡檢查: 通過（重用既有監督流程，僅切換門檻配置）。
+
+### [x] BTC 三段式自動升壓執行器已上線
+- Technical Dependency: `scripts/btc_phase_runner.py --wait-existing --monitor-interval 2 --poll-sec 20`, `engine/artifacts/logs/btc_phase_runner_*.{out,err}.log`.
+- Business Value: 由系統自動判斷每階段是否達標，先求可上架穩定再升級機構門檻，避免人工盯盤與手動切參。
+- Evidence: phase-runner process active (`btc_phase_runner.py`), currently waiting/handling `validate` sync before next phase launch.
+- 讀寫分離檢查: 通過（只調度流程，未污染前端與資料契約）。
+- 白賁極簡檢查: 通過（沿用既有 artifacts 作判斷，無新增資料格式）。
+### [x] 根網域 Ouroboros 新中樞與 410 清場完成
+- Technical Dependency: `support/server.mjs`, `support/lib/seo.mjs`, `support/web/ouroboros.css`, `support/web/ouroboros.js`, `vercel.json`, `api/internal/poll-chain.mjs`.
+- Business Value: `leimaitech.com` 已回收為唯一權威入口；`/analysis/*` 作為 pSEO 矩陣命名空間；舊路徑統一 410，避免舊實體訊號污染 GEO/SEO。
+- Evidence: route contract verified locally (`/`=200, `/analysis/`=200, `/analysis/btc-2020-now-regime`=200, `/en`=410, canonical fixed to `https://leimaitech.com/`).
+- 讀寫分離檢查: 通過（僅網站路由與 SEO 層變更，未動量化引擎訓練管線）。
+- 白賁極簡檢查: 通過（沿用現有 serverless 入口，最小化新增檔案）。
 
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`
 - Bai Ben (Minimalism) Verdict: `PASS`
+

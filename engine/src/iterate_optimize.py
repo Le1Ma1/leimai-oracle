@@ -403,6 +403,68 @@ def _derive_round_decision(
     }
 
 
+def _clip01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _compute_objective_balance_score(
+    *,
+    validation_metrics: dict[str, float | int | bool],
+    cfg: EngineConfig,
+    symbols_count: int,
+) -> float:
+    pass_rate = float(validation_metrics.get("validation_pass_rate", 0.0) or 0.0)
+    all_alpha = float(validation_metrics.get("all_window_avg_alpha_vs_spot", 0.0) or 0.0)
+    deploy_alpha = float(validation_metrics.get("deploy_avg_alpha_vs_spot", 0.0) or 0.0)
+    deploy_symbols = int(validation_metrics.get("deploy_total_symbols", 0) or 0)
+    deploy_rules = int(validation_metrics.get("deploy_total_rules", 0) or 0)
+    target_symbols = max(1, int(round(float(symbols_count) * cfg.optimization_target_deploy_symbol_ratio)))
+    target_rules = max(1, target_symbols)
+
+    pass_component = _clip01(pass_rate / max(cfg.optimization_target_validation_pass_rate, 1e-9))
+    deploy_symbol_component = _clip01(float(deploy_symbols) / float(target_symbols))
+    deploy_rule_component = _clip01(float(deploy_rules) / float(target_rules))
+    all_alpha_component = _clip01(0.5 + 0.5 * ((all_alpha - cfg.optimization_target_all_window_alpha_floor) / 0.50))
+    deploy_alpha_component = _clip01(0.5 + 0.5 * ((deploy_alpha - cfg.optimization_target_deploy_alpha_floor) / 0.25))
+
+    return float(
+        0.35 * pass_component
+        + 0.20 * deploy_symbol_component
+        + 0.15 * deploy_rule_component
+        + 0.15 * all_alpha_component
+        + 0.15 * deploy_alpha_component
+    )
+
+
+def _build_round_delta(
+    *,
+    current: dict[str, float | int | bool],
+    previous: dict[str, float | int | bool] | None,
+    current_objective_balance: float,
+    previous_objective_balance: float | None,
+) -> dict[str, float]:
+    if previous is None:
+        return {
+            "validation_pass_rate": 0.0,
+            "all_window_avg_alpha_vs_spot": 0.0,
+            "deploy_avg_alpha_vs_spot": 0.0,
+            "deploy_total_symbols": 0.0,
+            "deploy_total_rules": 0.0,
+            "objective_balance_score": 0.0,
+        }
+    return {
+        "validation_pass_rate": float(current.get("validation_pass_rate", 0.0) or 0.0)
+        - float(previous.get("validation_pass_rate", 0.0) or 0.0),
+        "all_window_avg_alpha_vs_spot": float(current.get("all_window_avg_alpha_vs_spot", 0.0) or 0.0)
+        - float(previous.get("all_window_avg_alpha_vs_spot", 0.0) or 0.0),
+        "deploy_avg_alpha_vs_spot": float(current.get("deploy_avg_alpha_vs_spot", 0.0) or 0.0)
+        - float(previous.get("deploy_avg_alpha_vs_spot", 0.0) or 0.0),
+        "deploy_total_symbols": float(int(current.get("deploy_total_symbols", 0) or 0) - int(previous.get("deploy_total_symbols", 0) or 0)),
+        "deploy_total_rules": float(int(current.get("deploy_total_rules", 0) or 0) - int(previous.get("deploy_total_rules", 0) or 0)),
+        "objective_balance_score": float(current_objective_balance - float(previous_objective_balance or 0.0)),
+    }
+
+
 def _write_iteration_decision_log(
     artifact_root: Path,
     payload: dict[str, object],
@@ -538,13 +600,17 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
     best_results: list[TimeframeOptimizationResult] | None = None
     best_run_id = ""
     best_artifacts: dict[str, str] | None = None
+    best_objective_balance_score = 0.0
     selected_results: list[TimeframeOptimizationResult] | None = None
     selected_artifacts: dict[str, str] | None = None
     round_reports: list[dict[str, object]] = []
     final_pass = False
     final_run_id = ""
     small_gain_streak = 0
+    validation_stability_streak = 0
     prev_median_final_score: float | None = None
+    prev_validation_metrics: dict[str, float | int | bool] | None = None
+    prev_objective_balance: float | None = None
 
     for idx in range(rounds_to_run):
         profile = ITERATION_PROFILES[min(idx, len(ITERATION_PROFILES) - 1)]
@@ -569,6 +635,17 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
                 deploy_pool=validation_paths.get("deploy_pool"),
             )
             validation_metrics = _extract_validation_metrics(artifacts=artifacts, cfg=cfg, symbols_count=len(symbols))
+        objective_balance_score = _compute_objective_balance_score(
+            validation_metrics=validation_metrics,
+            cfg=cfg,
+            symbols_count=len(symbols),
+        )
+        delta_vs_prev_round = _build_round_delta(
+            current=validation_metrics,
+            previous=prev_validation_metrics,
+            current_objective_balance=objective_balance_score,
+            previous_objective_balance=prev_objective_balance,
+        )
 
         metrics, is_pass = _evaluate_quality(
             results=results,
@@ -605,9 +682,11 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
             best_results = results
             best_run_id = run_id
             best_artifacts = artifacts
+            best_objective_balance_score = objective_balance_score
 
         converged_by_validation = bool(validation_metrics.get("validation_converged", False))
         is_pass = bool(is_pass and converged_by_validation)
+        validation_stability_streak = (validation_stability_streak + 1) if converged_by_validation else 0
 
         curr_median_final_score = float(validation_metrics.get("validation_median_final_score", 0.0))
         if prev_median_final_score is not None:
@@ -626,6 +705,9 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
                 "run_id": run_id,
                 "quality_metrics": metrics,
                 "validation_metrics": validation_metrics,
+                "objective_balance_score": objective_balance_score,
+                "delta_vs_prev_round": delta_vs_prev_round,
+                "stability_streak": validation_stability_streak,
                 "degraded_vs_best": degraded_vs_best,
                 "decision": _derive_round_decision(metrics, validation_metrics, cfg),
                 "is_pass": is_pass,
@@ -648,6 +730,8 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
             degraded_vs_best=degraded_vs_best,
             is_pass=is_pass,
         )
+        prev_validation_metrics = dict(validation_metrics)
+        prev_objective_balance = objective_balance_score
 
         final_run_id = run_id
         if is_pass:
@@ -680,6 +764,7 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
         "ts_utc": datetime.now(timezone.utc).isoformat(),
         "final_run_id": final_run_id,
         "final_pass": final_pass,
+        "final_stability_streak": validation_stability_streak,
         "stop_reason": "pass" if final_pass else ("small_gain" if small_gain_streak >= 2 else "max_rounds"),
         "round_decisions": [
             {
@@ -688,6 +773,9 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
                 "run_id": report["run_id"],
                 "quality_metrics": report["quality_metrics"],
                 "validation_metrics": report.get("validation_metrics"),
+                "objective_balance_score": report.get("objective_balance_score"),
+                "delta_vs_prev_round": report.get("delta_vs_prev_round"),
+                "stability_streak": report.get("stability_streak"),
                 "degraded_vs_best": report.get("degraded_vs_best"),
                 "decision": report.get("decision"),
                 "is_pass": report["is_pass"],
@@ -719,6 +807,8 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
         "gate_modes": list(cfg.optimization_gate_modes),
         "final_pass": final_pass,
         "final_run_id": final_run_id,
+        "stability_streak": validation_stability_streak,
+        "final_objective_balance_score": float(round_reports[-1].get("objective_balance_score", 0.0)) if round_reports else 0.0,
         "stop_reason": "pass" if final_pass else ("small_gain" if small_gain_streak >= 2 else "max_rounds"),
         "best_round_run_id": best_run_id,
         "best_round_score": {
@@ -730,6 +820,7 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
             "deploy_avg_alpha_vs_spot": best_score[5],
             "validation_median_final_score": best_score[6],
             "deploy_total_rules": best_score[7],
+            "objective_balance_score": best_objective_balance_score,
         },
         "final_artifacts": selected_artifacts,
         "round_reports": round_reports,

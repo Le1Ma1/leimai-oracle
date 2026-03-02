@@ -2,22 +2,9 @@
   "functions": {
     "api/index.mjs": {
       "maxDuration": 30
-    },
-    "api/internal/poll-chain.mjs": {
-      "maxDuration": 60
     }
   },
-  "crons": [
-    {
-      "path": "/api/internal/poll-chain",
-      "schedule": "0 0 * * *"
-    }
-  ],
   "rewrites": [
-    {
-      "source": "/api/internal/poll-chain",
-      "destination": "/api/internal/poll-chain"
-    },
     {
       "source": "/(.*)",
       "destination": "/api/index?__path=$1"

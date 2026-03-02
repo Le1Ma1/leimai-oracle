@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 
 EPS = 1e-12
+WINSOR_LOWER_Q = 0.005
+WINSOR_UPPER_Q = 0.995
+DEFAULT_WARMUP_BARS = 720
 
 
 def _timeframe_to_timedelta(timeframe: str) -> pd.Timedelta:
@@ -40,6 +43,48 @@ def _winsorize(series: pd.Series, lower_q: float = 0.005, upper_q: float = 0.995
     if lo > hi:
         lo, hi = hi, lo
     return s.clip(lower=lo, upper=hi)
+
+
+def _winsor_bounds(series: pd.Series, lower_q: float = WINSOR_LOWER_Q, upper_q: float = WINSOR_UPPER_Q) -> tuple[float, float] | None:
+    s = pd.to_numeric(series, errors="coerce").astype("float64")
+    if s.empty:
+        return None
+    lo = float(s.quantile(lower_q))
+    hi = float(s.quantile(upper_q))
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return None
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def fit_winsor_bounds(
+    feature_df: pd.DataFrame,
+    lower_q: float = WINSOR_LOWER_Q,
+    upper_q: float = WINSOR_UPPER_Q,
+) -> dict[str, tuple[float, float]]:
+    if feature_df.empty:
+        return {}
+    bounds: dict[str, tuple[float, float]] = {}
+    for column in feature_df.columns:
+        if not pd.api.types.is_numeric_dtype(feature_df[column]):
+            continue
+        pair = _winsor_bounds(feature_df[column], lower_q=lower_q, upper_q=upper_q)
+        if pair is not None:
+            bounds[str(column)] = pair
+    return bounds
+
+
+def apply_winsor_bounds(feature_df: pd.DataFrame, bounds: dict[str, tuple[float, float]]) -> pd.DataFrame:
+    if feature_df.empty or not bounds:
+        return feature_df
+    out = feature_df.copy()
+    for column, (lo, hi) in bounds.items():
+        if column not in out.columns:
+            continue
+        series = pd.to_numeric(out[column], errors="coerce").astype("float64")
+        out[column] = series.clip(lower=float(lo), upper=float(hi))
+    return out
 
 
 def _robust_zscore(series: pd.Series, window: int, min_periods: int) -> pd.Series:
@@ -180,7 +225,7 @@ def _build_base_1m_features(df_1m: pd.DataFrame) -> pd.DataFrame:
     vol_ema_slow = safe_volume.ewm(span=240, adjust=False, min_periods=60).mean()
     flow_regime_expand_contract = _safe_log_ratio(vol_ema_fast, vol_ema_slow)
     shock_source = flow_rel_volume_log.abs().fillna(0.0)
-    shock_threshold = shock_source.rolling(480, min_periods=60).quantile(0.95)
+    shock_threshold = shock_source.rolling(480, min_periods=60).quantile(0.95).shift(1)
     flow_shock_density = (shock_source > shock_threshold).astype("float64").rolling(240, min_periods=30).mean()
 
     base["flow_liquidity__rel_volume_log__1m"] = flow_rel_volume_log
@@ -191,13 +236,19 @@ def _build_base_1m_features(df_1m: pd.DataFrame) -> pd.DataFrame:
     base["flow_liquidity__shock_density__1m"] = flow_shock_density
 
     # Family: timing/execution proxy at 1m level.
-    jump_threshold = ret_1m.abs().rolling(480, min_periods=60).quantile(0.97)
+    jump_threshold = ret_1m.abs().rolling(480, min_periods=60).quantile(0.97).shift(1)
     jump_density = (ret_1m.abs() > jump_threshold).astype("float64").rolling(240, min_periods=30).mean()
     base["timing_execution__jump_density__1m"] = jump_density
     return base
 
 
-def build_feature_set(df_1m: pd.DataFrame, htf_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def build_feature_set(
+    df_1m: pd.DataFrame,
+    htf_map: dict[str, pd.DataFrame],
+    *,
+    winsor_bounds: dict[str, tuple[float, float]] | None = None,
+    warmup_bars: int = DEFAULT_WARMUP_BARS,
+) -> pd.DataFrame:
     if df_1m.empty:
         return pd.DataFrame()
 
@@ -228,10 +279,11 @@ def build_feature_set(df_1m: pd.DataFrame, htf_map: dict[str, pd.DataFrame]) -> 
 
     feature_set = base_reset.set_index("ts")
     feature_set = feature_set.replace([np.inf, -np.inf], np.nan)
-    feature_set = feature_set.ffill().bfill().fillna(0.0)
-
-    numeric_cols = [column for column in feature_set.columns if pd.api.types.is_numeric_dtype(feature_set[column])]
-    for column in numeric_cols:
-        feature_set[column] = _winsorize(feature_set[column])
+    feature_set = feature_set.ffill()
+    if isinstance(warmup_bars, int) and warmup_bars > 0 and feature_set.shape[0] > warmup_bars:
+        feature_set = feature_set.iloc[warmup_bars:]
+    feature_set = feature_set.fillna(0.0)
+    if winsor_bounds:
+        feature_set = apply_winsor_bounds(feature_set, winsor_bounds)
 
     return feature_set.astype("float64", copy=False)

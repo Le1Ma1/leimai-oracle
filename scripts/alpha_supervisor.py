@@ -30,6 +30,20 @@ DEFAULT_SYMBOLS = (
 )
 
 
+def _parse_symbols_csv(raw: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in str(raw).split(","):
+        symbol = token.strip().upper()
+        if not symbol:
+            continue
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        out.append(symbol)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class TuneState:
     gate_oracle_quantile: float = 0.45
@@ -460,6 +474,15 @@ def main() -> int:
     parser.add_argument("--target-deploy-symbols", type=int, default=8, help="Early-stop target for deploy symbol coverage.")
     parser.add_argument("--target-deploy-rules", type=int, default=16, help="Early-stop target for deploy rule count.")
     parser.add_argument("--target-pass-rate", type=float, default=0.20, help="Early-stop target validation pass rate.")
+    parser.add_argument("--target-all-alpha", type=float, default=0.0, help="Early-stop target for all-window avg alpha vs spot.")
+    parser.add_argument("--target-deploy-alpha", type=float, default=0.0, help="Early-stop target for deploy avg alpha vs spot.")
+    parser.add_argument("--stable-rounds", type=int, default=2, help="Consecutive target-hit cycles required before early stop.")
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default=",".join(DEFAULT_SYMBOLS),
+        help="Comma-separated symbols to train (e.g. BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT).",
+    )
     parser.add_argument(
         "--with-monitor",
         action=argparse.BooleanOptionalAction,
@@ -472,13 +495,16 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     artifact_root = repo_root / "engine" / "artifacts"
     raw_root = repo_root / "engine" / "data" / "raw"
+    selected_symbols = _parse_symbols_csv(args.symbols)
+    if not selected_symbols:
+        raise ValueError("No symbols selected. Use --symbols with at least one symbol.")
 
     base_env = os.environ.copy()
     base_env.update(
         {
             "ENGINE_RULE_ENGINE_MODE": "feature_native",
-            "ENGINE_UNIVERSE_SYMBOLS": ",".join(DEFAULT_SYMBOLS),
-            "ENGINE_TOP_N": "15",
+            "ENGINE_UNIVERSE_SYMBOLS": ",".join(selected_symbols),
+            "ENGINE_TOP_N": str(len(selected_symbols)),
             "ENGINE_OPTIMIZATION_TIMEFRAMES": "1m",
             "ENGINE_OPTIMIZATION_WINDOWS": "all,360d,90d,30d",
             "ENGINE_OPTIMIZATION_GATE_MODES": "gated,ungated",
@@ -514,7 +540,7 @@ def main() -> int:
 
     try:
         if not args.skip_ingest:
-            missing = [symbol for symbol in DEFAULT_SYMBOLS if not _symbol_has_1m_data(raw_root=raw_root, symbol=symbol)]
+            missing = [symbol for symbol in selected_symbols if not _symbol_has_1m_data(raw_root=raw_root, symbol=symbol)]
             if missing:
                 print(f"[info] Missing 1m data symbols: {missing}")
                 for symbol in missing:
@@ -526,6 +552,7 @@ def main() -> int:
                 print("[info] All explicit symbols already have local 1m parquet data.")
 
         state = TuneState()
+        stable_hits = 0
         latest_summary_payload: dict[str, Any] = {}
         latest_deploy_payload: dict[str, Any] = {}
         for cycle_index in range(max(1, int(args.cycles))):
@@ -563,15 +590,21 @@ def main() -> int:
                 state=state,
                 metrics=metrics,
             )
-
-            if (
+            target_hit = bool(
                 metrics.validation_pass_rate >= float(args.target_pass_rate)
                 and metrics.deploy_symbols >= int(args.target_deploy_symbols)
                 and metrics.deploy_rules >= int(args.target_deploy_rules)
-                and metrics.all_window_avg_alpha_vs_spot >= 0.0
-                and metrics.deploy_avg_alpha_vs_spot >= 0.0
-            ):
-                print("[info] Early stop: target quality reached.")
+                and metrics.all_window_avg_alpha_vs_spot >= float(args.target_all_alpha)
+                and metrics.deploy_avg_alpha_vs_spot >= float(args.target_deploy_alpha)
+            )
+            stable_hits = (stable_hits + 1) if target_hit else 0
+            required_stable_hits = max(1, int(args.stable_rounds))
+            print(
+                f"[target] hit={str(target_hit).lower()} "
+                f"streak={stable_hits}/{required_stable_hits}"
+            )
+            if stable_hits >= required_stable_hits:
+                print("[info] Early stop: target quality reached with stability.")
                 break
             state = _adapt_state(
                 state=state,
