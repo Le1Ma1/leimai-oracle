@@ -5,3 +5,4 @@ ccxt
 python-dotenv
 apscheduler
 requests
+supabase

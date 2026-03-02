@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-02T19:05:00Z`
+- Last Updated (UTC): `2026-03-02T19:22:42Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -640,6 +640,30 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. SEO and platform config updated without touching engine training pipeline.
 - Bai Ben (Minimalism) Review: Pass. Surgical edits to existing config and SEO helpers only.
 
+### [x] W1_2_VERCEL_PRODUCTION_ALIAS_REALIGNMENT
+- Technical Dependency: Vercel API (`/v13/deployments`, `/v13/deployments/{id}`, `/v2/aliases`), project `leimai-oracle`.
+- Business Value: Production domain `leimaitech.com` is now aligned to latest commit `0aef91c8ece709c6dfef5a04debac7c77919f29f` deployment, eliminating domain drift to stale build.
+- Read/Write Isolation Review: Pass. Change applied at deployment control-plane only; no engine data path mutation.
+- Bai Ben (Minimalism) Review: Pass. Single forced production deploy + alias verification.
+
+### [x] B22_SUPABASE_PHASE1_SCHEMA_AND_RLS_BOOTSTRAP
+- Technical Dependency: `supabase/schema.sql`.
+- Business Value: established ingestion storage contract with `market_liquidations` and `anomaly_events`, plus RLS enabled and service-role full write path.
+- Read/Write Isolation Review: Pass. Storage layer added without touching frontend route runtime.
+- Bai Ben (Minimalism) Review: Pass. Two core tables only, no extra denormalized replicas.
+
+### [x] B22_1_GITHUB_ACTIONS_INGEST_4H_AND_MARKET_SCRIPT
+- Technical Dependency: `.github/workflows/ingest_4h.yml`, `engine/src/ingest_market.py`, `engine/requirements.txt`, `engine/.env.example`.
+- Business Value: zero-budget scheduled ingestion now pulls Binance momentum signals every 4h and upserts anomaly/liquidation feed state to Supabase with fault-tolerant exits.
+- Read/Write Isolation Review: Pass. Pure backend automation path; no coupling to `support/server.mjs` render layer.
+- Bai Ben (Minimalism) Review: Pass. Single workflow + single script; no orchestration sprawl.
+
+### [x] B22_2_PHASE1_SUPABASE_RUNTIME_VERIFICATION
+- Technical Dependency: `supabase/schema.sql`, `engine/src/ingest_market.py`, Supabase project `mprzdnlpiginhabgajjh`.
+- Business Value: schema applied and ingestion path verified against real Supabase write target; `anomaly_events` now receives live entries from Binance-derived anomalies.
+- Read/Write Isolation Review: Pass. Validation performed in backend storage/runtime layer only.
+- Bai Ben (Minimalism) Review: Pass. No additional services introduced; verification reused the same ingestion contract.
+
 ## [BUSINESS_STATUS]
 
 ### [x] 撠?撌脣?? Local-only ?瑁??箇?
@@ -885,6 +909,32 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: route contract verified locally (`/`=200, `/analysis/`=200, `/analysis/btc-2020-now-regime`=200, `/en`=410, canonical fixed to `https://leimaitech.com/`).
 - 讀寫分離檢查: 通過（僅網站路由與 SEO 層變更，未動量化引擎訓練管線）。
 - 白賁極簡檢查: 通過（沿用現有 serverless 入口，最小化新增檔案）。
+
+### [x] Vercel 生產環境漂移修復完成（Domain Drift -> 最新 Commit）
+- Technical Dependency: Vercel project `leimai-oracle`, deployment `dpl_HqF8jjVChJcq4LURoV8QsNN3MJXE`, aliases API.
+- Business Value: `leimaitech.com` 從舊部署 `f4bf0b59...` 漂移狀態恢復到最新 `0aef91c...`；線上已生效新路由與 canonical 策略。
+- Evidence: alias `leimaitech.com -> dpl_HqF8jjVChJcq4LURoV8QsNN3MJXE`; live checks `/`=200, `/analysis/`=200, `/analysis/btc-2020-now-regime`=200, `/en`=410, canonical=`https://leimaitech.com/`.
+- 讀寫分離檢查: 通過（僅部署控制層操作）。
+- 白賁極簡檢查: 通過（未新增服務，僅切換到正確部署）。
+
+### [x] Phase 1 數據流水線骨架完成（Supabase + GitHub Actions + Python Ingest）
+- Technical Dependency: `supabase/schema.sql`, `.github/workflows/ingest_4h.yml`, `engine/src/ingest_market.py`, `engine/requirements.txt`, `engine/.env.example`.
+- Business Value: 已建立 4 小時定時抓取與異常寫入契約；`market_liquidations`/`anomaly_events` 可作為後續 AI 報告與 `/analysis/*` 真實內容來源。
+- Evidence: local run `python -m engine.src.ingest_market` completed with resilient logs; anomalies detected; force-orders unauthorized path handled without pipeline interruption.
+- 讀寫分離檢查: 通過（純後端 ingestion，不污染前端展示層）。
+- 白賁極簡檢查: 通過（只新增最小必要腳本與 workflow）。
+
+### [x] Phase 1 實庫驗證完成（anomaly_events 已落地）
+- Technical Dependency: Supabase DB (`mprzdnlpiginhabgajjh`), `engine/src/ingest_market.py`.
+- Business Value: 透過 service_role 寫入實測成功，`anomaly_events` 已有真實新資料；現階段 `forceOrders` 在當前環境回 `401`，系統以 `liquidation_feed_unavailable` 低嚴重度事件降級運行。
+- Evidence: query result `anomaly_events=6`, `market_liquidations=0` after runtime ingestion at `2026-03-02T19:22Z`.
+- 讀寫分離檢查: 通過（僅後端數據層與排程層）。
+- 白賁極簡檢查: 通過（採用單一路徑降級策略，不引入備援服務）。
+
+### [ ] GitHub Actions Secrets 自動寫入受 PAT 權限阻擋（待補權限或手動設置）
+- Technical Dependency: GitHub REST `/actions/secrets/*`, provided fine-grained PAT.
+- Business Value: 目前 PAT 對 repository secrets API 返回 `403 Resource not accessible by personal access token`，因此需補 `Actions secrets write` 權限或由你在 UI 手動新增兩個 secrets。
+- Required: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
 
 ## Governance Checks
 
