@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-02T19:22:42Z`
+- Last Updated (UTC): `2026-03-02T19:43:40Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -664,6 +664,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Validation performed in backend storage/runtime layer only.
 - Bai Ben (Minimalism) Review: Pass. No additional services introduced; verification reused the same ingestion contract.
 
+### [x] B22_3_GITHUB_ACTIONS_SECRETS_AUTOMATION_ENABLED
+- Technical Dependency: GitHub REST Actions Secrets API (`/actions/secrets/public-key`, `/actions/secrets/{name}`), workflow `ingest_4h.yml`.
+- Business Value: repository-level secrets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` were successfully provisioned via API, removing manual secret setup drift.
+- Read/Write Isolation Review: Pass. Control-plane secret configuration only; no application code-path mutation.
+- Bai Ben (Minimalism) Review: Pass. Reused existing workflow env contract without adding extra secret surface.
+
 ## [BUSINESS_STATUS]
 
 ### [x] 撠?撌脣?? Local-only ?瑁??箇?
@@ -935,6 +941,20 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Technical Dependency: GitHub REST `/actions/secrets/*`, provided fine-grained PAT.
 - Business Value: 目前 PAT 對 repository secrets API 返回 `403 Resource not accessible by personal access token`，因此需補 `Actions secrets write` 權限或由你在 UI 手動新增兩個 secrets。
 - Required: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+
+### [x] GitHub Actions Secrets 已改由高權限 PAT 自動寫入完成
+- Technical Dependency: GitHub PAT (`workflow/repo/admin` scope), REST `/actions/secrets/*`.
+- Business Value: `SUPABASE_URL` 與 `SUPABASE_SERVICE_ROLE_KEY` 已完成 API 寫入，排程配置已對齊執行環境。
+- Evidence: API responses `204` for both secrets.
+- 讀寫分離檢查: 通過（僅控制平面憑證設定）。
+- 白賁極簡檢查: 通過（僅兩個必要 secrets）。
+
+### [ ] ingest-market-4h 首次 dispatch 遭遇 startup_failure（平台層阻塞待解）
+- Technical Dependency: GitHub Actions run `22592663863` for workflow `.github/workflows/ingest_4h.yml`.
+- Business Value: dispatch 已成功送達（204），但 run 立即 `startup_failure` 且 `jobs=[]`，表示阻塞位於 GitHub Actions 平台/倉庫運行層，而非 workflow 腳本步驟邏輯。
+- Evidence: run status `completed/startup_failure`, jobs endpoint returns zero jobs.
+- 讀寫分離檢查: 通過（狀態觀測與控制平面排查）。
+- 白賁極簡檢查: 通過（未新增 workaround runner 服務）。
 
 ## Governance Checks
 
