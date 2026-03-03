@@ -118,6 +118,8 @@
   function getAnalysisSlugFromLocation() {
     const match = String(window.location.pathname || "").match(/^\/analysis\/([^/?#]+)$/i);
     if (match) return String(match[1]).trim().toLowerCase();
+    const isVault = /^\/vault\/?$/i.test(String(window.location.pathname || ""));
+    if (isVault) return "vault";
     const shell = document.querySelector(".paywall-shell");
     const fromAttr = shell?.getAttribute("data-slug") || "";
     return String(fromAttr).trim().toLowerCase();
@@ -149,8 +151,10 @@
     return "Unlock failed. Please retry.";
   }
 
-  async function connectWalletAndUnlock() {
-    const slug = getAnalysisSlugFromLocation();
+  async function connectWalletAndUnlock(slugOverride = "") {
+    const slug = String(slugOverride || getAnalysisSlugFromLocation() || "analysis")
+      .trim()
+      .toLowerCase();
     if (!slug) return;
     const shell = document.querySelector(".paywall-shell");
     const alreadyUnlocked = shell?.getAttribute("data-unlocked") === "1";
@@ -188,7 +192,8 @@
       });
 
       revealUnlockedContent();
-      setLockMessage("Access verified. Reloading full report...");
+      const pageType = String(document.body?.getAttribute("data-page") || "").toLowerCase();
+      setLockMessage(pageType === "vault" ? "Waiting for Model Synced" : "Access verified. Reloading full report...");
       window.setTimeout(() => window.location.reload(), 520);
     } catch (err) {
       setLockMessage(mapUnlockError(err));

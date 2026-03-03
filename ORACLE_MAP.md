@@ -1163,6 +1163,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - 讀寫分離檢查: 通過（僅後端數據層新增寫入邏輯）。
 - 白賁極簡檢查: 通過（LLM 層預設 mock，保留 Gemini key 介面不強耦合）。
 
+### [x] B23_VAULT_PREHEAT_ROUTE_AND_SIGNAL_SCHEMA
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.css`, `support/web/ouroboros.js`, `supabase/schema_signals.sql`.
+- Business Value: added a dedicated `/vault` preheat gate with signature-aware states (`Waiting for Model Synced` vs `.unlock-btn`) and pre-allocated `model_signals` storage schema for post-training signal output.
+- Read/Write Isolation Review: Pass. Frontend route/presentation and schema prototype only; no mutation to engine training logic.
+- Bai Ben (Minimalism) Review: Pass. Reused existing wallet-signature flow and CSS system with one new route and one schema file.
+
+### [x] Phase 3.6 `/vault` 預熱頁與信號欄位預留完成
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.css`, `support/web/ouroboros.js`, `supabase/schema_signals.sql`.
+- Business Value: 在模型仍訓練中先完成「視覺占位 + 權限預設 + signals schema 原型」，前台可直接展示金庫校準狀態並沿用既有簽名解鎖契約。
+- 讀寫分離檢查: 通過（僅 support 站點與 Supabase schema 原型，未觸動引擎訓練流程）。
+- 白賁極簡檢查: 通過（沿用既有 unlock API，僅新增 `/vault` 路由與最小樣式擴充）。
+
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`

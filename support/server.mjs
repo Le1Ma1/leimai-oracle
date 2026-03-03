@@ -215,7 +215,7 @@ function verifyUnlockToken(token) {
 function buildUnlockCookie(token) {
   const attrs = [
     `${UNLOCK_COOKIE_NAME}=${encodeURIComponent(token)}`,
-    "Path=/analysis",
+    "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.max(60, Math.floor(CONFIG.unlockTtlSec))}`,
@@ -227,7 +227,7 @@ function buildUnlockCookie(token) {
 function clearUnlockCookie() {
   const attrs = [
     `${UNLOCK_COOKIE_NAME}=`,
-    "Path=/analysis",
+    "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     "Max-Age=0",
@@ -992,6 +992,55 @@ function renderRootLandingPage(reports) {
   });
 }
 
+function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
+  const gateText = signed
+    ? "Waiting for Model Synced"
+    : "Sovereign Trading Model: Calibrating. Access Restricted to Protocol Signers.";
+  const actionHtml = signed
+    ? `<div class="vault-sync-state terminal-font">${escapeHtml(
+        unlockedAddress ? `SESSION VERIFIED: ${unlockedAddress}` : "SESSION VERIFIED",
+      )}</div>`
+    : `<button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>`;
+
+  const bodyHtml = `<main class="site-wrap">
+    <header class="hero hero-compact glass-panel cyber-border">
+      <div class="hero-kicker terminal-font">VAULT PREHEAT</div>
+      <h1 class="neon-text">Obsidian Vault</h1>
+      <p>Protocol gate is armed while the sovereign model is still calibrating.</p>
+      <div class="hero-cta-row">
+        <a class="btn" href="/">Back to Root</a>
+        <a class="btn btn-main" href="/analysis/">Analysis Matrix</a>
+      </div>
+    </header>
+
+    <section class="panel glass-panel cyber-border vault-panel">
+      <div class="vault-stage">
+        <div class="obsidian-vault-door pulse-glow" aria-hidden="true"></div>
+        <div class="lock-message">${escapeHtml(gateText)}</div>
+        ${actionHtml}
+      </div>
+    </section>
+  </main>`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: "LeiMai Oracle Vault",
+    url: `${ROOT_CANONICAL_URL}vault`,
+    description: "Preheat access gate for protocol-signed users while model calibration is in progress.",
+    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+  };
+
+  return renderOuroborosDocument({
+    title: "LeiMai Oracle | Vault Preheat",
+    description: gateText,
+    bodyHtml,
+    jsonLd,
+    canonicalUrl: `${ROOT_CANONICAL_URL}vault`,
+    pageType: "vault",
+  });
+}
+
 function renderAnalysisIndexPage(reports) {
   const rows = Array.isArray(reports) ? reports : [];
   const cardHtml = rows.map(buildReportCard).join("");
@@ -1224,7 +1273,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   if (pathname === "/sitemap.xml") {
     const analysisPaths = await fetchAnalysisPaths(5000);
-    textResponse(res, 200, buildSitemap(CONFIG.siteUrl, analysisPaths), "application/xml; charset=utf-8");
+    textResponse(res, 200, buildSitemap(CONFIG.siteUrl, ["/vault", ...analysisPaths]), "application/xml; charset=utf-8");
     return true;
   }
   if (pathname === "/llms.txt") {
@@ -1234,6 +1283,22 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (pathname === "/") {
     const reports = await fetchLatestReports(5);
     textResponse(res, 200, renderRootLandingPage(reports), "text/html; charset=utf-8");
+    return true;
+  }
+  if (pathname === "/vault") {
+    const unlockSession = getUnlockSessionFromReq(req);
+    if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
+      res.setHeader("Set-Cookie", clearUnlockCookie());
+    }
+    textResponse(
+      res,
+      200,
+      renderVaultPage({
+        signed: Boolean(unlockSession),
+        unlockedAddress: unlockSession?.addr || null,
+      }),
+      "text/html; charset=utf-8",
+    );
     return true;
   }
 
