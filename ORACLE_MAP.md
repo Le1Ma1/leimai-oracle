@@ -1175,6 +1175,20 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - 讀寫分離檢查: 通過（僅 support 站點與 Supabase schema 原型，未觸動引擎訓練流程）。
 - 白賁極簡檢查: 通過（沿用既有 unlock API，僅新增 `/vault` 路由與最小樣式擴充）。
 
+### [x] Phase 3.6 Cloud Push + Supabase Apply 完成
+- Technical Dependency: Git commit `1be581b`, `origin/main`, Supabase Postgres `db.mprzdnlpiginhabgajjh.supabase.co`, `supabase/schema_signals.sql`.
+- Business Value: `/vault` 與 signals 原型已正式上傳主分支；`public.model_signals` 已在 Supabase 建表並啟用 3 條 RLS policy，可直接承接後續 signal 寫入。
+- Evidence: push `ae7dce0..1be581b`; DB check `to_regclass('public.model_signals')=model_signals`, `policy_count=3`.
+- Read/Write Isolation Review: Pass. Website/runtime + schema provisioning only; no training-core mutation.
+- Bai Ben (Minimalism) Review: Pass. Reused existing infra and one prototype schema.
+
+### [ ] BTC Stage-1 Recovery (Institutional Last-Cycle) 進行中
+- Technical Dependency: `scripts/alpha_supervisor.py --symbols BTCUSDT --skip-ingest --cycles 1 --max-rounds 1 --target-pass-rate 0.20 --target-deploy-symbols 1 --target-deploy-rules 2 --target-all-alpha -6.00 --target-deploy-alpha 0.00 --stable-rounds 1 --with-monitor --monitor-interval 2`.
+- Business Value: 針對 100% 完成但 0 deploy 的卡點，改走單 cycle institutional 驗證路線，優先恢復 deploy pool 再進一步拉升品質門檻。
+- Evidence: active run `iter_r1_b5d6859cb435`; monitor state `running`; process chain active (`alpha_supervisor_pid=22464`, `iterate_pid=29548`).
+- 讀寫分離檢查: 通過（純後端運行時調度與監控，未污染前端輸出契約）。
+- 白賁極簡檢查: 通過（未改動策略核心代碼，僅切換監督配置）。
+
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`
