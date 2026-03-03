@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T13:08:16Z`
+- Last Updated (UTC): `2026-03-03T13:49:19Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -757,6 +757,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Only runtime config/deploy and production verification flow updated.
 - Bai Ben (Minimalism) Review: Pass. No new service; reuses existing support+Supabase contracts.
 
+### [x] B25_9_DOMAIN_MIGRATION_AUTOMATION_STACK
+- Technical Dependency: `scripts/vercel_ops.py`, `scripts/cloudflare_ops.py`, `.github/workflows/vercel_env_sync.yml`, `support/server.mjs`, `support/lib/seo.mjs`, `support/.env.example`, `engine/src/generate_reports.py`.
+- Business Value: automated domain migration contract is now active for `leimai.io`: Vercel domain sync + Cloudflare DNS upsert + app-level legacy redirect policy + canonical switch.
+- Evidence: workflow run `22625781824` success; logs contain `DOMAIN_SYNC_DONE failed=0` and `CF_SYNC_DONE unchanged=3`.
+- Read/Write Isolation Review: Pass. Changes are limited to infra control-plane and support SEO routing; engine strategy/training contracts untouched.
+- Bai Ben (Minimalism) Review: Pass. Reused existing workflow/script path with one focused Cloudflare script.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -834,6 +841,16 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: live verification at `2026-03-03T13:07:42Z` inserted records into `user_access_logs` with slug `btc-2020-now-regime`.
 - 讀寫分離檢查: 通過（僅配置+部署+驗證，無策略代碼變更）。
 - 白賁極簡檢查: 通過（沿用現有路徑，補齊單一缺失金鑰）。
+
+### [x] Phase 3.5 疆域遷移完成（leimai.io 主權節點上線）
+- Technical Dependency: `scripts/vercel_ops.py`, `scripts/cloudflare_ops.py`, `.github/workflows/vercel_env_sync.yml`, `support/server.mjs`, `support/lib/seo.mjs`.
+- Business Value: `leimai.io` 已成為主體入口與 canonical 主節點；`leimaitech.com` 在 Vercel domain 層設為 301 redirect 到 `.io`，站內亦有 host-based 301 補強，SEO/GEO 權重可連續繼承。
+- Evidence:
+  - `curl -I https://leimaitech.com/analysis/btc-2020-now-regime?x=1` -> `301` to `https://leimai.io/...`
+  - `curl -s https://leimai.io/` contains canonical `https://leimai.io/`
+  - Vercel domains show redirects: `leimaitech.com -> leimai.io`, `www.leimaitech.com -> leimai.io`, `support.leimaitech.com -> support.leimai.io`.
+- 讀寫分離檢查: 通過（僅網域控制平面、support 路由與 SEO 常量更新）。
+- 白賁極簡檢查: 通過（無新增基礎設施服務，維持單一部署與腳本閉環）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
