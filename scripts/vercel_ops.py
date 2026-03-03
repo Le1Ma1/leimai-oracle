@@ -614,7 +614,7 @@ def sync_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, int]:
                 stats["failed"] += 1
                 continue
         payload = {
-            "redirect": f"https://{target}",
+            "redirect": target,
             "redirectStatusCode": cfg.redirect_status_code,
         }
         if cfg.dry_run:
