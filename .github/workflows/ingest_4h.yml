@@ -66,3 +66,15 @@ jobs:
           ORACLE_UNIQUE_ENTITY: LeiMai Liquidity Friction
         run: |
           python -m engine.src.generate_reports
+
+      - name: Profile wallet entities
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DEBANK_API_KEY: ${{ secrets.DEBANK_API_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          RPC_URL_ETH: https://cloudflare-eth.com
+          ENTITY_PROFILER_TIMEOUT_SEC: "12"
+          ENTITY_ETH_USD_FALLBACK: "3000"
+        run: |
+          python scripts/entity_profiler.py --limit 300 --lookback-hours 96

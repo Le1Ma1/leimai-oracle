@@ -211,6 +211,99 @@
     }
   }
 
+  function setPaymentResult(text, isOk = true) {
+    const node = document.getElementById("paymentResult");
+    if (!node) return;
+    node.textContent = String(text || "");
+    node.style.color = isOk ? "" : "#ffb3b3";
+  }
+
+  function closePaymentModal() {
+    const modal = document.getElementById("paymentModal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function openPaymentModal(invoice) {
+    const modal = document.getElementById("paymentModal");
+    if (!modal) return;
+    const setText = (id, value) => {
+      const node = document.getElementById(id);
+      if (node) node.textContent = String(value ?? "-");
+    };
+    setText("invoiceIdField", invoice.invoice_id);
+    setText("invoicePlanField", invoice.plan_code);
+    setText("invoiceAmountField", `${invoice.amount_usdt} USDT`);
+    setText("invoiceAddressField", invoice.pay_to_address);
+    setText("invoiceNonceField", invoice.nonce);
+    setText("invoiceExpiryField", invoice.expires_at_utc);
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function bindPaymentModalClose() {
+    const closeBtn = document.getElementById("paymentModalCloseBtn");
+    const modal = document.getElementById("paymentModal");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        closePaymentModal();
+      });
+    }
+    if (modal) {
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closePaymentModal();
+        }
+      });
+    }
+  }
+
+  function getVaultUnlockedAddress() {
+    const stage = document.querySelector(".vault-stage");
+    const fromStage = String(stage?.getAttribute("data-unlocked-address") || "").trim();
+    if (fromStage) return fromStage;
+    const shell = document.querySelector(".paywall-shell");
+    const fromShell = String(shell?.getAttribute("data-unlocked-address") || "").trim();
+    return fromShell;
+  }
+
+  function mapPaymentError(err) {
+    const message = String(err?.message || "").toLowerCase();
+    if (message.includes("unlock_required")) return "Unlock session required before creating invoice.";
+    if (message.includes("wallet_session_mismatch")) return "Wallet mismatch. Re-sign wallet contract and retry.";
+    if (message.includes("rate_limited")) return "Too many payment requests. Please wait.";
+    return "Payment invoice creation failed. Please retry.";
+  }
+
+  function bindUpgradeButton() {
+    const buttons = Array.from(document.querySelectorAll(".upgrade-btn"));
+    if (buttons.length === 0) return;
+    for (const button of buttons) {
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const plan = String(button.getAttribute("data-plan") || "sovereign").trim().toLowerCase();
+        const walletAddress = getVaultUnlockedAddress();
+        button.disabled = true;
+        setPaymentResult("Creating payment invoice...", true);
+        try {
+          const invoice = await fetchJson("/api/v1/payment/create", {
+            plan_code: plan,
+            wallet_address: walletAddress,
+            slug: "vault",
+          });
+          setPaymentResult("Invoice ready. Transfer to the designated address before expiry.", true);
+          openPaymentModal(invoice);
+        } catch (err) {
+          setPaymentResult(mapPaymentError(err), false);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+  }
+
   function initVaultSequence() {
     const overlay = document.getElementById("vaultOverlay");
     if (!overlay) return;
@@ -400,6 +493,8 @@
     formatUtcNodes();
     bindSearch();
     bindUnlockButton();
+    bindUpgradeButton();
+    bindPaymentModalClose();
     initVaultSequence();
     initObsidianBackground(config);
   });

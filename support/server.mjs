@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { getAddress, verifyMessage } from "ethers";
@@ -41,6 +42,7 @@ const PAYWALL_SELECTOR = ".paywall-locked-content";
 const PAYWALL_NOTICE = "\u6b64\u9810\u8a00\u53d7 LeiMai \u6b0a\u9650\u5354\u8b70\u4fdd\u8b77\uff0c\u8acb\u9023\u63a5\u51b7\u9322\u5305\u7c3d\u7f72\u300e\u929c\u5c3e\u86c7\u5951\u7d04\u300f\u4ee5\u89e3\u9396 Alpha \u5168\u6587\u3002";
 const NEGOTIATING_NOTICE = "Negotiating Secure Enclave...";
 const UNLOCK_COOKIE_NAME = "leimai_unlock";
+const PAYMENT_PLAN_CODES = new Set(["sovereign", "elite"]);
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -104,6 +106,9 @@ const CONFIG = {
   sessionSecret: process.env.SUPPORT_SESSION_SECRET || "",
   authNonceTtlSec: numberEnv("SUPPORT_AUTH_NONCE_TTL_SEC", 300),
   unlockTtlSec: numberEnv("SUPPORT_UNLOCK_TTL_SEC", 86400),
+  paymentInvoiceTtlSec: numberEnv("SUPPORT_PAYMENT_INVOICE_TTL_SEC", 1200),
+  planSovereignUsdt: numberEnv("SUPPORT_PLAN_SOVEREIGN_USDT", 199),
+  planEliteUsdt: numberEnv("SUPPORT_PLAN_ELITE_USDT", 499),
   cookieSecure: boolEnv("SUPPORT_COOKIE_SECURE", IS_VERCEL_RUNTIME),
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
 };
@@ -656,6 +661,82 @@ async function logUserAccess({ walletAddress, slug }) {
   return !error;
 }
 
+function normalizePlanCode(raw) {
+  const plan = String(raw || "sovereign").trim().toLowerCase();
+  return PAYMENT_PLAN_CODES.has(plan) ? plan : "sovereign";
+}
+
+function resolvePlanAmountUsdt(planCode) {
+  const plan = normalizePlanCode(planCode);
+  if (plan === "elite") return Number(CONFIG.planEliteUsdt || 499);
+  return Number(CONFIG.planSovereignUsdt || 199);
+}
+
+function generateInvoiceId() {
+  const ts = Math.floor(nowMs() / 1000).toString(36);
+  const rand = randomBytes(4).toString("hex");
+  return `inv_${ts}_${rand}`;
+}
+
+function generatePaymentNonce() {
+  return randomBytes(16).toString("hex");
+}
+
+function buildPaymentInvoiceRecord({ walletAddress, slug, planCode }) {
+  const normalizedSlug = normalizeReportSlug(slug || "vault") || "vault";
+  const normalizedPlan = normalizePlanCode(planCode);
+  const ttlSec = Math.max(300, Math.floor(CONFIG.paymentInvoiceTtlSec || 1200));
+  const expiresAt = new Date(nowMs() + ttlSec * 1000);
+  return {
+    invoice_id: generateInvoiceId(),
+    wallet_address: walletAddress || null,
+    slug: normalizedSlug,
+    plan_code: normalizedPlan,
+    amount_usdt: resolvePlanAmountUsdt(normalizedPlan),
+    pay_to_address: CONFIG.supportAddress,
+    nonce: generatePaymentNonce(),
+    status: "pending",
+    expires_at_utc: expiresAt.toISOString(),
+    meta: {
+      source: "phase4_mock_payment",
+      created_via: "/api/v1/payment/create",
+    },
+  };
+}
+
+async function recordPaymentInvoice(invoice) {
+  const client = getSupabaseServiceClient();
+  if (!client) {
+    return { ok: false, error: "payment_storage_unavailable" };
+  }
+  const { error } = await client.from("payment_invoices").insert(invoice);
+  if (error) {
+    return { ok: false, error: `payment_insert_failed:${error.message || error.code || "unknown"}` };
+  }
+  return { ok: true };
+}
+
+function triggerEntityProfilerForAddress(walletAddress) {
+  const canonicalAddress = toCanonicalAddress(walletAddress);
+  if (!canonicalAddress || IS_VERCEL_RUNTIME) return;
+  const cwd = path.resolve(__dirname, "..");
+  const pythonBin = process.env.SUPPORT_PYTHON_BIN || "python";
+  try {
+    const proc = spawn(
+      pythonBin,
+      ["scripts/entity_profiler.py", "--address", canonicalAddress, "--limit", "50"],
+      {
+        cwd,
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    proc.unref();
+  } catch {
+    // profiler trigger is best-effort and should not affect unlock flow
+  }
+}
+
 function normalizeReportRow(raw) {
   const row = raw && typeof raw === "object" ? raw : {};
   return {
@@ -999,7 +1080,9 @@ function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
   const actionHtml = signed
     ? `<div class="vault-sync-state terminal-font">${escapeHtml(
         unlockedAddress ? `SESSION VERIFIED: ${unlockedAddress}` : "SESSION VERIFIED",
-      )}</div>`
+      )}</div>
+      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign">[ UPGRADE TO SOVEREIGN ]</button>
+      <div id="paymentResult" class="payment-result muted"></div>`
     : `<button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>`;
 
   const bodyHtml = `<main class="site-wrap">
@@ -1014,12 +1097,27 @@ function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
     </header>
 
     <section class="panel glass-panel cyber-border vault-panel">
-      <div class="vault-stage">
+      <div class="vault-stage" data-unlocked-address="${escapeHtml(unlockedAddress || "")}">
         <div class="obsidian-vault-door pulse-glow" aria-hidden="true"></div>
         <div class="lock-message">${escapeHtml(gateText)}</div>
         ${actionHtml}
       </div>
     </section>
+
+    <div id="paymentModal" class="payment-modal" aria-hidden="true">
+      <div class="payment-modal-card glass-panel cyber-border">
+        <button id="paymentModalCloseBtn" class="payment-close-btn" type="button">[ CLOSE ]</button>
+        <h2 class="neon-text">Sovereign Invoice</h2>
+        <div class="invoice-grid terminal-font">
+          <div><span>INVOICE</span><strong id="invoiceIdField">-</strong></div>
+          <div><span>PLAN</span><strong id="invoicePlanField">-</strong></div>
+          <div><span>AMOUNT</span><strong id="invoiceAmountField">-</strong></div>
+          <div><span>ADDRESS</span><strong id="invoiceAddressField">-</strong></div>
+          <div><span>NONCE</span><strong id="invoiceNonceField">-</strong></div>
+          <div><span>EXPIRES</span><strong id="invoiceExpiryField">-</strong></div>
+        </div>
+      </div>
+    </div>
   </main>`;
 
   const jsonLd = {
@@ -1660,11 +1758,49 @@ export async function handleRequest(req, res) {
       }
       res.setHeader("Set-Cookie", buildUnlockCookie(token));
       await logUserAccess({ walletAddress: address, slug }).catch(() => false);
+      triggerEntityProfilerForAddress(address);
 
       return jsonResponse(res, 200, {
         ok: true,
         address,
         unlock_expires_at_utc: new Date(expireSec * 1000).toISOString(),
+      });
+    }
+
+    if (method === "POST" && pathname === "/api/v1/payment/create") {
+      if (!checkRateLimit(req, "payment_create", CONFIG.rateLimitPerMinute)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const session = getUnlockSessionFromReq(req);
+      if (!session) {
+        return jsonResponse(res, 401, { ok: false, error: "unlock_required" });
+      }
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const bodyAddress = String(body?.wallet_address || "").trim();
+      const sessionAddress = toCanonicalAddress(session.addr || "");
+      const providedAddress = bodyAddress ? toCanonicalAddress(bodyAddress) : sessionAddress;
+      if (!sessionAddress || !providedAddress || providedAddress !== sessionAddress) {
+        return jsonResponse(res, 400, { ok: false, error: "wallet_session_mismatch" });
+      }
+      const invoice = buildPaymentInvoiceRecord({
+        walletAddress: providedAddress,
+        slug: body?.slug || "vault",
+        planCode: body?.plan_code || "sovereign",
+      });
+      const record = await recordPaymentInvoice(invoice);
+      if (!record.ok) {
+        return jsonResponse(res, 500, { ok: false, error: record.error || "payment_record_failed" });
+      }
+      return jsonResponse(res, 200, {
+        ok: true,
+        invoice_id: invoice.invoice_id,
+        status: invoice.status,
+        wallet_address: invoice.wallet_address,
+        plan_code: invoice.plan_code,
+        amount_usdt: invoice.amount_usdt,
+        pay_to_address: invoice.pay_to_address,
+        nonce: invoice.nonce,
+        expires_at_utc: invoice.expires_at_utc,
       });
     }
 

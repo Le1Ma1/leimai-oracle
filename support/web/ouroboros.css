@@ -569,6 +569,82 @@ a {
   padding: 10px 14px;
 }
 
+.upgrade-btn {
+  border: 1px solid rgba(var(--accent-rgb), 0.62);
+  background: rgba(5, 8, 12, 0.82);
+  color: var(--accent);
+  padding: 10px 16px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.upgrade-btn:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
+.payment-result {
+  min-height: 18px;
+}
+
+.payment-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(2, 4, 6, 0.76);
+}
+
+.payment-modal.open {
+  display: flex;
+}
+
+.payment-modal-card {
+  width: min(640px, 96vw);
+  padding: 18px;
+}
+
+.payment-close-btn {
+  border: 1px solid rgba(var(--accent-rgb), 0.38);
+  background: rgba(3, 6, 9, 0.75);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  float: right;
+}
+
+.invoice-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.invoice-grid div {
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  background: rgba(4, 8, 11, 0.66);
+  padding: 9px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.invoice-grid span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.invoice-grid strong {
+  color: #fff;
+  font-size: 11px;
+  word-break: break-all;
+}
+
 @keyframes pulseGlow {
   0%,
   100% {

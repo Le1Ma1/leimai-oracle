@@ -1189,6 +1189,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - 讀寫分離檢查: 通過（純後端運行時調度與監控，未污染前端輸出契約）。
 - 白賁極簡檢查: 通過（未改動策略核心代碼，僅切換監督配置）。
 
+### [ ] P4_1_WHALE_ANALYTICS_AND_PAYMENT_STATE_MACHINE (in progress)
+- [LOGIC_CORE] Technical Dependency: `supabase/schema_phase4_whale.sql`, `scripts/entity_profiler.py`, `support/server.mjs:/api/v1/payment/create`, `support/web/ouroboros.{js,css}`, `.github/workflows/ingest_4h.yml`.
+- [LOGIC_CORE] Business Value: establish pre-monetization intelligence and payment mock loop: classify signer wallets (`Plankton/Fish/Dolphin/Whale/Kraken`) and create pending invoices from `/vault` upgrade CTA.
+- [BUSINESS_STATUS] 商業進度: Phase 4.1 已啟動。先完成「誰在進金庫」的地址分級，再完成「升級按鈕 -> 建立 pending 發票」閉環，為正式支付驗證前的轉化漏斗做壓測。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 support/API/腳本與 schema 擴充）；白賁通過（延用既有 Supabase 與 unlock 流程，不增加不必要服務）。
+
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`
