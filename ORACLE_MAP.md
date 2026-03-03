@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T09:47:20Z`
+- Last Updated (UTC): `2026-03-03T12:23:53Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -724,6 +724,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Changes are constrained to support rendering/visual runtime; ingestion and model training pipelines are untouched.
 - Bai Ben (Minimalism) Review: Pass. Implemented in-place via existing support routes/assets without adding new services.
 
+### [x] B25_4_VISUAL_MEMORY_AND_SELF_CARE_LOOP
+- Technical Dependency: `scripts/visual_snapshot.py`, `scripts/visual_autotune.py`, `.github/workflows/autonomic_evolution.yml`, `.cursorrules`.
+- Business Value: introduced a minimal visual self-management loop (snapshot -> one-line vision note -> memory-aware micro tune -> auto commit/push) so style evolution is continuous without heavyweight QA reports.
+- Read/Write Isolation Review: Pass. Loop mutates only visual-layer files and logs; backend ingestion/model pipelines remain isolated.
+- Bai Ben (Minimalism) Review: Pass. Uses two lightweight scripts and one workflow without adding new infrastructure services.
+
+### [x] B25_5_WEB3_PAYWALL_SIGNATURE_UNLOCK
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `supabase/schema_user_access_logs.sql`, `support/.env.example`, `package.json`.
+- Business Value: added wallet challenge/signature verification flow (`personal_sign` -> `verifyMessage`) with HttpOnly signed unlock session, enabling `/analysis/:slug` full-content unlock for verified wallets.
+- Read/Write Isolation Review: Pass. Unlock logic is isolated to support auth/render path; engine data/training modules are untouched.
+- Bai Ben (Minimalism) Review: Pass. Reuses existing support runtime and Supabase contracts with one compact telemetry table.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -761,6 +773,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Business Value: 首頁與分析頁已回復曜石賽博風格，動態報告卡、時間戳、Markdown 內容、Paywall 鎖區與曼陀羅儀式全面統一；同時加入時區感知配色（財富樞紐=金色，其餘=白金）以提升高淨值識別感。
 - 讀寫分離檢查: 通過（僅 support 呈現層改造，資料抓取/生成鏈路未改）。
 - 白賁極簡檢查: 通過（沿用既有 `server.mjs` 與靜態資產，無新增框架與服務）。
+
+### [x] 視覺自覺閉環已上線（Snapshot + 記憶 + 微調）
+- Technical Dependency: `scripts/visual_snapshot.py`, `scripts/visual_autotune.py`, `.github/workflows/autonomic_evolution.yml`, `logs/visual_state.json`, `logs/current_vibe.png`.
+- Business Value: 每輪先拍首頁/詳情合成快照，生成一句視覺狀態筆記，再依記憶做小幅樣式與模板修正，讓 UI 迭代可持續且不跑偏。
+- 讀寫分離檢查: 通過（僅視覺層與自動化流程更新，不觸碰交易引擎訓練路徑）。
+- 白賁極簡檢查: 通過（不引入新服務，維持最小腳本閉環）。
+
+### [x] Phase 3.3 Web3 解鎖已落地（簽名驗證 + Session + 解鎖記錄）
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `supabase/schema_user_access_logs.sql`, `support/.env.example`, `package.json`.
+- Business Value: 解鎖按鈕已具備真實功能，訪客可透過錢包簽名完成權限驗證；驗證成功後注入 HttpOnly session 並開放 `/analysis/:slug` 全文，同步寫入地址/slug/時間供高價值內容分析。
+- 讀寫分離檢查: 通過（僅 support 認證與呈現層更新，量化引擎與資料訓練流程未改）。
+- 白賁極簡檢查: 通過（沿用現有 server runtime 與 Supabase，僅新增最小 telemetry table）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.

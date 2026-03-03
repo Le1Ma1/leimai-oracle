@@ -95,6 +95,117 @@
     applyFilter();
   }
 
+  async function fetchJson(url, payload) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload || {}),
+    });
+    let data = {};
+    try {
+      data = await resp.json();
+    } catch {
+      data = {};
+    }
+    if (!resp.ok || data?.ok === false) {
+      const err = data?.error ? String(data.error) : `http_${resp.status}`;
+      throw new Error(err);
+    }
+    return data;
+  }
+
+  function getAnalysisSlugFromLocation() {
+    const match = String(window.location.pathname || "").match(/^\/analysis\/([^/?#]+)$/i);
+    if (match) return String(match[1]).trim().toLowerCase();
+    const shell = document.querySelector(".paywall-shell");
+    const fromAttr = shell?.getAttribute("data-slug") || "";
+    return String(fromAttr).trim().toLowerCase();
+  }
+
+  function setLockMessage(text) {
+    const nodes = Array.from(document.querySelectorAll(".lock-message"));
+    for (const node of nodes) {
+      node.textContent = text;
+    }
+  }
+
+  function revealUnlockedContent() {
+    const shells = Array.from(document.querySelectorAll(".paywall-shell"));
+    for (const shell of shells) {
+      shell.classList.add("is-unlocked");
+      shell.setAttribute("data-unlocked", "1");
+    }
+  }
+
+  function mapUnlockError(err) {
+    const message = String(err?.message || "").toLowerCase();
+    if (message.includes("user rejected")) return "Signature rejected by wallet.";
+    if (message.includes("unlock_not_configured")) return "Unlock service is not configured.";
+    if (message.includes("invalid_signature")) return "Invalid signature. Please retry.";
+    if (message.includes("challenge")) return "Challenge expired. Please retry.";
+    if (message.includes("mismatch")) return "Address mismatch detected.";
+    if (message.includes("rate_limited")) return "Too many attempts. Please wait.";
+    return "Unlock failed. Please retry.";
+  }
+
+  async function connectWalletAndUnlock() {
+    const slug = getAnalysisSlugFromLocation();
+    if (!slug) return;
+    const shell = document.querySelector(".paywall-shell");
+    const alreadyUnlocked = shell?.getAttribute("data-unlocked") === "1";
+    if (alreadyUnlocked) return;
+
+    const ethereum = window.ethereum;
+    if (!ethereum || typeof ethereum.request !== "function") {
+      setLockMessage("Wallet not found. Please install a Web3 wallet.");
+      return;
+    }
+
+    try {
+      setLockMessage("Negotiating Secure Enclave...");
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+      const address = Array.isArray(accounts) ? String(accounts[0] || "") : "";
+      if (!address) {
+        throw new Error("wallet_address_missing");
+      }
+
+      const challenge = await fetchJson("/api/v1/auth/wallet/challenge", { slug });
+      const message = String(challenge?.message || "");
+      if (!message) throw new Error("challenge_empty");
+
+      const signature = await ethereum.request({
+        method: "personal_sign",
+        params: [message, address],
+      });
+      if (!signature) throw new Error("signature_missing");
+
+      await fetchJson("/api/v1/auth/wallet/verify", {
+        address,
+        signature,
+        message,
+        slug,
+      });
+
+      revealUnlockedContent();
+      setLockMessage("Access verified. Reloading full report...");
+      window.setTimeout(() => window.location.reload(), 520);
+    } catch (err) {
+      setLockMessage(mapUnlockError(err));
+    }
+  }
+
+  function bindUnlockButton() {
+    const buttons = Array.from(document.querySelectorAll(".unlock-btn"));
+    if (buttons.length === 0) return;
+    for (const button of buttons) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        void connectWalletAndUnlock();
+      });
+    }
+  }
+
   function initVaultSequence() {
     const overlay = document.getElementById("vaultOverlay");
     if (!overlay) return;
@@ -283,6 +394,7 @@
     applyLuxuryTheme(config);
     formatUtcNodes();
     bindSearch();
+    bindUnlockButton();
     initVaultSequence();
     initObsidianBackground(config);
   });

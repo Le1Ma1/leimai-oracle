@@ -1,8 +1,10 @@
-import http from "node:http";
+﻿import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { getAddress, verifyMessage } from "ethers";
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 
@@ -31,8 +33,9 @@ const DEFAULT_REPORT_LOCALE = "en";
 const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
 const REPORT_PREVIEW_RATIO = 0.2;
 const PAYWALL_SELECTOR = ".paywall-locked-content";
-const PAYWALL_NOTICE = "此預言受 LeiMai 權限協議保護，請連接冷錢包簽署『銜尾蛇契約』以解鎖 Alpha 全文。";
-
+const PAYWALL_NOTICE = "\u6b64\u9810\u8a00\u53d7 LeiMai \u6b0a\u9650\u5354\u8b70\u4fdd\u8b77\uff0c\u8acb\u9023\u63a5\u51b7\u9322\u5305\u7c3d\u7f72\u300e\u929c\u5c3e\u86c7\u5951\u7d04\u300f\u4ee5\u89e3\u9396 Alpha \u5168\u6587\u3002";
+const NEGOTIATING_NOTICE = "Negotiating Secure Enclave...";
+const UNLOCK_COOKIE_NAME = "leimai_unlock";
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -91,7 +94,12 @@ const CONFIG = {
   trongridApiKey: process.env.SUPPORT_TRONGRID_API_KEY || "",
   supabaseUrl: (process.env.SUPABASE_URL || "").replace(/\/+$/, ""),
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   cronSecret: process.env.CRON_SECRET || "",
+  sessionSecret: process.env.SUPPORT_SESSION_SECRET || "",
+  authNonceTtlSec: numberEnv("SUPPORT_AUTH_NONCE_TTL_SEC", 300),
+  unlockTtlSec: numberEnv("SUPPORT_UNLOCK_TTL_SEC", 86400),
+  cookieSecure: boolEnv("SUPPORT_COOKIE_SECURE", IS_VERCEL_RUNTIME),
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
 };
 
@@ -102,6 +110,165 @@ await ensureJsonFile(chainStatePath, DEFAULT_CHAIN_STATE);
 await ensureJsonFile(appStatePath, DEFAULT_APP_STATE);
 
 const rateBucket = new Map();
+const walletChallengeStore = new Map();
+
+function nowMs() {
+  return Date.now();
+}
+
+function base64UrlEncode(raw) {
+  return Buffer.from(raw, "utf-8").toString("base64url");
+}
+
+function base64UrlDecode(raw) {
+  return Buffer.from(String(raw || ""), "base64url").toString("utf-8");
+}
+
+function toCanonicalAddress(address) {
+  try {
+    return getAddress(String(address || "").trim());
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(req) {
+  const raw = String(req.headers?.cookie || "");
+  const out = {};
+  for (const entry of raw.split(";")) {
+    const idx = entry.indexOf("=");
+    if (idx <= 0) continue;
+    const key = entry.slice(0, idx).trim();
+    const val = entry.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function hmacHex(secret, data) {
+  return createHmac("sha256", secret).update(data).digest("hex");
+}
+
+function signUnlockToken(payloadObj) {
+  if (!CONFIG.sessionSecret) return null;
+  const payload = base64UrlEncode(JSON.stringify(payloadObj));
+  const sig = hmacHex(CONFIG.sessionSecret, payload);
+  return `${payload}.${sig}`;
+}
+
+function verifyUnlockToken(token) {
+  if (!CONFIG.sessionSecret) return null;
+  const raw = String(token || "");
+  const idx = raw.indexOf(".");
+  if (idx <= 0) return null;
+  const payload = raw.slice(0, idx);
+  const sig = raw.slice(idx + 1);
+  const expected = hmacHex(CONFIG.sessionSecret, payload);
+  const a = Buffer.from(sig, "utf-8");
+  const b = Buffer.from(expected, "utf-8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+  try {
+    const decoded = JSON.parse(base64UrlDecode(payload));
+    const exp = Number(decoded?.exp || 0);
+    const addr = toCanonicalAddress(decoded?.addr || "");
+    if (!addr || !Number.isFinite(exp) || nowMs() >= exp * 1000) return null;
+    if (decoded?.scope !== "analysis:*") return null;
+    return {
+      addr,
+      iat: Number(decoded?.iat || 0),
+      exp,
+      scope: String(decoded?.scope || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildUnlockCookie(token) {
+  const attrs = [
+    `${UNLOCK_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    "Path=/analysis",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${Math.max(60, Math.floor(CONFIG.unlockTtlSec))}`,
+  ];
+  if (CONFIG.cookieSecure) attrs.push("Secure");
+  return attrs.join("; ");
+}
+
+function clearUnlockCookie() {
+  const attrs = [
+    `${UNLOCK_COOKIE_NAME}=`,
+    "Path=/analysis",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ];
+  if (CONFIG.cookieSecure) attrs.push("Secure");
+  return attrs.join("; ");
+}
+
+function getUnlockSessionFromReq(req) {
+  const cookies = parseCookies(req);
+  const token = cookies[UNLOCK_COOKIE_NAME];
+  if (!token) return null;
+  return verifyUnlockToken(token);
+}
+
+function generateWalletChallenge(slug) {
+  const normalizedSlug = normalizeReportSlug(slug) || "analysis";
+  const nonce = randomBytes(16).toString("hex");
+  const timestamp = new Date(nowMs()).toISOString();
+  const message = [
+    "I am a Sovereign Entity accessing LeiMai Oracle. I agree to the Ouroboros Protocol.",
+    `Timestamp: ${timestamp}.`,
+    `Nonce: ${nonce}.`,
+    `Slug: ${normalizedSlug}`,
+  ].join(" ");
+  const expiresAtMs = nowMs() + Math.max(60, Math.floor(CONFIG.authNonceTtlSec)) * 1000;
+  walletChallengeStore.set(nonce, {
+    nonce,
+    slug: normalizedSlug,
+    message,
+    expiresAtMs,
+    consumed: false,
+  });
+  return {
+    nonce,
+    message,
+    expiresAtUtc: new Date(expiresAtMs).toISOString(),
+  };
+}
+
+function extractNonceFromMessage(message) {
+  const m = String(message || "").match(/Nonce:\s*([a-fA-F0-9]{8,64})\./);
+  return m ? String(m[1]).toLowerCase() : "";
+}
+
+function consumeWalletChallenge(nonce) {
+  const key = String(nonce || "").toLowerCase();
+  const row = walletChallengeStore.get(key);
+  if (!row) return null;
+  walletChallengeStore.delete(key);
+  if (row.consumed) return null;
+  if (!Number.isFinite(row.expiresAtMs) || nowMs() > row.expiresAtMs) return null;
+  return row;
+}
+
+function purgeExpiredChallenges() {
+  const ts = nowMs();
+  for (const [key, row] of walletChallengeStore.entries()) {
+    if (!row || !Number.isFinite(row.expiresAtMs) || ts > row.expiresAtMs) {
+      walletChallengeStore.delete(key);
+    }
+  }
+}
 
 function jsonResponse(res, status, payload) {
   res.writeHead(status, {
@@ -154,6 +321,13 @@ function normalizeTxHash(raw) {
 
 function normalizeWallet(raw) {
   return String(raw || "").trim();
+}
+
+function normalizeReportSlug(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
 }
 
 function getBearerToken(req) {
@@ -425,6 +599,7 @@ function formatMoney(v) {
 }
 
 let supabaseClientSingleton = null;
+let supabaseServiceClientSingleton = null;
 
 function getSupabaseClient() {
   if (supabaseClientSingleton) return supabaseClientSingleton;
@@ -433,6 +608,30 @@ function getSupabaseClient() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return supabaseClientSingleton;
+}
+
+function getSupabaseServiceClient() {
+  if (supabaseServiceClientSingleton) return supabaseServiceClientSingleton;
+  if (!CONFIG.supabaseUrl || !CONFIG.supabaseServiceRoleKey) return null;
+  supabaseServiceClientSingleton = createClient(CONFIG.supabaseUrl, CONFIG.supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseServiceClientSingleton;
+}
+
+async function logUserAccess({ walletAddress, slug }) {
+  const client = getSupabaseServiceClient();
+  if (!client) return false;
+  const canonicalAddress = toCanonicalAddress(walletAddress);
+  const normalizedSlug = String(slug || "").trim().toLowerCase();
+  if (!canonicalAddress || !normalizedSlug) return false;
+  const { error } = await client.from("user_access_logs").insert({
+    wallet_address: canonicalAddress,
+    slug: normalizedSlug,
+    signed_at_utc: nowIso(),
+    source: "wallet_signature",
+  });
+  return !error;
 }
 
 function normalizeReportRow(raw) {
@@ -859,13 +1058,15 @@ function buildMandalaSvg() {
   </svg>`;
 }
 
-function renderAnalysisDetailPage(report) {
-  const previewMarkdown = buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
+function renderAnalysisDetailPage(report, { unlocked = false, unlockedAddress = null } = {}) {
+  const previewMarkdown = unlocked ? String(report.body_md || "") : buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
   const summary = buildSummary(previewMarkdown || report.body_md, 220);
   const markdownHtml = sanitizeMarkdownHtml(previewMarkdown);
   const canonicalUrl = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
   const sourceJsonLd = normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report));
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
+  const paywallShellClass = unlocked ? "paywall-shell is-unlocked" : "paywall-shell";
+  const lockMessage = unlocked ? "Access verified. Reload complete." : PAYWALL_NOTICE;
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
       <div class="hero-kicker terminal-font">ANALYSIS DETAIL</div>
@@ -884,24 +1085,25 @@ function renderAnalysisDetailPage(report) {
         <div class="kv-item"><span>Locale</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
         <div class="kv-item"><span>Unique Entity</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
         <div class="kv-item"><span>Updated (UTC)</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
+        <div class="kv-item"><span>Access</span><strong>${unlocked ? "UNLOCKED" : "LOCKED"}</strong></div>
       </div>
     </section>
 
     <section class="panel glass-panel cyber-border">
-      <h2>Report Preview (20%)</h2>
-      <div class="paywall-shell">
+      <h2>${unlocked ? "Full Report" : "Report Preview (20%)"}</h2>
+      <div class="${paywallShellClass}" data-unlocked="${unlocked ? "1" : "0"}" data-slug="${escapeHtml(report.slug)}" data-unlocked-address="${escapeHtml(unlockedAddress || "")}">
         <div class="obsidian-container">
           <article class="report-article article-body paywall-preview">${markdownHtml}</article>
         </div>
         <div class="paywall-locked-content" aria-label="locked-content">
-          <div class="paywall-fog"></div>
+          <div class="paywall-fog obsidian-fog"></div>
           <div class="mandala-wrap">${buildMandalaSvg()}</div>
-          <div class="lock-message">${escapeHtml(PAYWALL_NOTICE)}</div>
-          <button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>
+          <div class="lock-message">${escapeHtml(lockMessage)}</div>
+          <button class="unlock-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : "[ SIGN OUROBOROS CONTRACT ]"}</button>
         </div>
       </div>
       <div class="route-line terminal-font">/analysis/${escapeHtml(report.slug)}</div>
-      <div class="muted">Access policy: preview only for public web distribution.</div>
+      <div class="muted">${unlocked ? "Access policy: signed wallet verified for this session." : "Access policy: preview only for public web distribution."}</div>
     </section>
 
     <section class="panel glass-panel cyber-border">
@@ -970,7 +1172,11 @@ function goneResponse(res, pathname) {
   res.end(html);
 }
 
-async function handleOuroborosRoutes({ method, pathname, res }) {
+async function handleOuroborosRoutes({ method, pathname, req, res }) {
+  if (String(pathname || "").startsWith("/api/")) {
+    return false;
+  }
+
   if (method !== "GET") {
     goneResponse(res, pathname);
     return true;
@@ -1022,7 +1228,19 @@ async function handleOuroborosRoutes({ method, pathname, res }) {
       textResponse(res, 404, renderAnalysisNotFoundPage(slug), "text/html; charset=utf-8");
       return true;
     }
-    textResponse(res, 200, renderAnalysisDetailPage(entry), "text/html; charset=utf-8");
+    const unlockSession = getUnlockSessionFromReq(req);
+    if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
+      res.setHeader("Set-Cookie", clearUnlockCookie());
+    }
+    textResponse(
+      res,
+      200,
+      renderAnalysisDetailPage(entry, {
+        unlocked: Boolean(unlockSession),
+        unlockedAddress: unlockSession?.addr || null,
+      }),
+      "text/html; charset=utf-8",
+    );
     return true;
   }
 
@@ -1272,8 +1490,86 @@ export async function handleRequest(req, res) {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || `localhost:${CONFIG.port}`}`);
     const { pathname, searchParams } = reqUrl;
     const method = (req.method || "GET").toUpperCase();
-    const routed = await handleOuroborosRoutes({ method, pathname, res });
+    purgeExpiredChallenges();
+    const routed = await handleOuroborosRoutes({ method, pathname, req, res });
     if (routed) return;
+
+    if (method === "POST" && pathname === "/api/v1/auth/wallet/challenge") {
+      if (!CONFIG.sessionSecret) {
+        return jsonResponse(res, 500, { ok: false, error: "unlock_not_configured" });
+      }
+      if (!checkRateLimit(req, "wallet_challenge", CONFIG.rateLimitPerMinute)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const slug = normalizeReportSlug(body?.slug || "analysis");
+      const challenge = generateWalletChallenge(slug);
+      return jsonResponse(res, 200, {
+        ok: true,
+        nonce: challenge.nonce,
+        message: challenge.message,
+        expires_at_utc: challenge.expiresAtUtc,
+      });
+    }
+
+    if (method === "POST" && pathname === "/api/v1/auth/wallet/verify") {
+      if (!CONFIG.sessionSecret) {
+        return jsonResponse(res, 500, { ok: false, error: "unlock_not_configured" });
+      }
+      if (!checkRateLimit(req, "wallet_verify", CONFIG.rateLimitPerMinute)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const address = toCanonicalAddress(body?.address || "");
+      const signature = String(body?.signature || "").trim();
+      const message = String(body?.message || "").trim();
+      const slug = normalizeReportSlug(body?.slug || "");
+      if (!address || !signature || !message || !slug) {
+        return jsonResponse(res, 400, { ok: false, error: "invalid_payload" });
+      }
+
+      const nonce = extractNonceFromMessage(message);
+      if (!nonce) {
+        return jsonResponse(res, 400, { ok: false, error: "invalid_challenge_message" });
+      }
+      const challenge = consumeWalletChallenge(nonce);
+      if (!challenge) {
+        return jsonResponse(res, 401, { ok: false, error: "challenge_expired_or_reused" });
+      }
+      if (challenge.message !== message || challenge.slug !== slug) {
+        return jsonResponse(res, 401, { ok: false, error: "challenge_mismatch" });
+      }
+
+      let recoveredAddress = null;
+      try {
+        recoveredAddress = toCanonicalAddress(verifyMessage(message, signature));
+      } catch {
+        return jsonResponse(res, 401, { ok: false, error: "invalid_signature" });
+      }
+      if (!recoveredAddress || recoveredAddress !== address) {
+        return jsonResponse(res, 401, { ok: false, error: "signature_address_mismatch" });
+      }
+
+      const issuedAtSec = Math.floor(nowMs() / 1000);
+      const expireSec = issuedAtSec + Math.max(60, Math.floor(CONFIG.unlockTtlSec));
+      const token = signUnlockToken({
+        addr: address,
+        iat: issuedAtSec,
+        exp: expireSec,
+        scope: "analysis:*",
+      });
+      if (!token) {
+        return jsonResponse(res, 500, { ok: false, error: "session_sign_failed" });
+      }
+      res.setHeader("Set-Cookie", buildUnlockCookie(token));
+      await logUserAccess({ walletAddress: address, slug }).catch(() => false);
+
+      return jsonResponse(res, 200, {
+        ok: true,
+        address,
+        unlock_expires_at_utc: new Date(expireSec * 1000).toISOString(),
+      });
+    }
 
     if (method === "GET" && pathname === "/assets/styles.css") {
       const css = await fs.readFile(path.join(__dirname, "web", "styles.css"), "utf-8");
@@ -1567,3 +1863,4 @@ if (isDirectRun) {
     console.log(`[support] canonical site url: ${CONFIG.siteUrl}`);
   });
 }
+

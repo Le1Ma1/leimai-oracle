@@ -7,6 +7,8 @@ __pycache__/
 
 engine/data/
 engine/artifacts/
+logs/.home_vibe_tmp.png
+logs/.detail_vibe_tmp.png
 
 node_modules/
 .next/

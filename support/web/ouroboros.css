@@ -314,8 +314,13 @@ a {
   position: relative;
 }
 
+.paywall-shell .paywall-locked-content {
+  transition: opacity 0.45s ease, max-height 0.45s ease, margin-top 0.45s ease, padding 0.45s ease;
+}
+
 .paywall-preview {
   margin: 0;
+  transition: filter 0.35s ease, opacity 0.35s ease;
 }
 
 .paywall-locked-content {
@@ -342,6 +347,26 @@ a {
   pointer-events: none;
   background: linear-gradient(to bottom, rgba(5, 8, 11, 0), rgba(5, 8, 11, 0.95));
   filter: blur(6px);
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+.obsidian-fog {
+  opacity: 1;
+}
+
+.paywall-shell.is-unlocked .paywall-locked-content {
+  opacity: 0;
+  max-height: 0;
+  margin-top: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.paywall-shell.is-unlocked .obsidian-fog {
+  opacity: 0;
+  filter: blur(0);
 }
 
 .mandala-wrap {
@@ -396,6 +421,12 @@ a {
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+.unlock-btn:disabled {
+  opacity: 0.62;
+  cursor: default;
+  animation: none;
 }
 
 .pulse-glow {
