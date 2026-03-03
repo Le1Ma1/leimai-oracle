@@ -58,7 +58,6 @@ jobs:
           python scripts/vercel_ops.py --retry 3 --timeout-sec 15
 
       - name: Sync Cloudflare DNS for leimai.io
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_NAME: leimai.io
@@ -67,4 +66,8 @@ jobs:
           CF_PROXY: "false"
           CF_TTL: "1"
         run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "CLOUDFLARE_API_TOKEN not configured; skip DNS sync."
+            exit 0
+          fi
           python scripts/cloudflare_ops.py --retry 3 --timeout-sec 15
