@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T13:04:59Z`
+- Last Updated (UTC): `2026-03-03T13:08:16Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -750,6 +750,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. DB schema update scoped to support telemetry table.
 - Bai Ben (Minimalism) Review: Pass. Single table contract without cross-module coupling.
 
+### [x] B25_8_PRODUCTION_UNLOCK_FULL_PATH_VERIFIED
+- Technical Dependency: Vercel env (`SUPPORT_SESSION_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`), deployment `dpl_vjhHE9UfJyfPCAudptA4Uc9sn2JA`, support auth APIs.
+- Business Value: wallet challenge -> signature verify -> HttpOnly unlock cookie -> Supabase access log insert is now validated end-to-end on production.
+- Evidence: live `POST /api/v1/auth/wallet/verify` returned `ok=true` and `leimai_unlock` cookie; `user_access_logs` shows new records for slug `btc-2020-now-regime`.
+- Read/Write Isolation Review: Pass. Only runtime config/deploy and production verification flow updated.
+- Bai Ben (Minimalism) Review: Pass. No new service; reuses existing support+Supabase contracts.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -820,6 +827,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: live call `https://leimaitech.com/api/v1/auth/wallet/challenge` at `2026-03-03T13:04:45Z` returned nonce/message payload.
 - 讀寫分離檢查: 通過（部署與線上驗收層，未改模型/資料處理）。
 - 白賁極簡檢查: 通過（沿用現有 API 路徑與部署流水線）。
+
+### [x] Phase 3.4.3 生產解鎖寫庫路徑已驗證
+- Technical Dependency: Vercel env (`SUPABASE_SERVICE_ROLE_KEY`), deployment `dpl_vjhHE9UfJyfPCAudptA4Uc9sn2JA`, Supabase `user_access_logs`.
+- Business Value: 解鎖行為已可回寫 Supabase，後續可直接用 `wallet_address + slug + signed_at_utc` 追蹤高價值內容吸引力。
+- Evidence: live verification at `2026-03-03T13:07:42Z` inserted records into `user_access_logs` with slug `btc-2020-now-regime`.
+- 讀寫分離檢查: 通過（僅配置+部署+驗證，無策略代碼變更）。
+- 白賁極簡檢查: 通過（沿用現有路徑，補齊單一缺失金鑰）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
