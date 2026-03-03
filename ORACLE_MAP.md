@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T12:23:53Z`
+- Last Updated (UTC): `2026-03-03T12:51:07Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -736,6 +736,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Unlock logic is isolated to support auth/render path; engine data/training modules are untouched.
 - Bai Ben (Minimalism) Review: Pass. Reuses existing support runtime and Supabase contracts with one compact telemetry table.
 
+### [x] B25_6_VERCEL_ENV_SYNC_ACTION_EXECUTED
+- Technical Dependency: `.github/workflows/vercel_env_sync.yml`, `scripts/vercel_ops.py`.
+- Business Value: manual `workflow_dispatch` sync completed and pushed latest `SUPABASE_*` + `SUPPORT_*` contract to Vercel targets (`production/preview/development`) with deployment trigger path verified.
+- Evidence: GitHub Actions run `22623724541` concluded `success` at `2026-03-03T12:49:17Z`.
+- Read/Write Isolation Review: Pass. Control-plane env sync only; no strategy/data mutation.
+- Bai Ben (Minimalism) Review: Pass. Reuses existing sync workflow and script; no extra service added.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -785,6 +792,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Business Value: 解鎖按鈕已具備真實功能，訪客可透過錢包簽名完成權限驗證；驗證成功後注入 HttpOnly session 並開放 `/analysis/:slug` 全文，同步寫入地址/slug/時間供高價值內容分析。
 - 讀寫分離檢查: 通過（僅 support 認證與呈現層更新，量化引擎與資料訓練流程未改）。
 - 白賁極簡檢查: 通過（沿用現有 server runtime 與 Supabase，僅新增最小 telemetry table）。
+
+### [x] Phase 3.4 雲端對齊完成（Commit/Push + Vercel Env Sync）
+- Technical Dependency: `main@e31ed88`, `.github/workflows/vercel_env_sync.yml`, `scripts/vercel_ops.py`.
+- Business Value: 本地 Phase 3 變更已推送主幹，雲端環境同步工作流已成功執行，支援後續 ingestion/report/paywall 自動化持續運轉。
+- Evidence: `git push origin main` (`67db362 -> e31ed88`), Actions run `22623724541` = `success`.
+- 讀寫分離檢查: 通過（本輪為部署與配置同步，不涉及引擎策略寫路徑）。
+- 白賁極簡檢查: 通過（延續既有 workflow/script，不擴張新基礎設施）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
