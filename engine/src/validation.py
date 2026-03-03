@@ -14,12 +14,14 @@ from .aggregate import aggregate_timeframes
 from .config import EngineConfig
 from .feature_cores import build_feature_core_signals
 from .features import apply_winsor_bounds, build_feature_set, fit_winsor_bounds
+from .jsonio import write_json_atomic
 from .optimization import build_fusion_components
 from .single_indicators import build_indicator_signals
 from .storage import load_latest_partitioned_parquet
 from .types import TimeframeOptimizationResult
 
 WINDOW_ORDER = {"all": 0, "360d": 1, "90d": 2, "30d": 3}
+WINDOW_SELECTION_WEIGHT = {"all": 1.0, "360d": 0.85, "90d": 0.65, "30d": 0.50}
 STRICTNESS_THRESHOLDS: dict[str, dict[str, float]] = {
     "institutional": {
         "wf_pass_rate_min": 0.50,
@@ -61,8 +63,7 @@ def _parse_bool_env(name: str, default: bool = False) -> bool:
 
 
 def _serialize_json(payload: object, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(payload, output_path)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -593,7 +594,26 @@ def _build_deploy_pool(rows: list[dict[str, object]], max_rules_per_symbol: int)
                 -_safe_float(item.get("friction_stress", {}).get("robustness")),
             ),
         )
-        picked = ranked[: max(1, int(max_rules_per_symbol))]
+        pick_limit = max(1, int(max_rules_per_symbol))
+        picked: list[dict[str, object]] = []
+        seen_core_window: set[tuple[str, str]] = set()
+        for item in ranked:
+            core_id = str(item.get("core_id", item.get("indicator_id", "")))
+            window_name = str(item.get("window", ""))
+            key = (core_id, window_name)
+            if key in seen_core_window:
+                continue
+            picked.append(item)
+            seen_core_window.add(key)
+            if len(picked) >= pick_limit:
+                break
+        if len(picked) < pick_limit:
+            for item in ranked:
+                if item in picked:
+                    continue
+                picked.append(item)
+                if len(picked) >= pick_limit:
+                    break
         total_rules += len(picked)
         symbols_payload.append(
             {
@@ -616,6 +636,12 @@ def _build_deploy_pool(rows: list[dict[str, object]], max_rules_per_symbol: int)
                         "alpha_vs_spot": item["alpha_vs_spot"],
                         "final_score": item["scores"]["final_score"],
                         "friction_robustness": item["friction_stress"]["robustness"],
+                        "selection_rationale": {
+                            "alpha_quality": _safe_float(item.get("scores", {}).get("alpha_quality"), 0.0),
+                            "transferability": _safe_float(item.get("scores", {}).get("transferability"), 0.0),
+                            "friction_robustness": _safe_float(item.get("friction_stress", {}).get("robustness"), 0.0),
+                            "window_weight": float(WINDOW_SELECTION_WEIGHT.get(str(item.get("window", "")).lower(), 0.40)),
+                        },
                     }
                     for idx, item in enumerate(picked)
                 ],

@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T09:10:00Z`
+- Last Updated (UTC): `2026-03-03T09:10:02Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -25,6 +25,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Business Value: monitor now distinguishes `running/validation/finalizing/stalled/completed`, exposes `stall_reason`, `last_event_age_sec`, and `round.completed` for operational clarity.
 - Read/Write Isolation Review: Pass. Monitoring-only contract; no strategy mutation.
 - Bai Ben (Minimalism) Review: Pass. Added state fields only; no new runtime service.
+
+### [x] B26_ARTIFACT_CONTRACT_ATOMIC_IO_AND_MONITOR_CONSISTENCY
+- Technical Dependency: `engine/src/jsonio.py`, `engine/src/reporting.py`, `engine/src/validation.py`, `engine/src/iterate_optimize.py`, `scripts/progress_monitor.py`, `scripts/alpha_supervisor.py`, `scripts/btc_phase_runner.py`.
+- Business Value: engine artifacts now use atomic JSON writes with retry-safe reads, preventing partial-read corruption and stale-run snapshot drift in monitor/supervisor/phase runner.
+- Read/Write Isolation Review: Pass. Only artifact I/O and observability contracts changed; strategy math and frontend rendering are isolated.
+- Bai Ben (Minimalism) Review: Pass. One shared JSON I/O utility plus targeted reader hardening; no extra services.
+
+### [x] B26_1_BTC_WINDOW_FLOOR_AND_DEPLOY_DIVERSITY_CONTRACT
+- Technical Dependency: `engine/src/config.py`, `engine/src/optimization.py`, `engine/src/validation.py`, `engine/.env.example`, `scripts/btc_phase_runner.py`.
+- Business Value: added per-window trade-floor overrides (`all/360d/90d/30d`) and deploy-pool diversity cap (max one rule per core+window) with explicit `selection_rationale` payload for promotion decisions.
+- Read/Write Isolation Review: Pass. Backend optimization/validation only; no write-path overlap with support UI runtime.
+- Bai Ben (Minimalism) Review: Pass. Reuses existing scoring/deploy schema with minimal additive fields.
 
 ### [x] B10_18_ALL_WINDOW_DIAGNOSTICS_CONTRACT
 - Technical Dependency: `engine/src/reporting.py`, `engine/artifacts/optimization/single/*/summary.json`.
@@ -707,6 +719,18 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Bai Ben (Minimalism) Review: Pass. Reused existing report route and styling without introducing a separate paywall service.
 
 ## [BUSINESS_STATUS]
+
+### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
+- Technical Dependency: `engine/src/jsonio.py`, `engine/src/reporting.py`, `engine/src/validation.py`, `engine/src/iterate_optimize.py`, `scripts/progress_monitor.py`, `scripts/alpha_supervisor.py`, `scripts/btc_phase_runner.py`.
+- Business Value: 已修復 monitor/runner 在 artifact 寫入過程讀到半成品而誤判品質的風險，現在可穩定對齊 active run 的真實結果。
+- 讀寫分離檢查: 通過（僅調整 artifact I/O 與監控讀取流程，未改策略核心計算）。
+- 白賁極簡檢查: 通過（新增一個共用 JSON 工具檔，局部替換既有寫入點）。
+
+### [x] BTC 競賽密度與上線池策略已升級（窗口門檻 + 多樣性）
+- Technical Dependency: `engine/src/config.py`, `engine/src/optimization.py`, `engine/src/validation.py`, `engine/.env.example`, `scripts/btc_phase_runner.py`.
+- Business Value: 已加入 `ENGINE_WINDOW_TRADE_FLOORS` 以精準控制四窗口候選密度，並在 deploy pool 實施 `core x window` 多樣性限制與選擇理由欄位，提升可上線規則可解釋性與覆蓋品質。
+- 讀寫分離檢查: 通過（影響僅在引擎後端配置/驗證層，前端與資料採集未受影響）。
+- 白賁極簡檢查: 通過（在既有 deploy schema 上擴充少量欄位，不新增新服務）。
 
 ### [x] Phase 3.1 主權自動化已落地（Vercel 變數同步）
 - Technical Dependency: `scripts/vercel_ops.py`, `.github/workflows/vercel_env_sync.yml`.

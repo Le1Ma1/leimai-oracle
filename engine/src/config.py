@@ -43,6 +43,7 @@ class EngineConfig:
     optimization_target_deploy_alpha_floor: float
     optimization_target_deploy_symbol_ratio: float
     trade_floor: int
+    window_trade_floor_overrides: tuple[tuple[str, int], ...]
     rsi_windows: tuple[int, ...]
     rsi_strategies: tuple[str, ...]
     rsi_lower_bounds: tuple[int, ...]
@@ -177,6 +178,35 @@ def _parse_optional_csv_symbols(name: str) -> tuple[str, ...]:
     return values
 
 
+def _parse_window_trade_floor_overrides(
+    name: str,
+    default: tuple[tuple[str, int], ...],
+    allowed_windows: set[str],
+) -> tuple[tuple[str, int], ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    parsed: dict[str, int] = {}
+    for token in raw.split(","):
+        chunk = token.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(f"{name} must be comma-separated window:floor pairs.")
+        window, floor_text = chunk.split(":", 1)
+        window_key = window.strip().lower()
+        if window_key not in allowed_windows:
+            raise ValueError(f"{name} has unsupported window: {window_key}")
+        floor = int(floor_text.strip())
+        if floor <= 0:
+            raise ValueError(f"{name} floors must be positive.")
+        parsed[window_key] = floor
+    if not parsed:
+        raise ValueError(f"{name} must not be empty when provided.")
+    ordered = sorted(parsed.items(), key=lambda item: item[0])
+    return tuple((key, int(value)) for key, value in ordered)
+
+
 def load_config() -> EngineConfig:
     load_dotenv()
     now_utc = datetime.now(timezone.utc)
@@ -239,6 +269,11 @@ def load_config() -> EngineConfig:
     )
     universe_symbols = _parse_optional_csv_symbols("ENGINE_UNIVERSE_SYMBOLS")
     validation_stress_friction_bps = _parse_csv_int("ENGINE_VALIDATION_STRESS_FRICTION_BPS", (10, 20, 30))
+    window_trade_floor_overrides = _parse_window_trade_floor_overrides(
+        "ENGINE_WINDOW_TRADE_FLOORS",
+        (("all", 40), ("360d", 20), ("90d", 10), ("30d", 6)),
+        allowed_windows=allowed_windows,
+    )
 
     _validate_subset(aggregate_timeframes, allowed_timeframes, "ENGINE_AGGREGATE_TIMEFRAMES")
     _validate_subset(optimization_timeframes, allowed_timeframes, "ENGINE_OPTIMIZATION_TIMEFRAMES")
@@ -304,6 +339,7 @@ def load_config() -> EngineConfig:
         optimization_target_deploy_alpha_floor=_parse_float("ENGINE_OPT_TARGET_DEPLOY_ALPHA_FLOOR", 0.0),
         optimization_target_deploy_symbol_ratio=_parse_ratio("ENGINE_OPT_TARGET_DEPLOY_SYMBOL_RATIO", 0.30),
         trade_floor=_parse_positive_int("ENGINE_TRADE_FLOOR", 100),
+        window_trade_floor_overrides=window_trade_floor_overrides,
         rsi_windows=rsi_windows,
         rsi_strategies=rsi_strategies,
         rsi_lower_bounds=rsi_lower_bounds,

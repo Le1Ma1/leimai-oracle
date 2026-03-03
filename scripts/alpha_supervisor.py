@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,9 @@ DEFAULT_SYMBOLS = (
     "XMRUSDT",
     "ATOMUSDT",
 )
+READ_RETRY_ATTEMPTS = 6
+READ_RETRY_SLEEP_SECONDS = 0.05
+READ_RETRY_BACKOFF = 1.7
 
 
 def _parse_symbols_csv(raw: str) -> tuple[str, ...]:
@@ -167,7 +171,17 @@ def _find_latest_summary(artifact_root: Path) -> Path | None:
 def _read_json(path: Path | None) -> dict[str, Any]:
     if path is None or not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    delay = READ_RETRY_SLEEP_SECONDS
+    for attempt in range(1, READ_RETRY_ATTEMPTS + 1):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            if attempt >= READ_RETRY_ATTEMPTS:
+                return {}
+            time.sleep(delay)
+            delay *= READ_RETRY_BACKOFF
+    return {}
 
 
 def _symbol_has_1m_data(raw_root: Path, symbol: str) -> bool:

@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +6,7 @@ from typing import Iterable, cast
 
 import pandas as pd
 
+from .jsonio import write_json_atomic
 from .storage import load_latest_partitioned_parquet
 from .types import OptimizationSummary, OptimizationWindowResult, TimeframeOptimizationResult
 
@@ -16,8 +15,7 @@ GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "C*": 3}
 
 
 def _serialize_json(payload: object, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(payload, output_path)
 
 
 def _window_sort_key(window: str) -> tuple[int, str]:

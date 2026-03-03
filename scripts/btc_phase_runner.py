@@ -8,6 +8,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+READ_RETRY_ATTEMPTS = 6
+READ_RETRY_SLEEP_SECONDS = 0.05
+READ_RETRY_BACKOFF = 1.7
+
 
 @dataclass(frozen=True)
 class PhaseTarget:
@@ -38,7 +42,17 @@ def _latest_summary_path(artifact_root: Path) -> Path | None:
 
 
 def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    delay = READ_RETRY_SLEEP_SECONDS
+    for attempt in range(1, READ_RETRY_ATTEMPTS + 1):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            if attempt >= READ_RETRY_ATTEMPTS:
+                return {}
+            time.sleep(delay)
+            delay *= READ_RETRY_BACKOFF
+    return {}
 
 
 def _ensure_validate_sync(repo_root: Path, summary_path: Path) -> None:
@@ -184,29 +198,18 @@ def main() -> int:
 
     phases = [
         PhaseTarget(
-            name="bootstrap_recovery",
+            name="stage1_balanced",
             pass_rate=0.40,
             deploy_symbols=1,
             deploy_rules=2,
-            all_alpha=-20.0,
-            deploy_alpha=-1.0,
-            stable_rounds=1,
-            cycles=2,
-            max_rounds=2,
-        ),
-        PhaseTarget(
-            name="bootstrap_plus",
-            pass_rate=0.45,
-            deploy_symbols=1,
-            deploy_rules=3,
-            all_alpha=-5.0,
+            all_alpha=-3.0,
             deploy_alpha=0.0,
             stable_rounds=1,
             cycles=2,
             max_rounds=2,
         ),
         PhaseTarget(
-            name="institutional_55",
+            name="stage2_institutional",
             pass_rate=0.55,
             deploy_symbols=1,
             deploy_rules=3,
@@ -214,28 +217,6 @@ def main() -> int:
             deploy_alpha=0.0,
             stable_rounds=1,
             cycles=2,
-            max_rounds=2,
-        ),
-        PhaseTarget(
-            name="institutional_65",
-            pass_rate=0.65,
-            deploy_symbols=1,
-            deploy_rules=4,
-            all_alpha=0.0,
-            deploy_alpha=0.0,
-            stable_rounds=1,
-            cycles=2,
-            max_rounds=2,
-        ),
-        PhaseTarget(
-            name="institutional_70",
-            pass_rate=0.70,
-            deploy_symbols=1,
-            deploy_rules=4,
-            all_alpha=0.0,
-            deploy_alpha=0.0,
-            stable_rounds=2,
-            cycles=3,
             max_rounds=2,
         ),
     ]

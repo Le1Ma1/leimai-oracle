@@ -75,7 +75,17 @@ def _resolve_window(index: pd.DatetimeIndex, mode: str) -> tuple[datetime, datet
     return start, end
 
 
-def _resolve_window_trade_floor(base_trade_floor: int, window_start: datetime, window_end: datetime) -> int:
+def _resolve_window_trade_floor(
+    base_trade_floor: int,
+    window_start: datetime,
+    window_end: datetime,
+    window_mode: str,
+    overrides: dict[str, int] | None = None,
+) -> int:
+    if overrides:
+        override_value = overrides.get(str(window_mode).lower())
+        if isinstance(override_value, int) and override_value > 0:
+            return int(override_value)
     days = max(1, int((window_end - window_start).total_seconds() // 86_400))
     scaled = int(round(float(base_trade_floor) * (float(days) / 365.25)))
     lower_bound = 15
@@ -923,6 +933,7 @@ def optimize_single_indicator_for_symbol_timeframe(
     indicator_name_zh, indicator_family = _resolve_strategy_meta(strategy_mode, strategy_id)
     drawdown_floor = -0.35
     window_results: list[OptimizationWindowResult] = []
+    window_trade_floor_overrides = {str(key).lower(): int(value) for key, value in cfg.window_trade_floor_overrides}
 
     for window_mode in cfg.optimization_windows:
         window_start, window_end = _resolve_window(index=close.index, mode=window_mode)
@@ -930,6 +941,8 @@ def optimize_single_indicator_for_symbol_timeframe(
             base_trade_floor=cfg.trade_floor,
             window_start=window_start,
             window_end=window_end,
+            window_mode=window_mode,
+            overrides=window_trade_floor_overrides,
         )
         window_mask = (close.index >= window_start) & (close.index <= window_end)
         close_window = close.loc[window_mask]

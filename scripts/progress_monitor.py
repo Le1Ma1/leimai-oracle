@@ -21,6 +21,9 @@ LOG_STALE_SECONDS = 180
 WRITE_RETRY_ATTEMPTS = 8
 WRITE_RETRY_SLEEP_SECONDS = 0.05
 WRITE_RETRY_BACKOFF = 1.8
+READ_RETRY_ATTEMPTS = 6
+READ_RETRY_SLEEP_SECONDS = 0.05
+READ_RETRY_BACKOFF = 1.7
 DEFAULT_SYMBOL_ORDER = (
     "BTCUSDT",
     "ETHUSDT",
@@ -74,6 +77,22 @@ def _safe_int(value: object, default: int = 0) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _read_json_retry(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    delay = READ_RETRY_SLEEP_SECONDS
+    for attempt in range(1, READ_RETRY_ATTEMPTS + 1):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            if attempt >= READ_RETRY_ATTEMPTS:
+                return {}
+            time.sleep(delay)
+            delay *= READ_RETRY_BACKOFF
+    return {}
 
 
 def _list_python_processes() -> list[dict[str, Any]]:
@@ -254,18 +273,8 @@ def _latest_quality_snapshot(artifact_root: Path) -> dict[str, Any]:
         return {}
     validations = sorted(single_root.rglob("validation_report.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     deploys = sorted(single_root.rglob("deploy_pool.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    v_payload: dict[str, Any] = {}
-    d_payload: dict[str, Any] = {}
-    if validations:
-        try:
-            v_payload = json.loads(validations[0].read_text(encoding="utf-8"))
-        except Exception:
-            v_payload = {}
-    if deploys:
-        try:
-            d_payload = json.loads(deploys[0].read_text(encoding="utf-8"))
-        except Exception:
-            d_payload = {}
+    v_payload = _read_json_retry(validations[0] if validations else None)
+    d_payload = _read_json_retry(deploys[0] if deploys else None)
 
     pass_rate = _safe_float(v_payload.get("pass_rate"), 0.0) if isinstance(v_payload, dict) else 0.0
     all_alpha = 0.0
@@ -303,13 +312,7 @@ def _latest_quality_snapshot(artifact_root: Path) -> dict[str, Any]:
 
 
 def _load_json(path: Path | None) -> dict[str, Any]:
-    if path is None or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return _read_json_retry(path)
 
 
 def _extract_quality_snapshot(
@@ -379,7 +382,11 @@ def _quality_snapshot_from_summary(summary_path: Path | None) -> dict[str, Any]:
     )
 
 
-def _latest_quality_snapshot_for_run(artifact_root: Path, preferred_run_id: str | None = None) -> dict[str, Any]:
+def _latest_quality_snapshot_for_run(
+    artifact_root: Path,
+    preferred_run_id: str | None = None,
+    allow_fallback_latest: bool = True,
+) -> dict[str, Any]:
     single_root = artifact_root / "optimization" / "single"
     if not single_root.exists():
         return {}
@@ -394,11 +401,11 @@ def _latest_quality_snapshot_for_run(artifact_root: Path, preferred_run_id: str 
             if snapshot:
                 return snapshot
 
-    if summary_files:
+    if allow_fallback_latest and summary_files:
         snapshot = _quality_snapshot_from_summary(summary_files[0])
         if snapshot:
             return snapshot
-    return _latest_quality_snapshot(artifact_root)
+    return _latest_quality_snapshot(artifact_root) if allow_fallback_latest else {}
 
 
 def _build_status(repo_root: Path) -> dict[str, Any]:
@@ -583,12 +590,33 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
             if not round_end_summary_path.is_absolute():
                 round_end_summary_path = (repo_root / round_end_summary_path).resolve()
     quality_snapshot = _quality_snapshot_from_summary(round_end_summary_path)
-    if not quality_snapshot:
-        quality_snapshot = _latest_quality_snapshot_for_run(artifact_root, preferred_run_id=active_run_id)
+    if not quality_snapshot and active_run_id:
+        quality_snapshot = _latest_quality_snapshot_for_run(
+            artifact_root,
+            preferred_run_id=active_run_id,
+            allow_fallback_latest=False,
+        )
+    if not quality_snapshot and not (iterate_active or supervisor_active):
+        quality_snapshot = _latest_quality_snapshot_for_run(
+            artifact_root,
+            preferred_run_id=active_run_id,
+            allow_fallback_latest=True,
+        )
     quality_snapshot_run_id = str(quality_snapshot.get("run_id", "") or "")
     quality_snapshot_is_active_run = bool(active_run_id and quality_snapshot_run_id == str(active_run_id))
-    if active_run_id and not quality_snapshot_is_active_run and (iterate_active or supervisor_active):
+    active_run_consistent = bool(
+        not active_run_id or not (iterate_active or supervisor_active) or quality_snapshot_is_active_run
+    )
+    if active_run_id and not active_run_consistent:
         warnings.append("quality_snapshot_from_previous_run")
+    artifact_contract_ok = bool(quality_snapshot and quality_snapshot_run_id)
+    if active_run_id and (iterate_active or supervisor_active) and not quality_snapshot:
+        artifact_contract_ok = False
+        warnings.append("quality_snapshot_missing_for_active_run")
+    if active_run_id and not quality_snapshot_is_active_run and (iterate_active or supervisor_active):
+        artifact_contract_ok = False
+    if not artifact_contract_ok:
+        warnings.append("artifact_contract_unhealthy")
     target_checks = [
         {
             "key": "validation_pass_rate",
@@ -623,6 +651,15 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
     ]
     for item in target_checks:
         item["passed"] = bool(float(item["actual"]) >= float(item["target"]))
+    failed_checks = [item for item in target_checks if not bool(item["passed"])]
+    if not artifact_contract_ok:
+        promotion_block_reason = "artifact_contract_unhealthy"
+    elif failed_checks:
+        promotion_block_reason = f"target_not_met:{str(failed_checks[0]['key'])}"
+    elif active_run_id and not active_run_consistent:
+        promotion_block_reason = "active_run_inconsistent_snapshot"
+    else:
+        promotion_block_reason = None
 
     recent_source = run_events if run_events else events
     recent_events = recent_source[-RECENT_EVENT_COUNT:]
@@ -699,6 +736,9 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
         },
         "quality_snapshot": quality_snapshot,
         "quality_snapshot_is_active_run": quality_snapshot_is_active_run,
+        "artifact_contract_ok": artifact_contract_ok,
+        "active_run_consistent": active_run_consistent,
+        "promotion_block_reason": promotion_block_reason,
         "causal_contract": {
             "causal_mode": True,
             "winsorize_mode": "fold_safe",

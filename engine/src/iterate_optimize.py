@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +11,7 @@ from .aggregate import aggregate_timeframes
 from .config import EngineConfig, load_config
 from .feature_cores import list_supported_cores
 from .features import build_feature_registry, build_feature_set
+from .jsonio import load_json_retry, write_json_atomic
 from .logging_setup import log_event
 from .optimization import optimize_signal_core_for_symbol_timeframe
 from .reporting import write_optimization_artifacts
@@ -82,10 +81,9 @@ ITERATION_PROFILES: tuple[IterationProfile, ...] = (
 
 
 def _clone_config_for_profile(cfg: EngineConfig, profile: IterationProfile) -> EngineConfig:
-    profile_trade_floor = profile.trade_floor if cfg.rule_engine_mode != "feature_native" else cfg.trade_floor
     return replace(
         cfg,
-        trade_floor=profile_trade_floor,
+        trade_floor=profile.trade_floor,
         rsi_windows=profile.rsi_windows,
         rsi_lower_bounds=profile.rsi_lower_bounds,
         rsi_upper_bounds=profile.rsi_upper_bounds,
@@ -205,7 +203,7 @@ def _write_iteration_report(artifact_root: Path, payload: dict[str, object]) -> 
     out_dir = artifact_root / "optimization" / "single" / "iterations" / now.strftime("%Y-%m-%d")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"iteration_{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid4().hex[:8]}.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(payload, path)
     return path
 
 
@@ -213,12 +211,7 @@ def _load_json(path: str | None) -> dict[str, object]:
     if not path:
         return {}
     candidate = Path(path)
-    if not candidate.exists():
-        return {}
-    try:
-        return json.loads(candidate.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_json_retry(candidate)
 
 
 def _extract_validation_metrics(
@@ -473,7 +466,7 @@ def _write_iteration_decision_log(
     out_dir = artifact_root / "optimization" / "single" / "iterations" / now.strftime("%Y-%m-%d")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"iteration_decision_log_{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid4().hex[:8]}.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(payload, path)
     return path
 
 
