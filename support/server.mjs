@@ -2,6 +2,9 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createClient } from "@supabase/supabase-js";
+import { marked } from "marked";
+import sanitizeHtml from "sanitize-html";
 
 import { fetchTronscan, fetchTrongrid, mergeTransfers } from "./lib/chain-sources.mjs";
 import { getContent, listLocales, resolveLocale } from "./lib/content.mjs";
@@ -24,25 +27,8 @@ const LOCALES = listLocales();
 const PREVIEW_DIR = path.join(__dirname, "preview");
 const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1";
 const ROOT_CANONICAL_URL = "https://leimaitech.com/";
-const ANALYSIS_SYMBOLS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "BNBUSDT",
-  "XRPUSDT",
-  "ADAUSDT",
-  "DOGEUSDT",
-  "LTCUSDT",
-  "LINKUSDT",
-  "BCHUSDT",
-  "TRXUSDT",
-  "ETCUSDT",
-  "XLMUSDT",
-  "EOSUSDT",
-  "XMRUSDT",
-  "ATOMUSDT",
-];
-const ANALYSIS_WINDOWS = ["2020-now", "360d", "90d", "30d"];
-const ANALYSIS_THEMES = ["regime", "liquidity", "friction"];
+const DEFAULT_REPORT_LOCALE = "en";
+const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
 
 function parseDotEnv(content) {
   const out = {};
@@ -100,6 +86,8 @@ const CONFIG = {
   tronscanBase: (process.env.SUPPORT_TRONSCAN_API_BASE || "https://apilist.tronscanapi.com").replace(/\/+$/, ""),
   trongridBase: (process.env.SUPPORT_TRONGRID_API_BASE || "https://api.trongrid.io").replace(/\/+$/, ""),
   trongridApiKey: process.env.SUPPORT_TRONGRID_API_KEY || "",
+  supabaseUrl: (process.env.SUPABASE_URL || "").replace(/\/+$/, ""),
+  supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
   cronSecret: process.env.CRON_SECRET || "",
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
 };
@@ -433,36 +421,164 @@ function formatMoney(v) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function buildAnalysisCatalog() {
-  const items = [];
-  for (const symbol of ANALYSIS_SYMBOLS) {
-    for (const windowKey of ANALYSIS_WINDOWS) {
-      for (const theme of ANALYSIS_THEMES) {
-        const symbolBase = symbol.replace("USDT", "");
-        const slug = `${symbolBase.toLowerCase()}-${windowKey}-${theme}`;
-        items.push({
-          slug,
-          symbol,
-          windowKey,
-          theme,
-          title: `${symbolBase} ${windowKey.toUpperCase()} ${theme.toUpperCase()} Analysis`,
-          summary: `Market structure snapshot for ${symbol} in ${windowKey} window, focused on ${theme} dynamics.`,
-        });
-      }
-    }
-  }
-  return items;
+let supabaseClientSingleton = null;
+
+function getSupabaseClient() {
+  if (supabaseClientSingleton) return supabaseClientSingleton;
+  if (!CONFIG.supabaseUrl || !CONFIG.supabaseAnonKey) return null;
+  supabaseClientSingleton = createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseClientSingleton;
 }
 
-const ANALYSIS_CATALOG = buildAnalysisCatalog();
-const ANALYSIS_MAP = new Map(ANALYSIS_CATALOG.map((row) => [row.slug, row]));
+function normalizeReportRow(raw) {
+  const row = raw && typeof raw === "object" ? raw : {};
+  return {
+    report_id: Number(row.report_id || 0),
+    event_id: String(row.event_id || ""),
+    locale: String(row.locale || DEFAULT_REPORT_LOCALE),
+    title: String(row.title || ""),
+    slug: String(row.slug || ""),
+    body_md: String(row.body_md || ""),
+    jsonld: row.jsonld && typeof row.jsonld === "object" ? row.jsonld : {},
+    unique_entity: String(row.unique_entity || ""),
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || row.created_at || ""),
+  };
+}
+
+function markdownToPlainText(md) {
+  return String(md || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[#>*_~\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSummary(md, maxLen = 180) {
+  const plain = markdownToPlainText(md);
+  if (plain.length <= maxLen) return plain;
+  return `${plain.slice(0, maxLen).trimEnd()}...`;
+}
+
+function sanitizeMarkdownHtml(md) {
+  const rawHtml = String(marked.parse(String(md || ""), { breaks: true, gfm: true }));
+  return sanitizeHtml(rawHtml, {
+    allowedTags: [
+      ...sanitizeHtml.defaults.allowedTags,
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "img",
+      "pre",
+      "code",
+      "hr",
+      "table",
+      "thead",
+      "tbody",
+      "tr",
+      "th",
+      "td",
+    ],
+    allowedAttributes: {
+      ...sanitizeHtml.defaults.allowedAttributes,
+      a: ["href", "name", "target", "rel"],
+      img: ["src", "alt"],
+    },
+    allowedSchemes: ["http", "https", "mailto"],
+    transformTags: {
+      a: sanitizeHtml.simpleTransform("a", { target: "_blank", rel: "noopener noreferrer" }),
+    },
+  });
+}
+
+function normalizeJsonLd(raw, fallback = {}) {
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function serializeJsonLd(raw) {
+  return JSON.stringify(normalizeJsonLd(raw)).replace(/</g, "\\u003c");
+}
+
+async function fetchLatestReports(limit = 5) {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 5), 50);
+
+  const primary = await client
+    .from("oracle_reports")
+    .select(REPORT_SELECT_FIELDS)
+    .eq("locale", DEFAULT_REPORT_LOCALE)
+    .order("updated_at", { ascending: false })
+    .limit(safeLimit);
+  if (!primary.error && Array.isArray(primary.data) && primary.data.length > 0) {
+    return primary.data.map(normalizeReportRow);
+  }
+
+  const fallback = await client
+    .from("oracle_reports")
+    .select(REPORT_SELECT_FIELDS)
+    .order("updated_at", { ascending: false })
+    .limit(safeLimit);
+  if (fallback.error || !Array.isArray(fallback.data)) {
+    return [];
+  }
+  return fallback.data.map(normalizeReportRow);
+}
+
+async function fetchReportsForIndex(limit = 200) {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 200), 5000);
+  const { data, error } = await client
+    .from("oracle_reports")
+    .select(REPORT_SELECT_FIELDS)
+    .order("updated_at", { ascending: false })
+    .limit(safeLimit);
+  if (error || !Array.isArray(data)) return [];
+  return data.map(normalizeReportRow);
+}
+
+async function fetchReportBySlug(slug) {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const cleaned = String(slug || "").trim().toLowerCase();
+  if (!cleaned) return null;
+  const { data, error } = await client
+    .from("oracle_reports")
+    .select(REPORT_SELECT_FIELDS)
+    .eq("slug", cleaned)
+    .maybeSingle();
+  if (error || !data) return null;
+  return normalizeReportRow(data);
+}
+
+async function fetchAnalysisPaths(limit = 5000) {
+  const rows = await fetchReportsForIndex(limit);
+  return rows.map((row) => `/analysis/${row.slug}`);
+}
 
 function normalizeAnalysisPath(pathname) {
   return String(pathname || "").replace(/\/+$/, "");
 }
 
-function renderOuroborosDocument({ title, description, bodyHtml, jsonLd }) {
-  const ldPayload = typeof jsonLd === "string" ? jsonLd : JSON.stringify(jsonLd || {});
+function renderOuroborosDocument({ title, description, bodyHtml, jsonLd, canonicalUrl = ROOT_CANONICAL_URL }) {
+  const ldPayload = serializeJsonLd(jsonLd || {});
+  const ogUrl = String(canonicalUrl || ROOT_CANONICAL_URL);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -474,13 +590,13 @@ function renderOuroborosDocument({ title, description, bodyHtml, jsonLd }) {
   <meta property="og:type" content="website">
   <meta property="og:title" content="${escapeHtml(title)}">
   <meta property="og:description" content="${escapeHtml(description)}">
-  <meta property="og:url" content="${escapeHtml(ROOT_CANONICAL_URL)}">
+  <meta property="og:url" content="${escapeHtml(ogUrl)}">
   <meta property="og:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
   <meta property="twitter:card" content="summary_large_image">
   <meta property="twitter:title" content="${escapeHtml(title)}">
   <meta property="twitter:description" content="${escapeHtml(description)}">
   <meta property="twitter:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
-  <link rel="canonical" href="${escapeHtml(ROOT_CANONICAL_URL)}">
+  <link rel="canonical" href="${escapeHtml(ogUrl)}">
   <script type="application/ld+json">${ldPayload}</script>
   <link rel="stylesheet" href="/assets/ouroboros.css">
 </head>
@@ -491,36 +607,40 @@ function renderOuroborosDocument({ title, description, bodyHtml, jsonLd }) {
 </html>`;
 }
 
-function renderRootLandingPage() {
-  const topRows = ANALYSIS_CATALOG.slice(0, 12);
-  const cardHtml = topRows
-    .map(
-      (row) => `<a class="matrix-card" href="/analysis/${escapeHtml(row.slug)}" data-slug="${escapeHtml(row.slug)}">
-        <div class="card-top">
-          <span>${escapeHtml(row.symbol)}</span>
-          <span>${escapeHtml(row.windowKey.toUpperCase())}</span>
-        </div>
-        <div class="card-mid">${escapeHtml(row.theme.toUpperCase())}</div>
-        <div class="card-sub">${escapeHtml(row.summary)}</div>
-      </a>`,
-    )
-    .join("");
+function buildReportCard(report) {
+  const summary = buildSummary(report.body_md, 220);
+  const updatedAt = report.updated_at || report.created_at || "";
+  return `<a class="matrix-card report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
+    <div class="card-top">
+      <span>${escapeHtml(report.locale.toUpperCase())}</span>
+      <span class="report-time" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
+    </div>
+    <div class="card-mid">${escapeHtml(report.title)}</div>
+    <div class="card-sub">${escapeHtml(summary || "No summary available.")}</div>
+    <div class="report-entity">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</div>
+  </a>`;
+}
+
+function renderRootLandingPage(reports) {
+  const rows = Array.isArray(reports) ? reports.slice(0, 5) : [];
+  const cardHtml = rows.map(buildReportCard).join("");
+  const hasRows = rows.length > 0;
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero">
       <div class="hero-kicker">LEIMAI ORACLE / OUROBOROS CORE</div>
-      <h1>Root Authority Engine for Predictive Crypto Intelligence</h1>
-      <p>Single authority endpoint for entity identity, analysis distribution, and GEO-grade indexing.</p>
+      <h1>Oracle Reports Wall</h1>
+      <p>Live intelligence stream powered by real <code>oracle_reports</code> records from Supabase.</p>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">Open Analysis Matrix</a>
+        <a class="btn btn-main" href="/analysis/">Open Full Report Index</a>
         <a class="btn" href="https://leimaitech.com/" target="_blank" rel="noopener">Main Domain</a>
       </div>
     </header>
 
     <section class="panel">
-      <h2>Analysis Matrix Snapshot</h2>
-      <p class="muted">90 pSEO-ready pages mapped across symbol x window x theme.</p>
-      <div class="matrix-grid">${cardHtml}</div>
+      <h2>Latest 5 Oracle Reports</h2>
+      <p class="muted">Realtime read from <code>public.oracle_reports</code>.</p>
+      ${hasRows ? `<div class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet. Check ingestion/report pipeline.</div>'}
     </section>
   </main>`;
 
@@ -535,7 +655,7 @@ function renderRootLandingPage() {
       },
       {
         "@type": "CollectionPage",
-        name: "Ouroboros Analysis Matrix",
+        name: "Oracle Reports Wall",
         url: `${CONFIG.siteUrl}/analysis/`,
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
       },
@@ -545,39 +665,32 @@ function renderRootLandingPage() {
   return renderOuroborosDocument({
     title: "LeiMai Oracle | Ouroboros Root Authority",
     description:
-      "Root authority node for LeiMai Oracle. Access analysis matrix and pSEO pages for regime, liquidity, and friction research.",
+      "Root authority node for LeiMai Oracle. Access realtime oracle reports and pSEO analysis pages backed by Supabase.",
     bodyHtml,
     jsonLd,
+    canonicalUrl: ROOT_CANONICAL_URL,
   });
 }
 
-function renderAnalysisIndexPage() {
-  const cardHtml = ANALYSIS_CATALOG.map(
-    (row) => `<a class="matrix-card" href="/analysis/${escapeHtml(row.slug)}" data-filter="${escapeHtml(`${row.symbol} ${row.windowKey} ${row.theme}`)}">
-      <div class="card-top">
-        <span>${escapeHtml(row.symbol)}</span>
-        <span>${escapeHtml(row.windowKey.toUpperCase())}</span>
-      </div>
-      <div class="card-mid">${escapeHtml(row.theme.toUpperCase())}</div>
-      <div class="card-sub">${escapeHtml(row.summary)}</div>
-    </a>`,
-  ).join("");
+function renderAnalysisIndexPage(reports) {
+  const rows = Array.isArray(reports) ? reports : [];
+  const cardHtml = rows.map(buildReportCard).join("");
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact">
-      <div class="hero-kicker">ANALYSIS MATRIX</div>
-      <h1>pSEO Research Pages</h1>
-      <p>Symbol x window x theme index for scalable coverage and GEO citation density.</p>
+      <div class="hero-kicker">ANALYSIS INDEX</div>
+      <h1>Oracle Report Index</h1>
+      <p>Dynamic pSEO pages generated from anomaly-driven multilingual reports.</p>
       <div class="hero-cta-row">
-        <input id="analysisSearch" class="input" type="search" placeholder="Filter: BTCUSDT 90d liquidity">
+        <input id="analysisSearch" class="input" type="search" placeholder="Filter: locale / entity / title">
         <a class="btn" href="/">Back to Root</a>
       </div>
     </header>
 
     <section class="panel">
       <h2>All Analysis Pages</h2>
-      <p class="muted">Current total: ${ANALYSIS_CATALOG.length} pages</p>
-      <div id="analysisCards" class="matrix-grid">${cardHtml}</div>
+      <p class="muted">Current total: ${rows.length} reports</p>
+      ${rows.length > 0 ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet.</div>'}
     </section>
   </main>`;
 
@@ -591,51 +704,88 @@ function renderAnalysisIndexPage() {
 
   return renderOuroborosDocument({
     title: "LeiMai Oracle | Analysis Matrix",
-    description: "Structured pSEO matrix for symbol/window/theme analysis coverage.",
+    description: "Structured pSEO report index sourced from Oracle Brain outputs.",
     bodyHtml,
     jsonLd,
+    canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
   });
 }
 
-function renderAnalysisDetailPage(item) {
-  const symbolBase = item.symbol.replace("USDT", "");
+function buildFallbackJsonLd(report) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: report.title,
+    description: buildSummary(report.body_md, 240),
+    mainEntityOfPage: `${CONFIG.siteUrl}/analysis/${report.slug}`,
+    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+    author: { "@type": "Organization", name: "LeiMai Oracle" },
+    dateModified: report.updated_at || report.created_at || nowIso(),
+    inLanguage: report.locale,
+  };
+}
+
+function renderAnalysisDetailPage(report) {
+  const summary = buildSummary(report.body_md, 220);
+  const markdownHtml = sanitizeMarkdownHtml(report.body_md);
+  const canonicalUrl = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact">
       <div class="hero-kicker">ANALYSIS DETAIL</div>
-      <h1>${escapeHtml(symbolBase)} / ${escapeHtml(item.windowKey.toUpperCase())} / ${escapeHtml(item.theme.toUpperCase())}</h1>
-      <p>${escapeHtml(item.summary)}</p>
+      <h1>${escapeHtml(report.title)}</h1>
+      <p>${escapeHtml(summary)}</p>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">Back to Analysis Matrix</a>
+        <a class="btn btn-main" href="/analysis/">Back to Report Index</a>
         <a class="btn" href="/">Root</a>
       </div>
     </header>
 
     <section class="panel">
-      <h2>Signal Frame</h2>
+      <h2>Metadata</h2>
       <div class="kv-grid">
-        <div class="kv-item"><span>Symbol</span><strong>${escapeHtml(item.symbol)}</strong></div>
-        <div class="kv-item"><span>Window</span><strong>${escapeHtml(item.windowKey.toUpperCase())}</strong></div>
-        <div class="kv-item"><span>Theme</span><strong>${escapeHtml(item.theme.toUpperCase())}</strong></div>
-        <div class="kv-item"><span>Route</span><strong>/analysis/${escapeHtml(item.slug)}</strong></div>
+        <div class="kv-item"><span>Event</span><strong>${escapeHtml(report.event_id || "-")}</strong></div>
+        <div class="kv-item"><span>Locale</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
+        <div class="kv-item"><span>Unique Entity</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
+        <div class="kv-item"><span>Updated (UTC)</span><strong class="report-time" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>Report Body</h2>
+      <article class="report-article">${markdownHtml}</article>
+      <div class="route-line">/analysis/${escapeHtml(report.slug)}</div>
+      <div class="muted">Generated from realtime <code>oracle_reports</code> feed.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Structured Data (JSON-LD)</h2>
+      <pre class="jsonld-preview">${escapeHtml(JSON.stringify(normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report)), null, 2))}</pre>
+      <div class="muted">This payload is also embedded in &lt;head&gt; for GEO indexing.</div>
     </section>
   </main>`;
 
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Article",
-    headline: item.title,
-    description: item.summary,
-    mainEntityOfPage: `${CONFIG.siteUrl}/analysis/${item.slug}`,
-    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
-    author: { "@type": "Organization", name: "LeiMai Oracle" },
-  };
-
   return renderOuroborosDocument({
-    title: `LeiMai Oracle | ${item.title}`,
-    description: item.summary,
+    title: `LeiMai Oracle | ${report.title}`,
+    description: summary || "Oracle report detail page.",
     bodyHtml,
-    jsonLd,
+    jsonLd: normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report)),
+    canonicalUrl,
+  });
+}
+
+function renderAnalysisNotFoundPage(slug) {
+  return renderOuroborosDocument({
+    title: "Not Found | Analysis",
+    description: "Requested analysis page does not exist.",
+    bodyHtml: `<main class="site-wrap">
+      <section class="panel">
+        <h1>Analysis page not found</h1>
+        <p class="muted">No report matched slug: <code>${escapeHtml(slug)}</code></p>
+        <a class="btn btn-main" href="/analysis/">Back to report index</a>
+      </section>
+    </main>`,
+    jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
+    canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
   });
 }
 
@@ -695,7 +845,7 @@ async function handleOuroborosRoutes({ method, pathname, res }) {
     return true;
   }
   if (pathname === "/sitemap.xml") {
-    const analysisPaths = ANALYSIS_CATALOG.map((row) => `/analysis/${row.slug}`);
+    const analysisPaths = await fetchAnalysisPaths(5000);
     textResponse(res, 200, buildSitemap(CONFIG.siteUrl, analysisPaths), "application/xml; charset=utf-8");
     return true;
   }
@@ -704,30 +854,22 @@ async function handleOuroborosRoutes({ method, pathname, res }) {
     return true;
   }
   if (pathname === "/") {
-    textResponse(res, 200, renderRootLandingPage(), "text/html; charset=utf-8");
+    const reports = await fetchLatestReports(5);
+    textResponse(res, 200, renderRootLandingPage(reports), "text/html; charset=utf-8");
     return true;
   }
 
   const normalized = normalizeAnalysisPath(pathname);
   if (normalized === "/analysis") {
-    textResponse(res, 200, renderAnalysisIndexPage(), "text/html; charset=utf-8");
+    const reports = await fetchReportsForIndex(500);
+    textResponse(res, 200, renderAnalysisIndexPage(reports), "text/html; charset=utf-8");
     return true;
   }
   if (normalized.startsWith("/analysis/")) {
     const slug = normalized.slice("/analysis/".length).trim().toLowerCase();
-    const entry = ANALYSIS_MAP.get(slug);
+    const entry = await fetchReportBySlug(slug);
     if (!entry) {
-      textResponse(
-        res,
-        404,
-        renderOuroborosDocument({
-          title: "Not Found | Analysis",
-          description: "Requested analysis page does not exist.",
-          bodyHtml: `<main class="site-wrap"><section class="panel"><h1>Analysis page not found</h1><a class="btn btn-main" href="/analysis/">Back to analysis index</a></section></main>`,
-          jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
-        }),
-        "text/html; charset=utf-8",
-      );
+      textResponse(res, 404, renderAnalysisNotFoundPage(slug), "text/html; charset=utf-8");
       return true;
     }
     textResponse(res, 200, renderAnalysisDetailPage(entry), "text/html; charset=utf-8");

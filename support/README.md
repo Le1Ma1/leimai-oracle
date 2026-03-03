@@ -6,6 +6,7 @@ Standalone support + leaderboard property for `support.leimaitech.com`.
 
 - Highest single verified `USDT (TRC20)` transfer leaderboard.
 - `en / zh-tw / zh-cn` localized pages.
+- `Ouroboros` root and `/analysis/:slug` now read real `oracle_reports` from Supabase.
 - Declaration submission with pre-moderation queue.
 - Approved declaration ads slots.
 - SEO/GEO stack: `sitemap.xml`, `robots.txt`, `llms.txt`, JSON-LD, hreflang, `/api/v1/knowledge`.
@@ -62,6 +63,8 @@ Required env on Vercel:
 - `SUPPORT_TRONSCAN_API_BASE`
 - `SUPPORT_TRONGRID_API_BASE`
 - `SUPPORT_TRONGRID_API_KEY` (optional)
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
 - `CRON_SECRET`
 
 Notes:

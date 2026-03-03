@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-02T20:58:28Z`
+- Last Updated (UTC): `2026-03-02T21:31:18Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -682,7 +682,19 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Backend worker-only module; no frontend route mutation.
 - Bai Ben (Minimalism) Review: Pass. One new script and one workflow step without extra orchestration services.
 
+### [x] B24_SUPPORT_PHASE2_UI_CUTOVER_TO_REAL_ORACLE_REPORTS
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
+- Business Value: removed hardcoded `ANALYSIS_CATALOG` mock path and switched `/`, `/analysis/`, `/analysis/:slug`, and `sitemap.xml` to live `public.oracle_reports` reads with server-rendered JSON-LD injection.
+- Read/Write Isolation Review: Pass. Changes are isolated to support render/read layer and environment contract; engine training pipeline untouched.
+- Bai Ben (Minimalism) Review: Pass. No new services introduced; only data-source swap and rendering hardening.
+
 ## [BUSINESS_STATUS]
+
+### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
+- Business Value: 首頁已改為 Supabase 真實報告牆（最新 5 篇），`/analysis/:slug` 改為真實單篇渲染且未命中回傳 404（不再誤回 410）；每篇頁面的 `<head>` 已注入對應 `jsonld` 供 SEO/GEO 索引。
+- 讀寫分離檢查: 通過（僅 support 讀取路徑與渲染層改造，未觸碰引擎寫入與訓練邏輯）。
+- 白賁極簡檢查: 通過（維持既有 serverless 入口，採最小依賴補強 markdown 安全轉譯與 DB 讀取）。
 
 ### [x] 撠?撌脣?? Local-only ?瑁??箇?
 - Technical Dependency: `monitor/index.html`, `engine/README.md`, removed `cloud/*` and cloud scripts.
