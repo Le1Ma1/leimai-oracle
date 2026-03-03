@@ -476,8 +476,17 @@ def vercel_add_domain(session: requests.Session, cfg: SyncConfig, domain: str) -
 
     # Already exists / conflict in Vercel returns 409 for some tenants.
     if status == 409:
-        log_event("VERCEL_DOMAIN_EXISTS", domain=domain)
-        return True
+        message = ""
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message", "")).strip()
+        lowered = message.lower()
+        if "already" in lowered and "project" in lowered:
+            log_event("VERCEL_DOMAIN_EXISTS", domain=domain, message=message)
+            return True
+        log_event("VERCEL_ADD_DOMAIN_CONFLICT", domain=domain, message=message or error)
+        return False
 
     detail = error
     if isinstance(data, dict):
@@ -520,8 +529,13 @@ def vercel_set_primary_domain(session: requests.Session, cfg: SyncConfig, domain
         timeout_sec=cfg.timeout_sec,
     )
     if not ok:
+        err_text = str(error or "")
+        if "additional property `primaryDomain`" in err_text:
+            log_event("VERCEL_SET_PRIMARY_UNSUPPORTED", domain=domain)
+            return True
         log_event("VERCEL_SET_PRIMARY_FAILED", domain=domain, status=status, error=error)
-    return ok
+        return False
+    return True
 
 
 def redirect_target_for_domain(source_domain: str, cfg: SyncConfig) -> str:
@@ -576,6 +590,11 @@ def sync_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, int]:
         else:
             stats["failed"] += 1
 
+    # Allow Vercel domain state to settle, then refresh.
+    if not cfg.dry_run:
+        time.sleep(1.0)
+    existing = vercel_list_domains(session, cfg)
+
     # Keep io domains non-redirecting.
     for domain in (cfg.primary_domain, cfg.www_domain, cfg.support_domain):
         if not domain:
@@ -590,6 +609,10 @@ def sync_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, int]:
         if not source:
             continue
         target = redirect_target_for_domain(source, cfg)
+        if target not in existing and not cfg.dry_run:
+            if not vercel_add_domain(session, cfg, target):
+                stats["failed"] += 1
+                continue
         payload = {
             "redirect": f"https://{target}",
             "redirectStatusCode": cfg.redirect_status_code,
@@ -599,6 +622,10 @@ def sync_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, int]:
             stats["redirect_updated"] += 1
             continue
         ok = vercel_patch_domain(session, cfg, source, payload)
+        if not ok:
+            # Some Vercel API edges require target domain to be present before redirect patch.
+            _ = vercel_add_domain(session, cfg, target)
+            ok = vercel_patch_domain(session, cfg, source, payload)
         if ok:
             stats["redirect_updated"] += 1
         else:
