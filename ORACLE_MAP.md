@@ -1195,6 +1195,36 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [BUSINESS_STATUS] 商業進度: Phase 4.1 已啟動。先完成「誰在進金庫」的地址分級，再完成「升級按鈕 -> 建立 pending 發票」閉環，為正式支付驗證前的轉化漏斗做壓測。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 support/API/腳本與 schema 擴充）；白賁通過（延用既有 Supabase 與 unlock 流程，不增加不必要服務）。
 
+### [x] P4_2_SOVEREIGN_CHAIN_HARVESTER
+- [LOGIC_CORE] Technical Dependency: `scripts/chain_harvester.py`, `support/server.mjs:/api/v1/payment/status`, `support/web/ouroboros.js` (10s polling), `.github/workflows/harvest_payments_5m.yml`, `support/.env.example`.
+- [LOGIC_CORE] Business Value: payment loop is now end-to-end automatable (`pending -> paid/expired`) with chain event matching and premium access promotion (`Premium_Entity`) on `user_access_logs.meta`.
+- [BUSINESS_STATUS] 商業進度: Phase 4.2 已完成。金庫升級彈窗會每 10 秒輪詢發票狀態，付款成功後即時切換為「Access Granted: Synchronizing Sovereign Signals」，後端同步完成數據記帳與地址權限晉升。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 payment/api/script/workflow 層）；白賁通過（沿用既有資料表與 unlock 機制，最小增量擴展）。
+
+### [x] S0_TOKEN_ROTATION_BASELINE_AND_SYNC_MAP
+- [LOGIC_CORE] Technical Dependency: `support/.env`, `./.env`, `docs/TOKEN_ROTATION_SYNC_CHECKLIST.md`, `.github/workflows/{vercel_env_sync.yml,ingest_4h.yml,harvest_payments_5m.yml}`.
+- [LOGIC_CORE] Business Value: token rotation is operationalized with blank local templates and explicit GitHub Secrets/Variables remap checklist, reducing post-rotation drift and manual misconfiguration.
+- [BUSINESS_STATUS] 商業進度: 已建立「只重設 token/secret、其餘配置保持穩定」的落地基線；你只需填新金鑰並按清單觸發同步流程。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅環境配置與維運文檔層）；白賁通過（不改策略邏輯、不新增服務）。
+
+### [x] S0_1_TOKEN_CHAIN_REBIND_EXECUTED
+- [LOGIC_CORE] Technical Dependency: `scripts/vercel_ops.py`, `scripts/cloudflare_ops.py`, `support/.env` (`CRON_SECRET`/`SUPPORT_ADMIN_TOKEN`), Vercel deployment `dpl_DzETDBELFHf8Mo1MnTKf7n8kKBj4`.
+- [LOGIC_CORE] Business Value: rotated credentials are now wired through runtime/ops path; Vercel env sync completed with deploy trigger, Cloudflare DNS sync confirmed unchanged/healthy.
+- [BUSINESS_STATUS] 商業進度: Token 鏈路已重新打通（Vercel/Cloudflare 均可操作），`CRON_SECRET` 與 admin token 已補齊本地運行配置。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅憑證與控制平面操作）；白賁通過（不增新服務，沿用現有同步腳本）。
+
+### [ ] B27_BTC_R2_DEPLOY_RECOVERY_RUN_IN_PROGRESS
+- [LOGIC_CORE] Technical Dependency: `scripts/alpha_supervisor.py --symbols BTCUSDT --skip-ingest --cycles 1 --max-rounds 1 --target-pass-rate 0.15 --target-deploy-symbols 1 --target-deploy-rules 2 --target-all-alpha -3.50 --target-deploy-alpha 0.00 --stable-rounds 1 --with-monitor --monitor-interval 2`, monitor run id `iter_r1_9532efa0f183`.
+- [LOGIC_CORE] Business Value: started R2 recovery loop to convert 100% task completion into non-zero deploy outputs while preserving causal contract.
+- [BUSINESS_STATUS] 商業進度: BTC 新一輪修復已啟動，目標是先拿到可上架 deploy（>=1 symbol / >=2 rules）再進一步提高 pass rate。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（純後端訓練調度）；白賁通過（參數層調整，無策略核心重寫）。
+
+### [x] S0_2_ENV_SECRET_SCRUB_AND_ALCHEMY_CHECKLIST
+- [LOGIC_CORE] Technical Dependency: `support/.env`, `./.env`, `docs/TOKEN_ROTATION_SYNC_CHECKLIST.md`.
+- [LOGIC_CORE] Business Value: all local plaintext secrets were scrubbed back to blank placeholders while preserving required key names; added explicit Alchemy network/policy setup steps to prevent false-negative ingestion after key fill.
+- [BUSINESS_STATUS] 商業進度: 兩份本地 `.env` 已回到可安全填寫狀態（無明文 token），你只需填新值即可繼續自動化。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅環境檔與文件）；白賁通過（無新增服務與邏輯分支）。
+
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`

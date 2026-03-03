@@ -95,13 +95,18 @@
     applyFilter();
   }
 
-  async function fetchJson(url, payload) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+  async function fetchJson(url, payload, options = {}) {
+    const method = String(options.method || "POST").toUpperCase();
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    const init = {
+      method,
+      headers,
       credentials: "same-origin",
-      body: JSON.stringify(payload || {}),
-    });
+    };
+    if (method !== "GET" && method !== "HEAD") {
+      init.body = JSON.stringify(payload || {});
+    }
+    const resp = await fetch(url, init);
     let data = {};
     try {
       data = await resp.json();
@@ -218,11 +223,85 @@
     node.style.color = isOk ? "" : "#ffb3b3";
   }
 
+  let paymentPollTimer = null;
+  let paymentPollInvoiceId = "";
+
+  function stopPaymentPolling() {
+    if (paymentPollTimer) {
+      window.clearInterval(paymentPollTimer);
+      paymentPollTimer = null;
+    }
+    paymentPollInvoiceId = "";
+  }
+
+  function onPaymentGranted(statusPayload) {
+    revealUnlockedContent();
+    setLockMessage("Access Granted: Synchronizing Sovereign Signals");
+    const syncNodes = Array.from(document.querySelectorAll(".vault-sync-state"));
+    for (const node of syncNodes) {
+      node.textContent = "Access Granted: Synchronizing Sovereign Signals";
+    }
+    setPaymentResult(
+      `Payment confirmed (${String(statusPayload?.status || "paid").toUpperCase()}). Access Granted: Synchronizing Sovereign Signals`,
+      true,
+    );
+  }
+
+  async function pollInvoiceStatus(invoiceId) {
+    const cleaned = String(invoiceId || "").trim();
+    if (!cleaned) return;
+    try {
+      const status = await fetchJson(`/api/v1/payment/status?invoice_id=${encodeURIComponent(cleaned)}`, null, { method: "GET" });
+      const current = String(status?.status || "pending").toLowerCase();
+      if (current === "paid") {
+        stopPaymentPolling();
+        onPaymentGranted(status);
+        window.setTimeout(() => {
+          closePaymentModal();
+          window.location.reload();
+        }, 900);
+        return;
+      }
+      if (current === "expired" || current === "cancelled") {
+        stopPaymentPolling();
+        setPaymentResult(`Invoice ${current}. Please create a new invoice.`, false);
+        return;
+      }
+      setPaymentResult("Awaiting on-chain confirmation...", true);
+    } catch (err) {
+      const msg = String(err?.message || "");
+      if (msg.includes("invoice_not_found")) {
+        stopPaymentPolling();
+        setPaymentResult("Invoice not found. Please create a new one.", false);
+        return;
+      }
+      if (msg.includes("unlock_required") || msg.includes("wallet_session_mismatch")) {
+        stopPaymentPolling();
+        setPaymentResult("Session expired or wallet mismatch. Please sign again.", false);
+        return;
+      }
+      setPaymentResult("Polling payment status...", true);
+    }
+  }
+
+  function startPaymentPolling(invoiceId) {
+    const cleaned = String(invoiceId || "").trim();
+    if (!cleaned) return;
+    stopPaymentPolling();
+    paymentPollInvoiceId = cleaned;
+    setPaymentResult("Awaiting on-chain confirmation...", true);
+    void pollInvoiceStatus(cleaned);
+    paymentPollTimer = window.setInterval(() => {
+      void pollInvoiceStatus(cleaned);
+    }, 10000);
+  }
+
   function closePaymentModal() {
     const modal = document.getElementById("paymentModal");
     if (!modal) return;
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
+    stopPaymentPolling();
   }
 
   function openPaymentModal(invoice) {
@@ -233,13 +312,15 @@
       if (node) node.textContent = String(value ?? "-");
     };
     setText("invoiceIdField", invoice.invoice_id);
-    setText("invoicePlanField", invoice.plan_code);
+    const rail = String(invoice.payment_rail || "trc20_usdt");
+    setText("invoicePlanField", `${invoice.plan_code} / ${rail}`);
     setText("invoiceAmountField", `${invoice.amount_usdt} USDT`);
     setText("invoiceAddressField", invoice.pay_to_address);
     setText("invoiceNonceField", invoice.nonce);
     setText("invoiceExpiryField", invoice.expires_at_utc);
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
+    startPaymentPolling(invoice.invoice_id);
   }
 
   function bindPaymentModalClose() {
@@ -284,12 +365,14 @@
       button.addEventListener("click", async (event) => {
         event.preventDefault();
         const plan = String(button.getAttribute("data-plan") || "sovereign").trim().toLowerCase();
+        const paymentRail = String(button.getAttribute("data-payment-rail") || "trc20_usdt").trim().toLowerCase();
         const walletAddress = getVaultUnlockedAddress();
         button.disabled = true;
         setPaymentResult("Creating payment invoice...", true);
         try {
           const invoice = await fetchJson("/api/v1/payment/create", {
             plan_code: plan,
+            payment_rail: paymentRail,
             wallet_address: walletAddress,
             slug: "vault",
           });
@@ -324,6 +407,8 @@
 
     window.setTimeout(openVault, 800);
   }
+
+  window.addEventListener("beforeunload", stopPaymentPolling);
 
   function initObsidianBackground(config) {
     const canvas = document.getElementById("matrix-bg");

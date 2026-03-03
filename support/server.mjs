@@ -43,6 +43,7 @@ const PAYWALL_NOTICE = "\u6b64\u9810\u8a00\u53d7 LeiMai \u6b0a\u9650\u5354\u8b70
 const NEGOTIATING_NOTICE = "Negotiating Secure Enclave...";
 const UNLOCK_COOKIE_NAME = "leimai_unlock";
 const PAYMENT_PLAN_CODES = new Set(["sovereign", "elite"]);
+const PAYMENT_RAIL_CODES = new Set(["trc20_usdt", "eth_l1_erc20", "l2_usdc"]);
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -109,6 +110,9 @@ const CONFIG = {
   paymentInvoiceTtlSec: numberEnv("SUPPORT_PAYMENT_INVOICE_TTL_SEC", 1200),
   planSovereignUsdt: numberEnv("SUPPORT_PLAN_SOVEREIGN_USDT", 199),
   planEliteUsdt: numberEnv("SUPPORT_PLAN_ELITE_USDT", 499),
+  supportEthL1Erc20Recipient: process.env.ETH_L1_ERC20_RECIPIENT || "0xc8Fdb8A3D531C47d4d3C4C252c09A26176323809",
+  supportL2Network: process.env.L2_NETWORK || "arbitrum",
+  supportL2UsdcRecipient: process.env.L2_USDC_RECIPIENT || "0x1E90d2675915F4510eEEb6Bb9eecEECC2E320179",
   cookieSecure: boolEnv("SUPPORT_COOKIE_SECURE", IS_VERCEL_RUNTIME),
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
 };
@@ -672,6 +676,22 @@ function resolvePlanAmountUsdt(planCode) {
   return Number(CONFIG.planSovereignUsdt || 199);
 }
 
+function normalizePaymentRail(raw) {
+  const rail = String(raw || "trc20_usdt").trim().toLowerCase();
+  return PAYMENT_RAIL_CODES.has(rail) ? rail : "trc20_usdt";
+}
+
+function resolvePaymentRecipient(rail) {
+  const normalized = normalizePaymentRail(rail);
+  if (normalized === "eth_l1_erc20") {
+    return String(CONFIG.supportEthL1Erc20Recipient || "").trim() || CONFIG.supportAddress;
+  }
+  if (normalized === "l2_usdc") {
+    return String(CONFIG.supportL2UsdcRecipient || "").trim() || CONFIG.supportAddress;
+  }
+  return CONFIG.supportAddress;
+}
+
 function generateInvoiceId() {
   const ts = Math.floor(nowMs() / 1000).toString(36);
   const rand = randomBytes(4).toString("hex");
@@ -682,9 +702,10 @@ function generatePaymentNonce() {
   return randomBytes(16).toString("hex");
 }
 
-function buildPaymentInvoiceRecord({ walletAddress, slug, planCode }) {
+function buildPaymentInvoiceRecord({ walletAddress, slug, planCode, paymentRail }) {
   const normalizedSlug = normalizeReportSlug(slug || "vault") || "vault";
   const normalizedPlan = normalizePlanCode(planCode);
+  const normalizedRail = normalizePaymentRail(paymentRail);
   const ttlSec = Math.max(300, Math.floor(CONFIG.paymentInvoiceTtlSec || 1200));
   const expiresAt = new Date(nowMs() + ttlSec * 1000);
   return {
@@ -693,13 +714,15 @@ function buildPaymentInvoiceRecord({ walletAddress, slug, planCode }) {
     slug: normalizedSlug,
     plan_code: normalizedPlan,
     amount_usdt: resolvePlanAmountUsdt(normalizedPlan),
-    pay_to_address: CONFIG.supportAddress,
+    pay_to_address: resolvePaymentRecipient(normalizedRail),
     nonce: generatePaymentNonce(),
     status: "pending",
     expires_at_utc: expiresAt.toISOString(),
     meta: {
       source: "phase4_mock_payment",
       created_via: "/api/v1/payment/create",
+      payment_rail: normalizedRail,
+      l2_network: String(CONFIG.supportL2Network || "arbitrum").toLowerCase(),
     },
   };
 }
@@ -714,6 +737,56 @@ async function recordPaymentInvoice(invoice) {
     return { ok: false, error: `payment_insert_failed:${error.message || error.code || "unknown"}` };
   }
   return { ok: true };
+}
+
+async function fetchPaymentInvoiceStatus({ invoiceId, sessionAddress }) {
+  const client = getSupabaseServiceClient();
+  if (!client) {
+    return { ok: false, error: "payment_storage_unavailable" };
+  }
+  const cleanedId = String(invoiceId || "").trim();
+  if (!cleanedId) {
+    return { ok: false, error: "invalid_invoice_id" };
+  }
+
+  const { data, error } = await client
+    .from("payment_invoices")
+    .select("invoice_id,status,wallet_address,plan_code,amount_usdt,pay_to_address,nonce,expires_at_utc,meta,updated_at")
+    .eq("invoice_id", cleanedId)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    return { ok: false, error: `payment_status_read_failed:${error.message || error.code || "unknown"}` };
+  }
+  if (!data || typeof data !== "object") {
+    return { ok: false, error: "invoice_not_found" };
+  }
+
+  const walletAddress = toCanonicalAddress(data.wallet_address || "");
+  const canonicalSession = toCanonicalAddress(sessionAddress || "");
+  if (!walletAddress || !canonicalSession || walletAddress !== canonicalSession) {
+    return { ok: false, error: "wallet_session_mismatch" };
+  }
+
+  const meta = data.meta && typeof data.meta === "object" ? data.meta : {};
+  return {
+    ok: true,
+    invoice: {
+      invoice_id: String(data.invoice_id || ""),
+      status: String(data.status || "pending"),
+      wallet_address: walletAddress,
+      plan_code: normalizePlanCode(data.plan_code || "sovereign"),
+      amount_usdt: Number(data.amount_usdt || 0),
+      pay_to_address: String(data.pay_to_address || ""),
+      nonce: String(data.nonce || ""),
+      expires_at_utc: String(data.expires_at_utc || ""),
+      updated_at_utc: String(data.updated_at || ""),
+      paid_at_utc: String(meta.paid_at_utc || ""),
+      paid_tx_hash: String(meta.paid_tx_hash || ""),
+      payment_rail: String(meta.payment_rail || "trc20_usdt"),
+      l2_network: String(meta.l2_network || ""),
+    },
+  };
 }
 
 function triggerEntityProfilerForAddress(walletAddress) {
@@ -1081,7 +1154,7 @@ function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
     ? `<div class="vault-sync-state terminal-font">${escapeHtml(
         unlockedAddress ? `SESSION VERIFIED: ${unlockedAddress}` : "SESSION VERIFIED",
       )}</div>
-      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign">[ UPGRADE TO SOVEREIGN ]</button>
+      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign" data-payment-rail="trc20_usdt">[ UPGRADE TO SOVEREIGN ]</button>
       <div id="paymentResult" class="payment-result muted"></div>`
     : `<button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>`;
 
@@ -1786,6 +1859,7 @@ export async function handleRequest(req, res) {
         walletAddress: providedAddress,
         slug: body?.slug || "vault",
         planCode: body?.plan_code || "sovereign",
+        paymentRail: body?.payment_rail || "trc20_usdt",
       });
       const record = await recordPaymentInvoice(invoice);
       if (!record.ok) {
@@ -1801,7 +1875,40 @@ export async function handleRequest(req, res) {
         pay_to_address: invoice.pay_to_address,
         nonce: invoice.nonce,
         expires_at_utc: invoice.expires_at_utc,
+        payment_rail: String(invoice?.meta?.payment_rail || "trc20_usdt"),
+        l2_network: String(invoice?.meta?.l2_network || ""),
       });
+    }
+
+    if (method === "GET" && pathname === "/api/v1/payment/status") {
+      if (!checkRateLimit(req, "payment_status", CONFIG.rateLimitPerMinute * 3)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const session = getUnlockSessionFromReq(req);
+      if (!session) {
+        return jsonResponse(res, 401, { ok: false, error: "unlock_required" });
+      }
+      const invoiceId = String(searchParams.get("invoice_id") || "").trim();
+      if (!invoiceId) {
+        return jsonResponse(res, 400, { ok: false, error: "invoice_id_required" });
+      }
+      const status = await fetchPaymentInvoiceStatus({
+        invoiceId,
+        sessionAddress: session.addr || "",
+      });
+      if (!status.ok) {
+        if (status.error === "invoice_not_found") {
+          return jsonResponse(res, 404, { ok: false, error: status.error });
+        }
+        if (status.error === "wallet_session_mismatch") {
+          return jsonResponse(res, 403, { ok: false, error: status.error });
+        }
+        if (status.error === "payment_storage_unavailable") {
+          return jsonResponse(res, 500, { ok: false, error: status.error });
+        }
+        return jsonResponse(res, 400, { ok: false, error: status.error || "payment_status_failed" });
+      }
+      return jsonResponse(res, 200, { ok: true, ...status.invoice });
     }
 
     if (method === "GET" && pathname === "/assets/styles.css") {
