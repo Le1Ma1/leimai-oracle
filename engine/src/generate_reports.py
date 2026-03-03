@@ -308,7 +308,7 @@ def build_jsonld(
                 "about": {
                     "@type": "Thing",
                     "name": unique_entity,
-                    "sameAs": "https://leimaitech.com/",
+                    "sameAs": "https://leimai.io/",
                 },
                 "author": {"@type": "Organization", "name": "LeiMai Oracle"},
             },
@@ -316,7 +316,7 @@ def build_jsonld(
                 "@type": "DefinedTerm",
                 "name": unique_entity,
                 "description": "Proprietary liquidity-friction entity used by LeiMai Oracle GEO layer.",
-                "inDefinedTermSet": "https://leimaitech.com/analysis/",
+                "inDefinedTermSet": "https://leimai.io/analysis/",
             },
         ],
     }

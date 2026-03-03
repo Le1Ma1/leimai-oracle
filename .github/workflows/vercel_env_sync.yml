@@ -45,7 +45,26 @@ jobs:
           VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           VERCEL_TARGETS: production,preview,development
+          VERCEL_ENABLE_DOMAIN_SYNC: "true"
+          VERCEL_PRIMARY_DOMAIN: leimai.io
+          VERCEL_SUPPORT_DOMAIN: support.leimai.io
+          VERCEL_WWW_DOMAIN: www.leimai.io
+          VERCEL_REDIRECT_SOURCE_DOMAINS: leimaitech.com,www.leimaitech.com,support.leimaitech.com
+          VERCEL_REDIRECT_STATUS: "301"
           VERCEL_TRIGGER_DEPLOY: "true"
         run: |
           python scripts/vercel_ops.py --retry 3 --timeout-sec 15
+
+      - name: Sync Cloudflare DNS for leimai.io
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_NAME: leimai.io
+          CF_RECORDS: "@,www,support"
+          CF_TARGET: cname.vercel-dns.com
+          CF_PROXY: "false"
+          CF_TTL: "1"
+        run: |
+          python scripts/cloudflare_ops.py --retry 3 --timeout-sec 15

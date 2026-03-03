@@ -2,7 +2,7 @@ function normalizeBase(baseUrl) {
   return String(baseUrl || "").replace(/\/+$/, "");
 }
 
-const ROOT_CANONICAL = "https://leimaitech.com/";
+const ROOT_CANONICAL = "https://leimai.io/";
 
 function normalizeAnalysisPaths(paths) {
   if (!Array.isArray(paths)) return [];

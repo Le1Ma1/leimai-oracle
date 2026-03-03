@@ -1,6 +1,6 @@
 # LeiMai Throne Support Site
 
-Standalone support + leaderboard property for `support.leimaitech.com`.
+Standalone support + leaderboard property for `support.leimai.io`.
 
 ## Scope
 

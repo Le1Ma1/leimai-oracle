@@ -28,7 +28,12 @@ const __dirname = path.dirname(__filename);
 const LOCALES = listLocales();
 const PREVIEW_DIR = path.join(__dirname, "preview");
 const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1";
-const ROOT_CANONICAL_URL = "https://leimaitech.com/";
+const ROOT_CANONICAL_URL = "https://leimai.io/";
+const LEGACY_HOST_REDIRECT_MAP = new Map([
+  ["leimaitech.com", "leimai.io"],
+  ["www.leimaitech.com", "leimai.io"],
+  ["support.leimaitech.com", "support.leimai.io"],
+]);
 const DEFAULT_REPORT_LOCALE = "en";
 const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
 const REPORT_PREVIEW_RATIO = 0.2;
@@ -80,7 +85,7 @@ await loadLocalEnv(path.join(__dirname, ".env"));
 const CONFIG = {
   port: numberEnv("SUPPORT_PORT", 4310),
   siteUrl: (process.env.SUPPORT_SITE_URL || "http://localhost:4310").replace(/\/+$/, ""),
-  mainSiteUrl: (process.env.SUPPORT_MAIN_SITE_URL || "https://leimaitech.com").replace(/\/+$/, ""),
+  mainSiteUrl: (process.env.SUPPORT_MAIN_SITE_URL || "https://leimai.io").replace(/\/+$/, ""),
   supportAddress: process.env.SUPPORT_TRC20_ADDRESS || "TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
   minAmount: numberEnv("SUPPORT_MIN_AMOUNT", 1),
   minConfirmations: numberEnv("SUPPORT_MIN_CONFIRMATIONS", 15),
@@ -148,6 +153,23 @@ function parseCookies(req) {
     }
   }
   return out;
+}
+
+function normalizeHostHeader(rawHost) {
+  const host = String(rawHost || "")
+    .trim()
+    .toLowerCase()
+    .split(",")[0]
+    .trim();
+  return host.replace(/:\d+$/, "");
+}
+
+function buildLegacyRedirectUrl(reqUrl, host) {
+  const targetHost = LEGACY_HOST_REDIRECT_MAP.get(host);
+  if (!targetHost) return null;
+  const pathname = reqUrl?.pathname || "/";
+  const search = reqUrl?.search || "";
+  return `https://${targetHost}${pathname}${search}`;
 }
 
 function hmacHex(secret, data) {
@@ -311,7 +333,7 @@ function buildSocialCardSvg() {
   <text x="72" y="140" fill="#39ff14" font-size="30" font-family="Consolas, monospace">LEIMAI THRONE</text>
   <text x="72" y="250" fill="#ffffff" font-size="66" font-family="Consolas, monospace">PROOF OF WEALTH</text>
   <text x="72" y="340" fill="#9fc89d" font-size="26" font-family="Consolas, monospace">Highest single verified USDT transfer rules the throne.</text>
-  <text x="72" y="500" fill="#39ff14" font-size="22" font-family="Consolas, monospace">support.leimaitech.com</text>
+  <text x="72" y="500" fill="#39ff14" font-size="22" font-family="Consolas, monospace">support.leimai.io</text>
 </svg>`;
 }
 
@@ -930,7 +952,7 @@ function renderRootLandingPage(reports) {
       </div>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">Open Full Report Index</a>
-        <a class="btn" href="https://leimaitech.com/" target="_blank" rel="noopener">Main Domain</a>
+        <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">Main Domain</a>
       </div>
     </header>
 
@@ -1490,6 +1512,16 @@ export async function handleRequest(req, res) {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || `localhost:${CONFIG.port}`}`);
     const { pathname, searchParams } = reqUrl;
     const method = (req.method || "GET").toUpperCase();
+    const host = normalizeHostHeader(req.headers.host);
+    const redirectUrl = buildLegacyRedirectUrl(reqUrl, host);
+    if (redirectUrl) {
+      res.writeHead(301, {
+        Location: redirectUrl,
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end();
+      return;
+    }
     purgeExpiredChallenges();
     const routed = await handleOuroborosRoutes({ method, pathname, req, res });
     if (routed) return;

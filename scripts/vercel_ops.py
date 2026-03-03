@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -16,6 +16,14 @@ DEFAULT_GITHUB_OWNER = "Le1Ma1"
 DEFAULT_GITHUB_REPO = "leimai-oracle"
 DEFAULT_SUPPORT_PREFIX = "SUPPORT_"
 DEFAULT_TARGETS = ("production", "preview", "development")
+DEFAULT_PRIMARY_DOMAIN = "leimai.io"
+DEFAULT_SUPPORT_DOMAIN = "support.leimai.io"
+DEFAULT_WWW_DOMAIN = "www.leimai.io"
+DEFAULT_REDIRECT_SOURCES = (
+    "leimaitech.com",
+    "www.leimaitech.com",
+    "support.leimaitech.com",
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class SyncConfig:
     vercel_team_id: str | None
     supabase_url: str
     supabase_anon_key: str
+    supabase_service_role_key: str
     support_prefix: str
     targets: tuple[str, ...]
     retries: int
@@ -35,6 +44,12 @@ class SyncConfig:
     trigger_deploy: bool
     deploy_ref: str
     dry_run: bool
+    enable_domain_sync: bool
+    primary_domain: str
+    support_domain: str
+    www_domain: str
+    redirect_source_domains: tuple[str, ...]
+    redirect_status_code: int
 
 
 def utc_now_iso() -> str:
@@ -64,6 +79,24 @@ def parse_targets(raw: str | None) -> tuple[str, ...]:
     return allowed or DEFAULT_TARGETS
 
 
+def parse_domain_csv(raw: str | None, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    if raw is None:
+        return fallback
+    out = tuple(token.strip().lower() for token in str(raw).split(",") if token.strip())
+    return out or fallback
+
+
+def normalize_domain(raw: str | None, fallback: str) -> str:
+    text = str(raw or fallback).strip().lower()
+    if not text:
+        return fallback
+    if text.startswith("https://"):
+        text = text[8:]
+    if text.startswith("http://"):
+        text = text[7:]
+    return text.strip("/") or fallback
+
+
 def load_config(args: argparse.Namespace) -> SyncConfig:
     load_dotenv()
     trigger_deploy_env = parse_bool(os.getenv("VERCEL_TRIGGER_DEPLOY"), True)
@@ -78,6 +111,7 @@ def load_config(args: argparse.Namespace) -> SyncConfig:
         vercel_team_id=str(os.getenv("VERCEL_TEAM_ID", "")).strip() or None,
         supabase_url=str(os.getenv("SUPABASE_URL", "")).strip(),
         supabase_anon_key=str(os.getenv("SUPABASE_ANON_KEY", "")).strip(),
+        supabase_service_role_key=str(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")).strip(),
         support_prefix=str(args.support_prefix or os.getenv("VERCEL_SUPPORT_PREFIX", DEFAULT_SUPPORT_PREFIX)).strip() or DEFAULT_SUPPORT_PREFIX,
         targets=parse_targets(os.getenv("VERCEL_TARGETS")),
         retries=max(1, int(args.retry)),
@@ -85,6 +119,12 @@ def load_config(args: argparse.Namespace) -> SyncConfig:
         trigger_deploy=(trigger_deploy_env and not no_deploy),
         deploy_ref=str(os.getenv("VERCEL_DEPLOY_REF", "main")).strip() or "main",
         dry_run=dry_run,
+        enable_domain_sync=parse_bool(os.getenv("VERCEL_ENABLE_DOMAIN_SYNC"), False),
+        primary_domain=normalize_domain(os.getenv("VERCEL_PRIMARY_DOMAIN"), DEFAULT_PRIMARY_DOMAIN),
+        support_domain=normalize_domain(os.getenv("VERCEL_SUPPORT_DOMAIN"), DEFAULT_SUPPORT_DOMAIN),
+        www_domain=normalize_domain(os.getenv("VERCEL_WWW_DOMAIN"), DEFAULT_WWW_DOMAIN),
+        redirect_source_domains=parse_domain_csv(os.getenv("VERCEL_REDIRECT_SOURCE_DOMAINS"), DEFAULT_REDIRECT_SOURCES),
+        redirect_status_code=max(301, int(os.getenv("VERCEL_REDIRECT_STATUS", "301"))),
     )
 
 
@@ -389,6 +429,184 @@ def vercel_get_project(session: requests.Session, cfg: SyncConfig) -> dict[str, 
     return data if isinstance(data, dict) else None
 
 
+def vercel_list_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, dict[str, Any]]:
+    headers = build_vercel_headers(cfg.vercel_token)
+    url = f"https://api.vercel.com/v9/projects/{cfg.vercel_project_id}/domains"
+    ok, status, data, error = request_with_retry(
+        session,
+        "GET",
+        url,
+        headers=headers,
+        params=vercel_params(cfg),
+        retries=cfg.retries,
+        timeout_sec=cfg.timeout_sec,
+    )
+    if not ok:
+        log_event("VERCEL_LIST_DOMAINS_FAILED", status=status, error=error)
+        return {}
+    rows = data.get("domains") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = normalize_domain(row.get("name"), "")
+        if name:
+            out[name] = row
+    return out
+
+
+def vercel_add_domain(session: requests.Session, cfg: SyncConfig, domain: str) -> bool:
+    headers = build_vercel_headers(cfg.vercel_token)
+    url = f"https://api.vercel.com/v10/projects/{cfg.vercel_project_id}/domains"
+    payload = {"name": domain}
+    ok, status, data, error = request_with_retry(
+        session,
+        "POST",
+        url,
+        headers=headers,
+        params=vercel_params(cfg),
+        json_body=payload,
+        retries=cfg.retries,
+        timeout_sec=cfg.timeout_sec,
+    )
+    if ok:
+        return True
+
+    # Already exists / conflict in Vercel returns 409 for some tenants.
+    if status == 409:
+        log_event("VERCEL_DOMAIN_EXISTS", domain=domain)
+        return True
+
+    detail = error
+    if isinstance(data, dict):
+        msg = data.get("error", {}) if isinstance(data.get("error"), dict) else {}
+        detail = str(msg.get("message") or error)
+    log_event("VERCEL_ADD_DOMAIN_FAILED", domain=domain, status=status, error=detail)
+    return False
+
+
+def vercel_patch_domain(session: requests.Session, cfg: SyncConfig, domain: str, payload: dict[str, Any]) -> bool:
+    headers = build_vercel_headers(cfg.vercel_token)
+    url = f"https://api.vercel.com/v9/projects/{cfg.vercel_project_id}/domains/{domain}"
+    ok, status, _data, error = request_with_retry(
+        session,
+        "PATCH",
+        url,
+        headers=headers,
+        params=vercel_params(cfg),
+        json_body=payload,
+        retries=cfg.retries,
+        timeout_sec=cfg.timeout_sec,
+    )
+    if not ok:
+        log_event("VERCEL_PATCH_DOMAIN_FAILED", domain=domain, status=status, error=error, payload=payload)
+    return ok
+
+
+def vercel_set_primary_domain(session: requests.Session, cfg: SyncConfig, domain: str) -> bool:
+    headers = build_vercel_headers(cfg.vercel_token)
+    url = f"https://api.vercel.com/v9/projects/{cfg.vercel_project_id}"
+    payload = {"primaryDomain": domain}
+    ok, status, _data, error = request_with_retry(
+        session,
+        "PATCH",
+        url,
+        headers=headers,
+        params=vercel_params(cfg),
+        json_body=payload,
+        retries=cfg.retries,
+        timeout_sec=cfg.timeout_sec,
+    )
+    if not ok:
+        log_event("VERCEL_SET_PRIMARY_FAILED", domain=domain, status=status, error=error)
+    return ok
+
+
+def redirect_target_for_domain(source_domain: str, cfg: SyncConfig) -> str:
+    if source_domain.startswith("support."):
+        return cfg.support_domain
+    return cfg.primary_domain
+
+
+def sync_domains(session: requests.Session, cfg: SyncConfig) -> dict[str, int]:
+    stats = {
+        "ensured": 0,
+        "redirect_updated": 0,
+        "primary_set": 0,
+        "failed": 0,
+    }
+
+    desired = tuple(
+        dict.fromkeys(
+            [
+                cfg.primary_domain,
+                cfg.www_domain,
+                cfg.support_domain,
+                *cfg.redirect_source_domains,
+            ]
+        )
+    )
+    existing = vercel_list_domains(session, cfg)
+
+    for domain in desired:
+        if not domain:
+            continue
+        if domain in existing:
+            stats["ensured"] += 1
+            continue
+        if cfg.dry_run:
+            log_event("DOMAIN_DRY_RUN_ENSURE", domain=domain)
+            stats["ensured"] += 1
+            continue
+        ok = vercel_add_domain(session, cfg, domain)
+        if ok:
+            stats["ensured"] += 1
+        else:
+            stats["failed"] += 1
+
+    if cfg.dry_run:
+        log_event("DOMAIN_DRY_RUN_PRIMARY", domain=cfg.primary_domain)
+        stats["primary_set"] += 1
+    else:
+        ok = vercel_set_primary_domain(session, cfg, cfg.primary_domain)
+        if ok:
+            stats["primary_set"] += 1
+        else:
+            stats["failed"] += 1
+
+    # Keep io domains non-redirecting.
+    for domain in (cfg.primary_domain, cfg.www_domain, cfg.support_domain):
+        if not domain:
+            continue
+        payload = {"redirect": None}
+        if cfg.dry_run:
+            log_event("DOMAIN_DRY_RUN_PATCH", domain=domain, payload=payload)
+            continue
+        _ = vercel_patch_domain(session, cfg, domain, payload)
+
+    for source in cfg.redirect_source_domains:
+        if not source:
+            continue
+        target = redirect_target_for_domain(source, cfg)
+        payload = {
+            "redirect": f"https://{target}",
+            "redirectStatusCode": cfg.redirect_status_code,
+        }
+        if cfg.dry_run:
+            log_event("DOMAIN_DRY_RUN_REDIRECT", source=source, target=payload["redirect"], status=cfg.redirect_status_code)
+            stats["redirect_updated"] += 1
+            continue
+        ok = vercel_patch_domain(session, cfg, source, payload)
+        if ok:
+            stats["redirect_updated"] += 1
+        else:
+            stats["failed"] += 1
+
+    return stats
+
+
 def trigger_vercel_deploy(session: requests.Session, cfg: SyncConfig) -> bool:
     project = vercel_get_project(session, cfg)
     if not project:
@@ -474,12 +692,16 @@ def run_sync() -> int:
         "SUPABASE_ANON_KEY": cfg.supabase_anon_key,
         **support_vars,
     }
+    if cfg.supabase_service_role_key:
+        desired["SUPABASE_SERVICE_ROLE_KEY"] = cfg.supabase_service_role_key
+
     log_event(
         "SYNC_PLAN",
         dry_run=cfg.dry_run,
         targets=",".join(cfg.targets),
         keys_total=len(desired),
         support_keys=len(support_vars),
+        domain_sync=cfg.enable_domain_sync,
     )
     if cfg.dry_run:
         for key in sorted(desired):
@@ -492,14 +714,21 @@ def run_sync() -> int:
             total[k] += stats[k]
         log_event("SYNC_TARGET_DONE", target=target, **stats)
 
+    domain_stats = {"ensured": 0, "redirect_updated": 0, "primary_set": 0, "failed": 0}
+    if cfg.enable_domain_sync:
+        domain_stats = sync_domains(session, cfg)
+        log_event("DOMAIN_SYNC_DONE", **domain_stats)
+
     deploy_triggered = False
     if cfg.trigger_deploy and not cfg.dry_run:
         deploy_triggered = trigger_vercel_deploy(session, cfg)
     elif cfg.trigger_deploy and cfg.dry_run:
         log_event("SYNC_DRY_RUN_DEPLOY", enabled=True)
 
-    log_event("SYNC_DONE", deploy_triggered=deploy_triggered, **total)
-    return 0 if total["failed"] == 0 else 2
+    log_event("SYNC_DONE", deploy_triggered=deploy_triggered, **total, domain_failed=domain_stats["failed"])
+    if total["failed"] > 0 or domain_stats["failed"] > 0:
+        return 2
+    return 0
 
 
 def main() -> int:
