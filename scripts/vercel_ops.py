@@ -255,6 +255,18 @@ def gh_list_support_variables(session: requests.Session, cfg: SyncConfig) -> dic
     return out
 
 
+def env_list_support_variables(prefix: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        val = str(value or "").strip()
+        if not val:
+            continue
+        out[key] = val
+    return out
+
+
 def vercel_params(cfg: SyncConfig) -> dict[str, Any]:
     if cfg.vercel_team_id:
         return {"teamId": cfg.vercel_team_id}
@@ -713,7 +725,9 @@ def run_sync() -> int:
         return 1
 
     session = requests.Session()
-    support_vars = gh_list_support_variables(session, cfg)
+    gh_support_vars = gh_list_support_variables(session, cfg)
+    env_support_vars = env_list_support_variables(cfg.support_prefix)
+    support_vars = {**env_support_vars, **gh_support_vars}
     desired = {
         "SUPABASE_URL": cfg.supabase_url,
         "SUPABASE_ANON_KEY": cfg.supabase_anon_key,
@@ -728,6 +742,8 @@ def run_sync() -> int:
         targets=",".join(cfg.targets),
         keys_total=len(desired),
         support_keys=len(support_vars),
+        support_keys_env=len(env_support_vars),
+        support_keys_github=len(gh_support_vars),
         domain_sync=cfg.enable_domain_sync,
     )
     if cfg.dry_run:

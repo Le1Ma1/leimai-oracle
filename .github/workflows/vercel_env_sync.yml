@@ -46,6 +46,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPPORT_BASE_URL: ${{ vars.SUPPORT_BASE_URL }}
+          SUPPORT_SITE_URL: ${{ vars.SUPPORT_SITE_URL }}
+          SUPPORT_MAIN_SITE_URL: ${{ vars.SUPPORT_MAIN_SITE_URL }}
           VERCEL_TARGETS: production,preview,development
           VERCEL_ENABLE_DOMAIN_SYNC: "true"
           VERCEL_PRIMARY_DOMAIN: leimai.io
