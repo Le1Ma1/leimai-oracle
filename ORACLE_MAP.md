@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T12:57:17Z`
+- Last Updated (UTC): `2026-03-03T13:04:59Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -813,6 +813,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: GitHub variable `SUPPORT_SESSION_SECRET` created; sync run `22623990098` success.
 - 讀寫分離檢查: 通過（僅控制平面配置寫入）。
 - 白賁極簡檢查: 通過（不修改應用邏輯，僅補必要配置）。
+
+### [x] Phase 3.4.2 Production 解鎖鏈路驗收完成
+- Technical Dependency: Vercel deployment `dpl_8FKvchk5CexDJfEUXYscgkVezyox`, route `/api/v1/auth/wallet/challenge`.
+- Business Value: 生產環境已重新部署並載入最新 env；Web3 解鎖挑戰 API 線上返回 `ok=true`，不再受 `unlock_not_configured` 阻斷。
+- Evidence: live call `https://leimaitech.com/api/v1/auth/wallet/challenge` at `2026-03-03T13:04:45Z` returned nonce/message payload.
+- 讀寫分離檢查: 通過（部署與線上驗收層，未改模型/資料處理）。
+- 白賁極簡檢查: 通過（沿用現有 API 路徑與部署流水線）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
