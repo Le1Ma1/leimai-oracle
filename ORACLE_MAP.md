@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T13:49:19Z`
+- Last Updated (UTC): `2026-03-03T14:00:22Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -764,6 +764,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Changes are limited to infra control-plane and support SEO routing; engine strategy/training contracts untouched.
 - Bai Ben (Minimalism) Review: Pass. Reused existing workflow/script path with one focused Cloudflare script.
 
+### [x] B25_10_VERCEL_ENV_SYNC_SUPPORT_VAR_FALLBACK
+- Technical Dependency: `scripts/vercel_ops.py`, `.github/workflows/vercel_env_sync.yml`.
+- Business Value: even when GitHub Actions default token cannot list repo variables (`support_keys_github=0`), workflow now injects critical `SUPPORT_*` variables directly and `vercel_ops` consumes env fallback, preserving deterministic env sync.
+- Evidence: workflow run `22626341723` shows `support_keys=3`, `support_keys_env=3`, `domain_failed=0`.
+- Read/Write Isolation Review: Pass. Control-plane synchronization fallback only.
+- Bai Ben (Minimalism) Review: Pass. Single fallback path without introducing extra services.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -851,6 +858,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
   - Vercel domains show redirects: `leimaitech.com -> leimai.io`, `www.leimaitech.com -> leimai.io`, `support.leimaitech.com -> support.leimai.io`.
 - 讀寫分離檢查: 通過（僅網域控制平面、support 路由與 SEO 常量更新）。
 - 白賁極簡檢查: 通過（無新增基礎設施服務，維持單一部署與腳本閉環）。
+
+### [x] Phase 3.5.1 自動化遷移閉環驗收完成
+- Technical Dependency: `.github/workflows/vercel_env_sync.yml`, Vercel project `prj_bAYNz4HG4k56JGljjSAyjw9XsG2k`, Cloudflare zone `leimai.io`.
+- Business Value: 遷移後已形成可重複執行的閉環：`dispatch -> env/domain sync -> deploy -> DNS upsert`，並在生產環境驗證 `.com` 到 `.io` 的 301 與 `.io` canonical 正確輸出。
+- Evidence: latest successful runs `22626227806`, `22626341723`; production deployment `dpl_GdQHbHusWndorcmN2uqvBmZtDTRZ` ready.
+- 讀寫分離檢查: 通過（僅部署與控制平面操作）。
+- 白賁極簡檢查: 通過（沿用單一 workflow 與既有腳本，無分叉新管線）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
