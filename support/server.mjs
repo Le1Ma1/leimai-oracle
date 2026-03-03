@@ -652,7 +652,14 @@ function normalizeAnalysisPath(pathname) {
   return String(pathname || "").replace(/\/+$/, "");
 }
 
-function renderOuroborosDocument({ title, description, bodyHtml, jsonLd, canonicalUrl = ROOT_CANONICAL_URL }) {
+function renderOuroborosDocument({
+  title,
+  description,
+  bodyHtml,
+  jsonLd,
+  canonicalUrl = ROOT_CANONICAL_URL,
+  pageType = "generic",
+}) {
   const ldPayload = serializeJsonLd(jsonLd || {});
   const ogUrl = String(canonicalUrl || ROOT_CANONICAL_URL);
   return `<!doctype html>
@@ -676,7 +683,9 @@ function renderOuroborosDocument({ title, description, bodyHtml, jsonLd, canonic
   <script type="application/ld+json">${ldPayload}</script>
   <link rel="stylesheet" href="/assets/ouroboros.css">
 </head>
-<body>
+<body data-page="${escapeHtml(pageType)}">
+  <canvas id="matrix-bg" aria-hidden="true"></canvas>
+  <div class="page-noise" aria-hidden="true"></div>
   ${bodyHtml}
   <script src="/assets/ouroboros.js"></script>
 </body>
@@ -686,14 +695,14 @@ function renderOuroborosDocument({ title, description, bodyHtml, jsonLd, canonic
 function buildReportCard(report) {
   const summary = buildSummary(report.body_md, 220);
   const updatedAt = report.updated_at || report.created_at || "";
-  return `<a class="matrix-card report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
-    <div class="card-top">
+  return `<a class="matrix-card glass-panel cyber-border report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
+    <div class="card-top terminal-font">
       <span>${escapeHtml(report.locale.toUpperCase())}</span>
-      <span class="report-time" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
+      <span class="report-time terminal-font" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
     </div>
-    <div class="card-mid">${escapeHtml(report.title)}</div>
+    <div class="card-mid neon-text">${escapeHtml(report.title)}</div>
     <div class="card-sub">${escapeHtml(summary || "No summary available.")}</div>
-    <div class="report-entity">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</div>
+    <div class="report-entity terminal-font">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</div>
   </a>`;
 }
 
@@ -702,21 +711,34 @@ function renderRootLandingPage(reports) {
   const cardHtml = rows.map(buildReportCard).join("");
   const hasRows = rows.length > 0;
 
-  const bodyHtml = `<main class="site-wrap">
-    <header class="hero">
-      <div class="hero-kicker">LEIMAI ORACLE / OUROBOROS CORE</div>
-      <h1>Oracle Reports Wall</h1>
+  const bodyHtml = `<div id="vaultOverlay" class="vault-overlay">
+    <div class="vault-door top"></div>
+    <div class="vault-laser"></div>
+    <div class="vault-door bottom">
+      <button id="vaultEnterBtn" class="vault-enter-btn" type="button">[ Enter The Void ]</button>
+    </div>
+  </div>
+
+  <main class="site-wrap">
+    <header class="hero glass-panel cyber-border">
+      <div class="hero-kicker terminal-font">LEIMAI ORACLE / OUROBOROS CORE</div>
+      <h1 class="neon-text">Oracle Reports Wall</h1>
       <p>Live intelligence stream powered by real <code>oracle_reports</code> records from Supabase.</p>
+      <div class="geo-badge terminal-font">
+        <span>Hub:</span>
+        <strong id="geoHub">Global</strong>
+        <span id="geoTier">Platinum Node</span>
+      </div>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">Open Full Report Index</a>
         <a class="btn" href="https://leimaitech.com/" target="_blank" rel="noopener">Main Domain</a>
       </div>
     </header>
 
-    <section class="panel">
+    <section class="panel glass-panel cyber-border">
       <h2>Latest 5 Oracle Reports</h2>
       <p class="muted">Realtime read from <code>public.oracle_reports</code>.</p>
-      ${hasRows ? `<div class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet. Check ingestion/report pipeline.</div>'}
+      ${hasRows ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet. Check ingestion/report pipeline.</div>'}
     </section>
   </main>`;
 
@@ -745,6 +767,7 @@ function renderRootLandingPage(reports) {
     bodyHtml,
     jsonLd,
     canonicalUrl: ROOT_CANONICAL_URL,
+    pageType: "home",
   });
 }
 
@@ -753,9 +776,9 @@ function renderAnalysisIndexPage(reports) {
   const cardHtml = rows.map(buildReportCard).join("");
 
   const bodyHtml = `<main class="site-wrap">
-    <header class="hero hero-compact">
-      <div class="hero-kicker">ANALYSIS INDEX</div>
-      <h1>Oracle Report Index</h1>
+    <header class="hero hero-compact glass-panel cyber-border">
+      <div class="hero-kicker terminal-font">ANALYSIS INDEX</div>
+      <h1 class="neon-text">Oracle Report Index</h1>
       <p>Dynamic pSEO pages generated from anomaly-driven multilingual reports.</p>
       <div class="hero-cta-row">
         <input id="analysisSearch" class="input" type="search" placeholder="Filter: locale / entity / title">
@@ -763,7 +786,7 @@ function renderAnalysisIndexPage(reports) {
       </div>
     </header>
 
-    <section class="panel">
+    <section class="panel glass-panel cyber-border">
       <h2>All Analysis Pages</h2>
       <p class="muted">Current total: ${rows.length} reports</p>
       ${rows.length > 0 ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet.</div>'}
@@ -784,6 +807,7 @@ function renderAnalysisIndexPage(reports) {
     bodyHtml,
     jsonLd,
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    pageType: "analysis-index",
   });
 }
 
@@ -803,6 +827,38 @@ function buildFallbackJsonLd(report) {
   };
 }
 
+function buildMandalaSvg() {
+  const rings = Array.from({ length: 12 })
+    .map((_, i) => {
+      const pieces = Array.from({ length: 12 })
+        .map((__, j) => {
+          const angle = (j * 30 * Math.PI) / 180;
+          const radius = 52 + i * 14;
+          const cx = 250 + Math.cos(angle) * radius;
+          const cy = 250 + Math.sin(angle) * radius;
+          return `<path d="M250,250 L${cx.toFixed(2)},${cy.toFixed(2)} L${(cx + 8).toFixed(2)},${(cy + 8).toFixed(2)} Z" />`;
+        })
+        .join("");
+      const spinSec = 38 + i * 8;
+      const spinDir = i % 2 === 0 ? "normal" : "reverse";
+      return `<g class="mandala-ring" style="--spin:${spinSec}s;--spin-dir:${spinDir};">${pieces}</g>`;
+    })
+    .join("");
+
+  return `<svg class="mandala-svg" viewBox="0 0 500 500" role="img" aria-label="Algorithmic Mandala">
+    <defs>
+      <radialGradient id="mandalaGlow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.30" />
+        <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.00" />
+      </radialGradient>
+    </defs>
+    <circle cx="250" cy="250" r="238" fill="url(#mandalaGlow)"></circle>
+    ${rings}
+    <polygon points="250,220 270,250 250,280 230,250" class="mandala-core"></polygon>
+    <circle cx="250" cy="250" r="4" class="mandala-center"></circle>
+  </svg>`;
+}
+
 function renderAnalysisDetailPage(report) {
   const previewMarkdown = buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
   const summary = buildSummary(previewMarkdown || report.body_md, 220);
@@ -811,9 +867,9 @@ function renderAnalysisDetailPage(report) {
   const sourceJsonLd = normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report));
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const bodyHtml = `<main class="site-wrap">
-    <header class="hero hero-compact">
-      <div class="hero-kicker">ANALYSIS DETAIL</div>
-      <h1>${escapeHtml(report.title)}</h1>
+    <header class="hero hero-compact glass-panel cyber-border">
+      <div class="hero-kicker terminal-font">ANALYSIS DETAIL</div>
+      <h1 class="neon-text">${escapeHtml(report.title)}</h1>
       <p>${escapeHtml(summary)}</p>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">Back to Report Index</a>
@@ -821,30 +877,34 @@ function renderAnalysisDetailPage(report) {
       </div>
     </header>
 
-    <section class="panel">
+    <section class="panel glass-panel cyber-border">
       <h2>Metadata</h2>
       <div class="kv-grid">
         <div class="kv-item"><span>Event</span><strong>${escapeHtml(report.event_id || "-")}</strong></div>
         <div class="kv-item"><span>Locale</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
         <div class="kv-item"><span>Unique Entity</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
-        <div class="kv-item"><span>Updated (UTC)</span><strong class="report-time" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
+        <div class="kv-item"><span>Updated (UTC)</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel glass-panel cyber-border">
       <h2>Report Preview (20%)</h2>
       <div class="paywall-shell">
-        <article class="report-article paywall-preview">${markdownHtml}</article>
+        <div class="obsidian-container">
+          <article class="report-article article-body paywall-preview">${markdownHtml}</article>
+        </div>
         <div class="paywall-locked-content" aria-label="locked-content">
           <div class="paywall-fog"></div>
-          <div class="paywall-message">${escapeHtml(PAYWALL_NOTICE)}</div>
+          <div class="mandala-wrap">${buildMandalaSvg()}</div>
+          <div class="lock-message">${escapeHtml(PAYWALL_NOTICE)}</div>
+          <button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>
         </div>
       </div>
-      <div class="route-line">/analysis/${escapeHtml(report.slug)}</div>
+      <div class="route-line terminal-font">/analysis/${escapeHtml(report.slug)}</div>
       <div class="muted">Access policy: preview only for public web distribution.</div>
     </section>
 
-    <section class="panel">
+    <section class="panel glass-panel cyber-border">
       <h2>Structured Data (JSON-LD)</h2>
       <pre class="jsonld-preview">${escapeHtml(JSON.stringify(paywallJsonLd, null, 2))}</pre>
       <div class="muted">This payload is also embedded in &lt;head&gt; for GEO indexing.</div>
@@ -857,6 +917,7 @@ function renderAnalysisDetailPage(report) {
     bodyHtml,
     jsonLd: paywallJsonLd,
     canonicalUrl,
+    pageType: "analysis-detail",
   });
 }
 
@@ -865,7 +926,7 @@ function renderAnalysisNotFoundPage(slug) {
     title: "Not Found | Analysis",
     description: "Requested analysis page does not exist.",
     bodyHtml: `<main class="site-wrap">
-      <section class="panel">
+      <section class="panel glass-panel cyber-border">
         <h1>Analysis page not found</h1>
         <p class="muted">No report matched slug: <code>${escapeHtml(slug)}</code></p>
         <a class="btn btn-main" href="/analysis/">Back to report index</a>
@@ -873,6 +934,7 @@ function renderAnalysisNotFoundPage(slug) {
     </main>`,
     jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    pageType: "analysis-not-found",
   });
 }
 
@@ -881,8 +943,8 @@ function goneResponse(res, pathname) {
     title: "410 Gone | LeiMai Oracle",
     description: "This legacy route has been permanently removed.",
     bodyHtml: `<main class="site-wrap">
-      <section class="panel">
-        <div class="hero-kicker">410 GONE</div>
+      <section class="panel glass-panel cyber-border">
+        <div class="hero-kicker terminal-font">410 GONE</div>
         <h1>Legacy route removed</h1>
         <p>Path <code>${escapeHtml(pathname)}</code> has been permanently decommissioned.</p>
         <div class="hero-cta-row">
@@ -898,6 +960,7 @@ function goneResponse(res, pathname) {
       url: ROOT_CANONICAL_URL,
       description: "Legacy route removed.",
     },
+    pageType: "gone",
   });
   res.writeHead(410, {
     "Content-Type": "text/html; charset=utf-8",

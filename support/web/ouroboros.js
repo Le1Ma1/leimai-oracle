@@ -1,4 +1,61 @@
-(() => {
+﻿(() => {
+  const WEALTH_HUBS = new Set([
+    "Asia/Singapore",
+    "Asia/Dubai",
+    "Europe/Zurich",
+    "America/New_York",
+    "Europe/Monaco",
+  ]);
+
+  function hexToRgb01(hex) {
+    const cleaned = String(hex || "").replace("#", "").trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return [0.75, 0.75, 0.75];
+    const num = Number.parseInt(cleaned, 16);
+    return [
+      ((num >> 16) & 255) / 255,
+      ((num >> 8) & 255) / 255,
+      (num & 255) / 255,
+    ];
+  }
+
+  function getLuxuryConfig() {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC";
+      const isElite = WEALTH_HUBS.has(tz);
+      const accent = isElite ? "#D4AF37" : "#C0C0C0";
+      const shadow = isElite ? "rgba(212,175,55,0.22)" : "rgba(192,192,192,0.22)";
+      const hub = String(tz).split("/").slice(-1)[0] || "Global";
+      return { tz, isElite, accent, shadow, hub };
+    } catch {
+      return {
+        tz: "Etc/UTC",
+        isElite: false,
+        accent: "#C0C0C0",
+        shadow: "rgba(192,192,192,0.22)",
+        hub: "Global",
+      };
+    }
+  }
+
+  function applyLuxuryTheme(config) {
+    const root = document.documentElement;
+    const rgb = hexToRgb01(config.accent).map((v) => Math.round(v * 255));
+    root.style.setProperty("--accent", config.accent);
+    root.style.setProperty("--accent-rgb", `${rgb[0]}, ${rgb[1]}, ${rgb[2]}`);
+    root.style.setProperty("--accent-shadow", config.shadow);
+
+    if (config.isElite) {
+      document.body.classList.add("elite-hub");
+    } else {
+      document.body.classList.remove("elite-hub");
+    }
+
+    const hubNode = document.getElementById("geoHub");
+    const tierNode = document.getElementById("geoTier");
+    if (hubNode) hubNode.textContent = config.hub;
+    if (tierNode) tierNode.textContent = config.isElite ? "24K Gold Node" : "Platinum Node";
+  }
+
   function formatUtcNodes() {
     const nodes = Array.from(document.querySelectorAll("[data-utc]"));
     for (const node of nodes) {
@@ -6,12 +63,13 @@
       if (!iso) continue;
       const ts = Date.parse(iso);
       if (!Number.isFinite(ts)) continue;
-      node.textContent = new Intl.DateTimeFormat("en-GB", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        hour12: false,
-        timeZone: "UTC",
-      }).format(new Date(ts)) + " UTC";
+      node.textContent =
+        new Intl.DateTimeFormat("en-GB", {
+          dateStyle: "medium",
+          timeStyle: "short",
+          hour12: false,
+          timeZone: "UTC",
+        }).format(new Date(ts)) + " UTC";
     }
   }
 
@@ -37,6 +95,195 @@
     applyFilter();
   }
 
-  formatUtcNodes();
-  bindSearch();
+  function initVaultSequence() {
+    const overlay = document.getElementById("vaultOverlay");
+    if (!overlay) return;
+    const trigger = document.getElementById("vaultEnterBtn");
+
+    const openVault = () => {
+      if (overlay.classList.contains("opening") || overlay.classList.contains("opened")) return;
+      overlay.classList.add("opening");
+      window.setTimeout(() => {
+        overlay.classList.add("opened");
+        overlay.setAttribute("aria-hidden", "true");
+      }, 3000);
+    };
+
+    if (trigger) {
+      trigger.addEventListener("click", openVault);
+    }
+
+    window.setTimeout(openVault, 800);
+  }
+
+  function initObsidianBackground(config) {
+    const canvas = document.getElementById("matrix-bg");
+    if (!canvas) return;
+    const gl = canvas.getContext("webgl", { antialias: true, alpha: true });
+    if (!gl) return;
+
+    const vsSource = `
+      attribute vec4 aVertexPosition;
+      void main() {
+        gl_Position = aVertexPosition;
+      }
+    `;
+
+    const fsSource = `
+      precision highp float;
+      uniform vec2 u_resolution;
+      uniform float u_time;
+      uniform vec2 u_mouse;
+      uniform vec3 u_accent;
+
+      float random(vec2 st) {
+        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+      }
+
+      float noise(vec2 st) {
+        vec2 i = floor(st);
+        vec2 f = fract(st);
+        float a = random(i);
+        float b = random(i + vec2(1.0, 0.0));
+        float c = random(i + vec2(0.0, 1.0));
+        float d = random(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+      }
+
+      #define OCTAVES 5
+      float fbm(vec2 st) {
+        float value = 0.0;
+        float amplitude = 0.5;
+        for (int i = 0; i < OCTAVES; i++) {
+          value += amplitude * noise(st);
+          st *= 2.0;
+          amplitude *= 0.5;
+        }
+        return value;
+      }
+
+      void main() {
+        vec2 st = gl_FragCoord.xy / u_resolution.xy;
+        st.x *= u_resolution.x / u_resolution.y;
+
+        vec2 mouse = u_mouse.xy / u_resolution.xy;
+        float dist = distance(st, mouse);
+
+        vec2 q = vec2(0.0);
+        q.x = fbm(st + 0.00 * u_time);
+        q.y = fbm(st + vec2(1.0));
+
+        vec2 r = vec2(0.0);
+        r.x = fbm(st + 1.0 * q + vec2(1.7, 9.2) + 0.15 * u_time + dist * 0.1);
+        r.y = fbm(st + 1.0 * q + vec2(8.3, 2.8) + 0.126 * u_time);
+
+        float f = fbm(st + r);
+
+        vec3 color = mix(vec3(0.02, 0.02, 0.03), vec3(0.08, 0.08, 0.09), clamp((f * f) * 4.0, 0.0, 1.0));
+        color = mix(color, u_accent * 0.4, clamp(length(q), 0.0, 1.0));
+        color = mix(color, u_accent * 0.8, clamp(abs(r.x), 0.0, 1.0));
+
+        float interaction = smoothstep(0.4, 0.0, dist);
+        color += u_accent * interaction * 0.14;
+
+        gl_FragColor = vec4((f * f * f + 0.6 * f * f + 0.5 * f) * color, 1.0);
+      }
+    `;
+
+    function compileShader(type, source) {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = compileShader(gl.VERTEX_SHADER, vsSource);
+    const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fsSource);
+    if (!vertexShader || !fragmentShader) return;
+
+    const program = gl.createProgram();
+    if (!program) return;
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      return;
+    }
+    gl.useProgram(program);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        -1.0, -1.0,
+         1.0, -1.0,
+        -1.0,  1.0,
+        -1.0,  1.0,
+         1.0, -1.0,
+         1.0,  1.0,
+      ]),
+      gl.STATIC_DRAW,
+    );
+
+    const positionLocation = gl.getAttribLocation(program, "aVertexPosition");
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    const resolutionLocation = gl.getUniformLocation(program, "u_resolution");
+    const timeLocation = gl.getUniformLocation(program, "u_time");
+    const mouseLocation = gl.getUniformLocation(program, "u_mouse");
+    const accentLocation = gl.getUniformLocation(program, "u_accent");
+
+    const accentRgb = hexToRgb01(config.accent);
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+    let rafId = 0;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+
+    function onMouseMove(event) {
+      mouseX = event.clientX;
+      mouseY = window.innerHeight - event.clientY;
+    }
+
+    function frame(time) {
+      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      gl.uniform1f(timeLocation, time * 0.001);
+      gl.uniform2f(mouseLocation, mouseX, mouseY);
+      gl.uniform3f(accentLocation, accentRgb[0], accentRgb[1], accentRgb[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      rafId = requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", resize, { passive: true });
+    window.addEventListener("mousemove", onMouseMove, { passive: true });
+    resize();
+    frame(0);
+
+    window.addEventListener("beforeunload", () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("mousemove", onMouseMove);
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const config = getLuxuryConfig();
+    applyLuxuryTheme(config);
+    formatUtcNodes();
+    bindSearch();
+    initVaultSequence();
+    initObsidianBackground(config);
+  });
 })();

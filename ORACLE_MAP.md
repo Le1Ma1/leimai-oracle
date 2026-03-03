@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T09:10:02Z`
+- Last Updated (UTC): `2026-03-03T09:47:20Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -718,6 +718,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Read-layer rendering policy only; no backend ingestion/report writes changed.
 - Bai Ben (Minimalism) Review: Pass. Reused existing report route and styling without introducing a separate paywall service.
 
+### [x] B25_3_PHASE_3_1_5_OBSIDIAN_VISUAL_RESTORATION
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`.
+- Business Value: restored obsidian WebGL background, geo-aware luxury accent (24K gold vs platinum), vault opening sequence, and mandala-backed paywall while preserving live Supabase report rendering and paywall JSON-LD in `<head>`.
+- Read/Write Isolation Review: Pass. Changes are constrained to support rendering/visual runtime; ingestion and model training pipelines are untouched.
+- Bai Ben (Minimalism) Review: Pass. Implemented in-place via existing support routes/assets without adding new services.
+
 ## [BUSINESS_STATUS]
 
 ### [x] BTC 工件契約穩定化已完成（原子寫入 + 重試讀取）
@@ -749,6 +755,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Business Value: 分析頁已改為僅展示前 20% 內容並加入霧化鎖定提示，同步在 JSON-LD 輸出付費邊界語義，兼顧可轉換性與合規的 SEO/GEO 信號。
 - 讀寫分離檢查: 通過（僅前端渲染邊界調整，資料層與引擎層未受影響）。
 - 白賁極簡檢查: 通過（在既有路由內完成，不引入新鑑權系統）。
+
+### [x] Phase 3.1.5 視覺霸權修復完成（曜石外殼 + GEO 感知）
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`.
+- Business Value: 首頁與分析頁已回復曜石賽博風格，動態報告卡、時間戳、Markdown 內容、Paywall 鎖區與曼陀羅儀式全面統一；同時加入時區感知配色（財富樞紐=金色，其餘=白金）以提升高淨值識別感。
+- 讀寫分離檢查: 通過（僅 support 呈現層改造，資料抓取/生成鏈路未改）。
+- 白賁極簡檢查: 通過（沿用既有 `server.mjs` 與靜態資產，無新增框架與服務）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
