@@ -1225,6 +1225,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [BUSINESS_STATUS] 商業進度: 兩份本地 `.env` 已回到可安全填寫狀態（無明文 token），你只需填新值即可繼續自動化。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅環境檔與文件）；白賁通過（無新增服務與邏輯分支）。
 
+### [x] B22_ULTIMATE_WHITE_GRACE_EVOLUTION
+- [LOGIC_CORE] Technical Dependency: `support/server.mjs`, `support/lib/{geo.mjs,messaging.mjs}`, `support/web/{ouroboros.js,ouroboros.css}`, `engine/src/generate_reports.py`, `scripts/seo_ping.py`, `.github/workflows/ingest_4h.yml`, `engine/requirements.txt`, `engine/.env.example`.
+- [LOGIC_CORE] Business Value: completed white-noise copy cleanup, hybrid GEO locale resolution (country-first + language fallback), institutional bilingual tone hardening, Search Console sitemap submit automation, and mobile WebGL low-FPS static fallback.
+- [BUSINESS_STATUS] 商業進度: Phase 4.3 完成。`/vault`、`/analysis`、`/analysis/:slug` 已升級為雙語主權文案與 SEO/GEO 高壓輸出；canonical 全鎖 `https://leimai.io/...`；Google Search Console sitemap 提交已接入 4h 排程。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 support/engine/scripts/workflow 層改造）；白賁通過（以最小增量完成語言、SEO、GEO、性能降級，不擴散新服務）。
+
 ## Governance Checks
 
 - Read/Write Isolation Verdict: `PASS`

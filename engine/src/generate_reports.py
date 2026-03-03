@@ -1,6 +1,5 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -98,7 +97,7 @@ def load_config() -> ReportsConfig:
         per_event_locales=parse_locales(os.getenv("REPORT_LOCALES")),
         http_timeout_sec=max(3.0, parse_float(os.getenv("REPORT_HTTP_TIMEOUT_SEC"), 20.0)),
         retries=max(1, parse_int(os.getenv("REPORT_HTTP_RETRIES"), 3)),
-        use_mock_llm=parse_bool(os.getenv("REPORT_USE_MOCK_LLM"), default=True),
+        use_mock_llm=parse_bool(os.getenv("REPORT_USE_MOCK_LLM"), default=False),
     )
 
 
@@ -149,27 +148,25 @@ def build_slug(event_id: str, locale: str) -> str:
     return slugify(f"oracle-{locale}-{short}")
 
 
-def severity_to_bias(severity: str) -> str:
-    s = str(severity or "").lower()
-    if s == "critical":
-        return "highest"
-    if s == "high":
-        return "elevated"
-    return "moderate"
-
-
 def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
     payload_text = json.dumps(event.get("payload", {}), ensure_ascii=False, sort_keys=True)
-    language_line = (
-        "Write in Traditional Chinese (zh-TW)." if locale == "zh-tw" else "Write in English."
-    )
+    if locale == "zh-tw":
+        style_line = (
+            "請使用繁體中文（zh-TW）。語氣需冷靜、精準、具機構紀律，"
+            "結構固定為：結論 -> 證據 -> 風險邊界。"
+        )
+    else:
+        style_line = (
+            "Write in English with institutional financial tone: cold, precise, evidence-first, "
+            "and structured as Conclusion -> Evidence -> Risk Boundary."
+        )
+
     return (
-        "You are LeiMai Oracle. "
-        "Generate a cold, quantitative, objective market structure report in around 300 words. "
-        "Avoid hype, avoid investment advice, and use explicit metric framing.\n"
-        f"{language_line}\n"
-        f"Mandatory unique entity phrase (must appear exactly): {unique_entity}\n"
-        "Output JSON only with keys: title, body_md, jsonld.\n"
+        "You are LeiMai Oracle. Produce a market-structure brief around 300 words.\n"
+        f"{style_line}\n"
+        "Do not use hype. Do not provide investment advice.\n"
+        f"Mandatory entity phrase (exact match): {unique_entity}\n"
+        "Return strict JSON only with keys: title, body_md, jsonld.\n"
         f"event_id={event.get('event_id')}\n"
         f"event_type={event.get('event_type')}\n"
         f"severity={event.get('severity')}\n"
@@ -195,6 +192,25 @@ def extract_text_from_gemini(data: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
+def parse_report_json(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    if not isinstance(obj.get("title"), str) or not isinstance(obj.get("body_md"), str):
+        return None
+    jsonld = obj.get("jsonld")
+    if not isinstance(jsonld, dict):
+        jsonld = {}
+    return {"title": obj["title"].strip(), "body_md": obj["body_md"].strip(), "jsonld": jsonld}
+
+
 def call_gemini(prompt: str, cfg: ReportsConfig) -> dict[str, Any] | None:
     if not cfg.gemini_api_key:
         return None
@@ -202,7 +218,7 @@ def call_gemini(prompt: str, cfg: ReportsConfig) -> dict[str, Any] | None:
     params = {"key": cfg.gemini_api_key}
     req_body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.25, "topP": 0.9, "maxOutputTokens": 2048},
+        "generationConfig": {"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 2048},
     }
     last_error: str | None = None
     for attempt in range(1, cfg.retries + 1):
@@ -231,62 +247,6 @@ def call_gemini(prompt: str, cfg: ReportsConfig) -> dict[str, Any] | None:
     return None
 
 
-def parse_report_json(raw: str) -> dict[str, Any] | None:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    try:
-        obj = json.loads(text)
-    except ValueError:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    if not isinstance(obj.get("title"), str) or not isinstance(obj.get("body_md"), str):
-        return None
-    jsonld = obj.get("jsonld")
-    if not isinstance(jsonld, dict):
-        jsonld = {}
-    return {"title": obj["title"].strip(), "body_md": obj["body_md"].strip(), "jsonld": jsonld}
-
-
-def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) -> dict[str, Any]:
-    event_id = str(event.get("event_id", ""))
-    event_type = str(event.get("event_type", "unknown"))
-    severity = str(event.get("severity", "medium")).lower()
-    payload = event.get("payload", {})
-    payload_text = json.dumps(payload, ensure_ascii=False)
-    if locale == "zh-tw":
-        title = f"Oracle 結構快報｜{event_type}｜{severity.upper()}"
-        body_md = (
-            f"### 結構判讀\n"
-            f"事件 `{event_id}` 被分類為 **{severity}**，顯示短期流動性摩擦加劇。\n\n"
-            f"- 核心實體：**{unique_entity}**\n"
-            f"- 事件型別：`{event_type}`\n"
-            f"- 觀測時間：`{event.get('ts_utc')}`\n\n"
-            f"本報告採取冷靜量化口吻：先看波動與持倉結構，再看流動性吸收效率。"
-            f"目前訊號不代表方向預測，而是結構壓力升高。若後續在高成交密度區仍出現擴張，"
-            f"代表風險定價未完成；若波動回落且持倉穩定，則可能進入再平衡期。\n\n"
-            f"```json\n{payload_text}\n```"
-        )
-    else:
-        title = f"Oracle Structure Brief | {event_type} | {severity.upper()}"
-        body_md = (
-            f"### Market Structure Read\n"
-            f"Event `{event_id}` is classified as **{severity}**, indicating rising short-term liquidity friction.\n\n"
-            f"- Core entity: **{unique_entity}**\n"
-            f"- Event type: `{event_type}`\n"
-            f"- Observed at: `{event.get('ts_utc')}`\n\n"
-            f"This note stays objective and metric-first: volatility expansion, open-interest behavior, and flow absorption "
-            f"are evaluated before directional bias. The current signal is not a forecast; it is a structure-pressure marker. "
-            f"If high-volume expansion persists, repricing pressure may remain unresolved. If realized volatility compresses with "
-            f"stable positioning, market structure may rotate into rebalancing.\n\n"
-            f"```json\n{payload_text}\n```"
-        )
-    jsonld = build_jsonld(event=event, locale=locale, title=title, body_md=body_md, unique_entity=unique_entity)
-    return {"title": title, "body_md": body_md, "jsonld": jsonld}
-
-
 def build_jsonld(
     event: dict[str, Any],
     locale: str,
@@ -295,31 +255,83 @@ def build_jsonld(
     unique_entity: str,
 ) -> dict[str, Any]:
     event_id = str(event.get("event_id", ""))
-    desc = body_md.replace("\n", " ").strip()
+    summary = body_md.replace("\n", " ").strip()[:460]
+    canonical = f"https://leimai.io/analysis/{build_slug(event_id, locale)}"
     return {
         "@context": "https://schema.org",
         "@graph": [
             {
-                "@type": "Article",
+                "@type": "NewsArticle",
                 "headline": title,
+                "description": summary,
                 "inLanguage": locale,
-                "description": desc[:450],
                 "identifier": event_id,
-                "about": {
-                    "@type": "Thing",
-                    "name": unique_entity,
-                    "sameAs": "https://leimai.io/",
-                },
+                "mainEntityOfPage": canonical,
                 "author": {"@type": "Organization", "name": "LeiMai Oracle"},
+                "about": {"@type": "Thing", "name": unique_entity, "sameAs": "https://leimai.io/"},
+                "isAccessibleForFree": False,
+                "hasPart": [
+                    {
+                        "@type": "WebPageElement",
+                        "isAccessibleForFree": False,
+                        "cssSelector": ".paywall-locked-content",
+                    }
+                ],
+            },
+            {
+                "@type": "Dataset",
+                "name": f"{unique_entity} Signal Dataset",
+                "description": summary,
+                "creator": {"@type": "Organization", "name": "LeiMai Oracle"},
+                "url": canonical,
+                "isAccessibleForFree": False,
             },
             {
                 "@type": "DefinedTerm",
                 "name": unique_entity,
-                "description": "Proprietary liquidity-friction entity used by LeiMai Oracle GEO layer.",
+                "description": "Proprietary liquidity-friction entity of LeiMai Oracle.",
                 "inDefinedTermSet": "https://leimai.io/analysis/",
             },
         ],
     }
+
+
+def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) -> dict[str, Any]:
+    event_id = str(event.get("event_id", ""))
+    event_type = str(event.get("event_type", "unknown"))
+    severity = str(event.get("severity", "medium")).lower()
+    observed_at = str(event.get("ts_utc", ""))
+
+    if locale == "zh-tw":
+        title = f"主權結構簡報｜{event_type}｜{severity.upper()}"
+        body_md = (
+            "### 結論\n"
+            f"事件 `{event_id}` 目前評級為 **{severity}**，市場摩擦仍在累積，主要監測實體為 **{unique_entity}**。\n\n"
+            "### 證據\n"
+            f"- 事件類型：`{event_type}`\n"
+            f"- 觀測時間：`{observed_at}`\n"
+            "- 波動壓力尚未與倉位穩定同步，代表短期再定價風險仍在。\n\n"
+            "### 風險邊界\n"
+            "本報告僅提供結構判讀，不構成投資建議。若量能擴張且波動收斂，市場可能轉入再平衡；"
+            "若槓桿與波動同向擴大，結構壓力將持續上升。"
+        )
+    else:
+        title = f"Sovereign Structure Brief | {event_type} | {severity.upper()}"
+        body_md = (
+            "### Conclusion\n"
+            f"Event `{event_id}` is rated **{severity}**, with persistent liquidity friction across the observed structure. "
+            f"Primary entity anchor: **{unique_entity}**.\n\n"
+            "### Evidence\n"
+            f"- Event type: `{event_type}`\n"
+            f"- Observed at: `{observed_at}`\n"
+            "- Volatility pressure remains elevated relative to positioning stabilization.\n\n"
+            "### Risk Boundary\n"
+            "This brief is a structure assessment, not investment advice. If volume expands while volatility compresses, "
+            "conditions may rotate to rebalancing. If leverage and volatility expand together, repricing pressure likely persists."
+        )
+
+    jsonld = build_jsonld(event=event, locale=locale, title=title, body_md=body_md, unique_entity=unique_entity)
+    return {"title": title, "body_md": body_md, "jsonld": jsonld}
 
 
 def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsConfig) -> dict[str, Any]:
@@ -338,11 +350,11 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
     if not generated:
         generated = build_mock_report(event=event, locale=locale, unique_entity=cfg.unique_entity)
 
-    # Ensure mandatory unique entity always exists in title/body/jsonld
     title = str(generated.get("title", "")).strip()
     body_md = str(generated.get("body_md", "")).strip()
     if cfg.unique_entity not in body_md:
         body_md = f"{body_md}\n\nEntity Anchor: **{cfg.unique_entity}**"
+
     jsonld = generated.get("jsonld")
     if not isinstance(jsonld, dict):
         jsonld = build_jsonld(event=event, locale=locale, title=title, body_md=body_md, unique_entity=cfg.unique_entity)
@@ -383,7 +395,6 @@ def run_generate_reports() -> int:
     cfg = load_config()
     log_event(
         "REPORTS_START",
-        use_mock_llm=cfg.use_mock_llm,
         model=cfg.gemini_model,
         locales=",".join(cfg.per_event_locales),
         unique_entity=cfg.unique_entity,
@@ -404,6 +415,7 @@ def run_generate_reports() -> int:
         event_id = str(event.get("event_id", "")).strip()
         if not event_id:
             continue
+
         rows: list[dict[str, Any]] = []
         for locale in cfg.per_event_locales:
             try:

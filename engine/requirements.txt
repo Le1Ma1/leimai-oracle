@@ -6,3 +6,5 @@ python-dotenv
 apscheduler
 requests
 supabase
+google-auth
+google-api-python-client

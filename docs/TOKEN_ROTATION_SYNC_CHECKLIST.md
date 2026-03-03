@@ -38,6 +38,8 @@ This checklist is for post-rotation rebind only. Non-token business config can r
 - `GITHUB_TOKEN`
 - `SUPPORT_TRONGRID_API_KEY` (optional)
 - `ALCHEMY_API_KEY` (optional)
+- `GSC_SITE_URL`
+- `GOOGLE_SERVICE_ACCOUNT_JSON`
 
 ### Variables
 

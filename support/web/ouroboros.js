@@ -7,6 +7,60 @@
     "Europe/Monaco",
   ]);
 
+  const COPY = {
+    en: {
+      negotiating: "Negotiating Secure Enclave...",
+      walletMissing: "Wallet not found. Please install a Web3 wallet.",
+      unlockReload: "Access verified. Reloading full intelligence...",
+      waitingSync: "Waiting for Model Synced",
+      signRejected: "Signature rejected by wallet.",
+      unlockNotConfigured: "Unlock service is not configured.",
+      invalidSignature: "Invalid signature. Please retry.",
+      challengeExpired: "Challenge expired. Please retry.",
+      mismatch: "Address mismatch detected.",
+      rateLimited: "Too many attempts. Please wait.",
+      unlockFailed: "Access verification failed. Please retry.",
+      accessGranted: "Access Granted: Synchronizing Sovereign Signals",
+      invoiceExpired: "Request expired. Please generate a new authorization request.",
+      waitingSettlement: "Awaiting settlement confirmation...",
+      invoiceNotFound: "Authorization request not found. Please generate a new one.",
+      sessionMismatch: "Session expired or wallet mismatch. Please sign again.",
+      polling: "Monitoring settlement status...",
+      creatingInvoice: "Preparing sovereign settlement request...",
+      invoiceReady: "Request ready. Complete settlement before expiration.",
+      unlockRequired: "Signed session required before creating request.",
+      paymentCreateFailed: "Failed to prepare settlement request. Please retry.",
+    },
+    "zh-tw": {
+      negotiating: "安全飛地協商中...",
+      walletMissing: "找不到錢包，請安裝 Web3 錢包。",
+      unlockReload: "驗證完成，正在載入完整情報...",
+      waitingSync: "等待模型同步",
+      signRejected: "簽署已被錢包拒絕。",
+      unlockNotConfigured: "解鎖服務尚未配置完成。",
+      invalidSignature: "簽章無效，請重試。",
+      challengeExpired: "挑戰已過期，請重試。",
+      mismatch: "偵測到地址不一致。",
+      rateLimited: "嘗試次數過多，請稍後再試。",
+      unlockFailed: "權限驗證失敗，請重試。",
+      accessGranted: "權限通過：主權訊號同步中",
+      invoiceExpired: "請求已過期，請重新建立授權請求。",
+      waitingSettlement: "等待結算確認...",
+      invoiceNotFound: "查無授權請求，請重新建立。",
+      sessionMismatch: "會話過期或地址不一致，請重新簽署。",
+      polling: "持續監控結算狀態...",
+      creatingInvoice: "建立主權結算請求中...",
+      invoiceReady: "請求已建立，請在過期前完成結算。",
+      unlockRequired: "請先完成簽署再建立請求。",
+      paymentCreateFailed: "建立結算請求失敗，請重試。",
+    },
+  };
+
+  function getLocaleCopy() {
+    const locale = String(document.body?.getAttribute("data-locale") || "en").toLowerCase();
+    return COPY[locale] || COPY.en;
+  }
+
   function hexToRgb01(hex) {
     const cleaned = String(hex || "").replace("#", "").trim();
     if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return [0.75, 0.75, 0.75];
@@ -146,14 +200,15 @@
   }
 
   function mapUnlockError(err) {
+    const copy = getLocaleCopy();
     const message = String(err?.message || "").toLowerCase();
-    if (message.includes("user rejected")) return "Signature rejected by wallet.";
-    if (message.includes("unlock_not_configured")) return "Unlock service is not configured.";
-    if (message.includes("invalid_signature")) return "Invalid signature. Please retry.";
-    if (message.includes("challenge")) return "Challenge expired. Please retry.";
-    if (message.includes("mismatch")) return "Address mismatch detected.";
-    if (message.includes("rate_limited")) return "Too many attempts. Please wait.";
-    return "Unlock failed. Please retry.";
+    if (message.includes("user rejected")) return copy.signRejected;
+    if (message.includes("unlock_not_configured")) return copy.unlockNotConfigured;
+    if (message.includes("invalid_signature")) return copy.invalidSignature;
+    if (message.includes("challenge")) return copy.challengeExpired;
+    if (message.includes("mismatch")) return copy.mismatch;
+    if (message.includes("rate_limited")) return copy.rateLimited;
+    return copy.unlockFailed;
   }
 
   async function connectWalletAndUnlock(slugOverride = "") {
@@ -167,12 +222,13 @@
 
     const ethereum = window.ethereum;
     if (!ethereum || typeof ethereum.request !== "function") {
-      setLockMessage("Wallet not found. Please install a Web3 wallet.");
+      setLockMessage(getLocaleCopy().walletMissing);
       return;
     }
 
     try {
-      setLockMessage("Negotiating Secure Enclave...");
+      const copy = getLocaleCopy();
+      setLockMessage(copy.negotiating);
       const accounts = await ethereum.request({ method: "eth_requestAccounts" });
       const address = Array.isArray(accounts) ? String(accounts[0] || "") : "";
       if (!address) {
@@ -198,7 +254,7 @@
 
       revealUnlockedContent();
       const pageType = String(document.body?.getAttribute("data-page") || "").toLowerCase();
-      setLockMessage(pageType === "vault" ? "Waiting for Model Synced" : "Access verified. Reloading full report...");
+      setLockMessage(pageType === "vault" ? copy.waitingSync : copy.unlockReload);
       window.setTimeout(() => window.location.reload(), 520);
     } catch (err) {
       setLockMessage(mapUnlockError(err));
@@ -235,19 +291,21 @@
   }
 
   function onPaymentGranted(statusPayload) {
+    const copy = getLocaleCopy();
     revealUnlockedContent();
-    setLockMessage("Access Granted: Synchronizing Sovereign Signals");
+    setLockMessage(copy.accessGranted);
     const syncNodes = Array.from(document.querySelectorAll(".vault-sync-state"));
     for (const node of syncNodes) {
-      node.textContent = "Access Granted: Synchronizing Sovereign Signals";
+      node.textContent = copy.accessGranted;
     }
     setPaymentResult(
-      `Payment confirmed (${String(statusPayload?.status || "paid").toUpperCase()}). Access Granted: Synchronizing Sovereign Signals`,
+      `${copy.accessGranted} (${String(statusPayload?.status || "paid").toUpperCase()})`,
       true,
     );
   }
 
   async function pollInvoiceStatus(invoiceId) {
+    const copy = getLocaleCopy();
     const cleaned = String(invoiceId || "").trim();
     if (!cleaned) return;
     try {
@@ -264,32 +322,33 @@
       }
       if (current === "expired" || current === "cancelled") {
         stopPaymentPolling();
-        setPaymentResult(`Invoice ${current}. Please create a new invoice.`, false);
+        setPaymentResult(copy.invoiceExpired, false);
         return;
       }
-      setPaymentResult("Awaiting on-chain confirmation...", true);
+      setPaymentResult(copy.waitingSettlement, true);
     } catch (err) {
       const msg = String(err?.message || "");
       if (msg.includes("invoice_not_found")) {
         stopPaymentPolling();
-        setPaymentResult("Invoice not found. Please create a new one.", false);
+        setPaymentResult(copy.invoiceNotFound, false);
         return;
       }
       if (msg.includes("unlock_required") || msg.includes("wallet_session_mismatch")) {
         stopPaymentPolling();
-        setPaymentResult("Session expired or wallet mismatch. Please sign again.", false);
+        setPaymentResult(copy.sessionMismatch, false);
         return;
       }
-      setPaymentResult("Polling payment status...", true);
+      setPaymentResult(copy.polling, true);
     }
   }
 
   function startPaymentPolling(invoiceId) {
+    const copy = getLocaleCopy();
     const cleaned = String(invoiceId || "").trim();
     if (!cleaned) return;
     stopPaymentPolling();
     paymentPollInvoiceId = cleaned;
-    setPaymentResult("Awaiting on-chain confirmation...", true);
+    setPaymentResult(copy.waitingSettlement, true);
     void pollInvoiceStatus(cleaned);
     paymentPollTimer = window.setInterval(() => {
       void pollInvoiceStatus(cleaned);
@@ -351,11 +410,12 @@
   }
 
   function mapPaymentError(err) {
+    const copy = getLocaleCopy();
     const message = String(err?.message || "").toLowerCase();
-    if (message.includes("unlock_required")) return "Unlock session required before creating invoice.";
-    if (message.includes("wallet_session_mismatch")) return "Wallet mismatch. Re-sign wallet contract and retry.";
-    if (message.includes("rate_limited")) return "Too many payment requests. Please wait.";
-    return "Payment invoice creation failed. Please retry.";
+    if (message.includes("unlock_required")) return copy.unlockRequired;
+    if (message.includes("wallet_session_mismatch")) return copy.sessionMismatch;
+    if (message.includes("rate_limited")) return copy.rateLimited;
+    return copy.paymentCreateFailed;
   }
 
   function bindUpgradeButton() {
@@ -363,12 +423,13 @@
     if (buttons.length === 0) return;
     for (const button of buttons) {
       button.addEventListener("click", async (event) => {
+        const copy = getLocaleCopy();
         event.preventDefault();
         const plan = String(button.getAttribute("data-plan") || "sovereign").trim().toLowerCase();
         const paymentRail = String(button.getAttribute("data-payment-rail") || "trc20_usdt").trim().toLowerCase();
         const walletAddress = getVaultUnlockedAddress();
         button.disabled = true;
-        setPaymentResult("Creating payment invoice...", true);
+        setPaymentResult(copy.creatingInvoice, true);
         try {
           const invoice = await fetchJson("/api/v1/payment/create", {
             plan_code: plan,
@@ -376,7 +437,7 @@
             wallet_address: walletAddress,
             slug: "vault",
           });
-          setPaymentResult("Invoice ready. Transfer to the designated address before expiry.", true);
+          setPaymentResult(copy.invoiceReady, true);
           openPaymentModal(invoice);
         } catch (err) {
           setPaymentResult(mapPaymentError(err), false);
@@ -413,8 +474,17 @@
   function initObsidianBackground(config) {
     const canvas = document.getElementById("matrix-bg");
     if (!canvas) return;
+    const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      document.body.classList.add("low-gpu");
+      return;
+    }
+
     const gl = canvas.getContext("webgl", { antialias: true, alpha: true });
-    if (!gl) return;
+    if (!gl) {
+      document.body.classList.add("low-gpu");
+      return;
+    }
 
     const vsSource = `
       attribute vec4 aVertexPosition;
@@ -539,6 +609,10 @@
     let mouseX = window.innerWidth / 2;
     let mouseY = window.innerHeight / 2;
     let rafId = 0;
+    let fpsFrames = 0;
+    let fpsStart = performance.now();
+    let fpsChecked = false;
+    let disabled = false;
 
     function resize() {
       canvas.width = window.innerWidth;
@@ -551,12 +625,36 @@
       mouseY = window.innerHeight - event.clientY;
     }
 
+    function disableToStatic() {
+      if (disabled) return;
+      disabled = true;
+      document.body.classList.add("low-gpu");
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("mousemove", onMouseMove);
+      canvas.style.display = "none";
+    }
+
     function frame(time) {
+      if (disabled) return;
       gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
       gl.uniform1f(timeLocation, time * 0.001);
       gl.uniform2f(mouseLocation, mouseX, mouseY);
       gl.uniform3f(accentLocation, accentRgb[0], accentRgb[1], accentRgb[2]);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      fpsFrames += 1;
+      if (!fpsChecked) {
+        const elapsedMs = Math.max(1, time - fpsStart);
+        if (elapsedMs >= 3000) {
+          const fps = (fpsFrames * 1000) / elapsedMs;
+          fpsChecked = true;
+          if (fps < 30) {
+            disableToStatic();
+            return;
+          }
+        }
+      }
       rafId = requestAnimationFrame(frame);
     }
 

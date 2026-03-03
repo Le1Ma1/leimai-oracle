@@ -11,7 +11,9 @@ import sanitizeHtml from "sanitize-html";
 
 import { fetchTronscan, fetchTrongrid, mergeTransfers } from "./lib/chain-sources.mjs";
 import { getContent, listLocales, resolveLocale } from "./lib/content.mjs";
+import { resolvePreferredLocale } from "./lib/geo.mjs";
 import { buildLeaderboard, extractAds, summarizeCounts } from "./lib/leaderboard.mjs";
+import { getOuroborosCopy, normalizeOuroborosLocale } from "./lib/messaging.mjs";
 import { createDeclarationRecord, moderateDeclaration, validateDeclarationPayload } from "./lib/moderation.mjs";
 import {
   DEFAULT_APP_STATE,
@@ -39,8 +41,6 @@ const DEFAULT_REPORT_LOCALE = "en";
 const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
 const REPORT_PREVIEW_RATIO = 0.2;
 const PAYWALL_SELECTOR = ".paywall-locked-content";
-const PAYWALL_NOTICE = "\u6b64\u9810\u8a00\u53d7 LeiMai \u6b0a\u9650\u5354\u8b70\u4fdd\u8b77\uff0c\u8acb\u9023\u63a5\u51b7\u9322\u5305\u7c3d\u7f72\u300e\u929c\u5c3e\u86c7\u5951\u7d04\u300f\u4ee5\u89e3\u9396 Alpha \u5168\u6587\u3002";
-const NEGOTIATING_NOTICE = "Negotiating Secure Enclave...";
 const UNLOCK_COOKIE_NAME = "leimai_unlock";
 const PAYMENT_PLAN_CODES = new Set(["sovereign", "elite"]);
 const PAYMENT_RAIL_CODES = new Set(["trc20_usdt", "eth_l1_erc20", "l2_usdc"]);
@@ -162,6 +162,10 @@ function parseCookies(req) {
     }
   }
   return out;
+}
+
+function resolveOuroborosLocale(req) {
+  return normalizeOuroborosLocale(resolvePreferredLocale(req));
 }
 
 function normalizeHostHeader(rawHost) {
@@ -719,7 +723,7 @@ function buildPaymentInvoiceRecord({ walletAddress, slug, planCode, paymentRail 
     status: "pending",
     expires_at_utc: expiresAt.toISOString(),
     meta: {
-      source: "phase4_mock_payment",
+      source: "phase4_invoice_preflight",
       created_via: "/api/v1/payment/create",
       payment_rail: normalizedRail,
       l2_network: String(CONFIG.supportL2Network || "arbitrum").toLowerCase(),
@@ -940,6 +944,7 @@ function withPaywallJsonLd(raw) {
         const isPaywallNode =
           nodeType === "Article" ||
           nodeType === "NewsArticle" ||
+          nodeType === "Dataset" ||
           nodeType === "Report" ||
           nodeType === "WebPage";
         if (!isPaywallNode) return node;
@@ -955,6 +960,7 @@ function withPaywallJsonLd(raw) {
   const isPaywallNode =
     nodeType === "Article" ||
     nodeType === "NewsArticle" ||
+    nodeType === "Dataset" ||
     nodeType === "Report" ||
     nodeType === "WebPage";
   if (!isPaywallNode) return jsonLd;
@@ -1033,32 +1039,35 @@ function renderOuroborosDocument({
   bodyHtml,
   jsonLd,
   canonicalUrl = ROOT_CANONICAL_URL,
+  locale = "en",
+  keywords = "Sovereign AI Oracle, BTC Alpha Signals, Whale Intelligence, Institutional Crypto Analysis",
   pageType = "generic",
 }) {
   const ldPayload = serializeJsonLd(jsonLd || {});
   const ogUrl = String(canonicalUrl || ROOT_CANONICAL_URL);
   return `<!doctype html>
-<html lang="en">
+<html lang="${escapeHtml(locale)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(description)}">
+  <meta name="keywords" content="${escapeHtml(keywords)}">
   <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
   <meta property="og:type" content="website">
   <meta property="og:title" content="${escapeHtml(title)}">
   <meta property="og:description" content="${escapeHtml(description)}">
   <meta property="og:url" content="${escapeHtml(ogUrl)}">
-  <meta property="og:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
+  <meta property="og:image" content="${escapeHtml(ROOT_CANONICAL_URL)}assets/social-card.svg">
   <meta property="twitter:card" content="summary_large_image">
   <meta property="twitter:title" content="${escapeHtml(title)}">
   <meta property="twitter:description" content="${escapeHtml(description)}">
-  <meta property="twitter:image" content="${escapeHtml(CONFIG.siteUrl)}/assets/social-card.svg">
+  <meta property="twitter:image" content="${escapeHtml(ROOT_CANONICAL_URL)}assets/social-card.svg">
   <link rel="canonical" href="${escapeHtml(ogUrl)}">
   <script type="application/ld+json">${ldPayload}</script>
   <link rel="stylesheet" href="/assets/ouroboros.css">
 </head>
-<body data-page="${escapeHtml(pageType)}">
+<body data-page="${escapeHtml(pageType)}" data-locale="${escapeHtml(locale)}">
   <canvas id="matrix-bg" aria-hidden="true"></canvas>
   <div class="page-noise" aria-hidden="true"></div>
   ${bodyHtml}
@@ -1067,7 +1076,7 @@ function renderOuroborosDocument({
 </html>`;
 }
 
-function buildReportCard(report) {
+function buildReportCard(report, copy) {
   const summary = buildSummary(report.body_md, 220);
   const updatedAt = report.updated_at || report.created_at || "";
   return `<a class="matrix-card glass-panel cyber-border report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
@@ -1076,14 +1085,15 @@ function buildReportCard(report) {
       <span class="report-time terminal-font" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
     </div>
     <div class="card-mid neon-text">${escapeHtml(report.title)}</div>
-    <div class="card-sub">${escapeHtml(summary || "No summary available.")}</div>
+    <div class="card-sub">${escapeHtml(summary || copy.analysisEmpty)}</div>
     <div class="report-entity terminal-font">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</div>
   </a>`;
 }
 
-function renderRootLandingPage(reports) {
+function renderRootLandingPage(locale, reports) {
+  const copy = getOuroborosCopy(locale);
   const rows = Array.isArray(reports) ? reports.slice(0, 5) : [];
-  const cardHtml = rows.map(buildReportCard).join("");
+  const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
   const hasRows = rows.length > 0;
 
   const bodyHtml = `<div id="vaultOverlay" class="vault-overlay">
@@ -1096,24 +1106,24 @@ function renderRootLandingPage(reports) {
 
   <main class="site-wrap">
     <header class="hero glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">LEIMAI ORACLE / OUROBOROS CORE</div>
-      <h1 class="neon-text">Oracle Reports Wall</h1>
-      <p>Live intelligence stream powered by real <code>oracle_reports</code> records from Supabase.</p>
+      <div class="hero-kicker terminal-font">${escapeHtml(copy.homeKicker)}</div>
+      <h1 class="neon-text">${escapeHtml(copy.homeTitle)}</h1>
+      <p>${escapeHtml(copy.homeLead)}</p>
       <div class="geo-badge terminal-font">
         <span>Hub:</span>
         <strong id="geoHub">Global</strong>
         <span id="geoTier">Platinum Node</span>
       </div>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">Open Full Report Index</a>
-        <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">Main Domain</a>
+        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.homeOpenIndex)}</a>
+        <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">${escapeHtml(copy.homeMainDomain)}</a>
       </div>
     </header>
 
     <section class="panel glass-panel cyber-border">
-      <h2>Latest 5 Oracle Reports</h2>
-      <p class="muted">Realtime read from <code>public.oracle_reports</code>.</p>
-      ${hasRows ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet. Check ingestion/report pipeline.</div>'}
+      <h2>${escapeHtml(copy.homeLatestTitle)}</h2>
+      <p class="muted">${escapeHtml(copy.homeLatestLead)}</p>
+      ${hasRows ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : `<div class="empty-box">${escapeHtml(copy.homeEmpty)}</div>`}
     </section>
   </main>`;
 
@@ -1128,44 +1138,46 @@ function renderRootLandingPage(reports) {
       },
       {
         "@type": "CollectionPage",
-        name: "Oracle Reports Wall",
-        url: `${CONFIG.siteUrl}/analysis/`,
+        name: copy.homeTitle,
+        url: `${ROOT_CANONICAL_URL}analysis/`,
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
       },
     ],
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | Ouroboros Root Authority",
-    description:
-      "Root authority node for LeiMai Oracle. Access realtime oracle reports and pSEO analysis pages backed by Supabase.",
+    title: `LeiMai Oracle | ${copy.homeTitle}`,
+    description: copy.homeLead,
     bodyHtml,
     jsonLd,
     canonicalUrl: ROOT_CANONICAL_URL,
+    locale,
+    keywords: copy.keywords,
     pageType: "home",
   });
 }
 
-function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
+function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}) {
+  const copy = getOuroborosCopy(locale);
   const gateText = signed
-    ? "Waiting for Model Synced"
-    : "Sovereign Trading Model: Calibrating. Access Restricted to Protocol Signers.";
+    ? copy.gateSigned
+    : copy.gateUnsigned;
   const actionHtml = signed
     ? `<div class="vault-sync-state terminal-font">${escapeHtml(
-        unlockedAddress ? `SESSION VERIFIED: ${unlockedAddress}` : "SESSION VERIFIED",
+        unlockedAddress ? `${copy.sessionVerified}: ${unlockedAddress}` : copy.sessionVerified,
       )}</div>
-      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign" data-payment-rail="trc20_usdt">[ UPGRADE TO SOVEREIGN ]</button>
+      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign" data-payment-rail="trc20_usdt">${escapeHtml(copy.upgradeBtn)}</button>
       <div id="paymentResult" class="payment-result muted"></div>`
-    : `<button class="unlock-btn pulse-glow" type="button">[ SIGN OUROBOROS CONTRACT ]</button>`;
+    : `<button class="unlock-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">VAULT PREHEAT</div>
-      <h1 class="neon-text">Obsidian Vault</h1>
-      <p>Protocol gate is armed while the sovereign model is still calibrating.</p>
+      <div class="hero-kicker terminal-font">${escapeHtml(copy.vaultKicker)}</div>
+      <h1 class="neon-text">${escapeHtml(copy.vaultTitle)}</h1>
+      <p>${escapeHtml(copy.vaultLead)}</p>
       <div class="hero-cta-row">
-        <a class="btn" href="/">Back to Root</a>
-        <a class="btn btn-main" href="/analysis/">Analysis Matrix</a>
+        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
       </div>
     </header>
 
@@ -1195,76 +1207,142 @@ function renderVaultPage({ signed = false, unlockedAddress = null } = {}) {
 
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "WebPage",
-    name: "LeiMai Oracle Vault",
-    url: `${ROOT_CANONICAL_URL}vault`,
-    description: "Preheat access gate for protocol-signed users while model calibration is in progress.",
-    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+    "@graph": [
+      {
+        "@type": "WebPage",
+        name: `LeiMai Oracle | ${copy.vaultTitle}`,
+        url: `${ROOT_CANONICAL_URL}vault`,
+        description: copy.vaultLead,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "NewsArticle",
+        headline: `${copy.vaultTitle} Access Protocol`,
+        description: copy.vaultLead,
+        inLanguage: locale,
+        mainEntityOfPage: `${ROOT_CANONICAL_URL}vault`,
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "Dataset",
+        name: "Sovereign Access State Snapshot",
+        description: "Commercial access-state telemetry for sovereign intelligence delivery.",
+        creator: { "@type": "Organization", name: "LeiMai Oracle" },
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+    ],
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | Vault Preheat",
+    title: `LeiMai Oracle | ${copy.vaultTitle}`,
     description: gateText,
     bodyHtml,
     jsonLd,
     canonicalUrl: `${ROOT_CANONICAL_URL}vault`,
+    locale,
+    keywords: copy.keywords,
     pageType: "vault",
   });
 }
 
-function renderAnalysisIndexPage(reports) {
+function renderAnalysisIndexPage(locale, reports) {
+  const copy = getOuroborosCopy(locale);
   const rows = Array.isArray(reports) ? reports : [];
-  const cardHtml = rows.map(buildReportCard).join("");
+  const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">ANALYSIS INDEX</div>
-      <h1 class="neon-text">Oracle Report Index</h1>
-      <p>Dynamic pSEO pages generated from anomaly-driven multilingual reports.</p>
+      <div class="hero-kicker terminal-font">${escapeHtml(copy.analysisKicker)}</div>
+      <h1 class="neon-text">${escapeHtml(copy.analysisTitle)}</h1>
+      <p>${escapeHtml(copy.analysisLead)}</p>
       <div class="hero-cta-row">
-        <input id="analysisSearch" class="input" type="search" placeholder="Filter: locale / entity / title">
-        <a class="btn" href="/">Back to Root</a>
+        <input id="analysisSearch" class="input" type="search" placeholder="${escapeHtml(copy.analysisSearch)}">
+        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
       </div>
     </header>
 
     <section class="panel glass-panel cyber-border">
-      <h2>All Analysis Pages</h2>
-      <p class="muted">Current total: ${rows.length} reports</p>
-      ${rows.length > 0 ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : '<div class="empty-box">No reports available yet.</div>'}
+      <h2>${escapeHtml(copy.analysisAllTitle)}</h2>
+      <p class="muted">${escapeHtml(copy.analysisTotal)}: ${rows.length}</p>
+      ${rows.length > 0 ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : `<div class="empty-box">${escapeHtml(copy.analysisEmpty)}</div>`}
     </section>
   </main>`;
 
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "CollectionPage",
-    name: "LeiMai Oracle Analysis Matrix",
-    url: `${CONFIG.siteUrl}/analysis/`,
-    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+    "@graph": [
+      {
+        "@type": "CollectionPage",
+        name: copy.analysisTitle,
+        url: `${ROOT_CANONICAL_URL}analysis/`,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "NewsArticle",
+        headline: `${copy.analysisTitle} Snapshot`,
+        description: copy.analysisLead,
+        inLanguage: locale,
+        mainEntityOfPage: `${ROOT_CANONICAL_URL}analysis/`,
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "Dataset",
+        name: "Sovereign Analysis Catalog",
+        description: "Commercially gated anomaly-driven market intelligence catalog.",
+        creator: { "@type": "Organization", name: "LeiMai Oracle" },
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+    ],
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | Analysis Matrix",
-    description: "Structured pSEO report index sourced from Oracle Brain outputs.",
+    title: `LeiMai Oracle | ${copy.analysisTitle}`,
+    description: copy.analysisLead,
     bodyHtml,
     jsonLd,
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    locale,
+    keywords: copy.keywords,
     pageType: "analysis-index",
   });
 }
 
 function buildFallbackJsonLd(report) {
+  const url = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
+  const summary = buildSummary(report.body_md, 240);
   return {
     "@context": "https://schema.org",
-    "@type": "Article",
-    headline: report.title,
-    description: buildSummary(report.body_md, 240),
-    mainEntityOfPage: `${CONFIG.siteUrl}/analysis/${report.slug}`,
-    isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
-    author: { "@type": "Organization", name: "LeiMai Oracle" },
-    dateModified: report.updated_at || report.created_at || nowIso(),
-    inLanguage: report.locale,
-    isAccessibleForFree: false,
-    hasPart: paywallHasPart(),
+    "@graph": [
+      {
+        "@type": "NewsArticle",
+        headline: report.title,
+        description: summary,
+        mainEntityOfPage: url,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+        author: { "@type": "Organization", name: "LeiMai Oracle" },
+        dateModified: report.updated_at || report.created_at || nowIso(),
+        inLanguage: report.locale,
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "Dataset",
+        name: `${report.unique_entity || "LeiMai Liquidity Friction"} Dataset`,
+        description: summary,
+        creator: { "@type": "Organization", name: "LeiMai Oracle" },
+        url,
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+    ],
   };
 }
 
@@ -1300,7 +1378,8 @@ function buildMandalaSvg() {
   </svg>`;
 }
 
-function renderAnalysisDetailPage(report, { unlocked = false, unlockedAddress = null } = {}) {
+function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAddress = null } = {}) {
+  const copy = getOuroborosCopy(locale);
   const previewMarkdown = unlocked ? String(report.body_md || "") : buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
   const summary = buildSummary(previewMarkdown || report.body_md, 220);
   const markdownHtml = sanitizeMarkdownHtml(previewMarkdown);
@@ -1308,31 +1387,31 @@ function renderAnalysisDetailPage(report, { unlocked = false, unlockedAddress = 
   const sourceJsonLd = normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report));
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const paywallShellClass = unlocked ? "paywall-shell is-unlocked" : "paywall-shell";
-  const lockMessage = unlocked ? "Access verified. Reload complete." : PAYWALL_NOTICE;
+  const lockMessage = unlocked ? copy.detailPolicySigned : copy.paywallNotice;
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">ANALYSIS DETAIL</div>
+      <div class="hero-kicker terminal-font">${escapeHtml(copy.detailKicker)}</div>
       <h1 class="neon-text">${escapeHtml(report.title)}</h1>
       <p>${escapeHtml(summary)}</p>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">Back to Report Index</a>
-        <a class="btn" href="/">Root</a>
+        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.detailBack)}</a>
+        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
       </div>
     </header>
 
     <section class="panel glass-panel cyber-border">
-      <h2>Metadata</h2>
+      <h2>${escapeHtml(copy.detailMetaTitle)}</h2>
       <div class="kv-grid">
-        <div class="kv-item"><span>Event</span><strong>${escapeHtml(report.event_id || "-")}</strong></div>
-        <div class="kv-item"><span>Locale</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
-        <div class="kv-item"><span>Unique Entity</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
-        <div class="kv-item"><span>Updated (UTC)</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
-        <div class="kv-item"><span>Access</span><strong>${unlocked ? "UNLOCKED" : "LOCKED"}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong>${escapeHtml(report.event_id || "-")}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaLocale)}</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaUpdated)}</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaAccess)}</span><strong>${unlocked ? copy.detailUnlocked : copy.detailLocked}</strong></div>
       </div>
     </section>
 
     <section class="panel glass-panel cyber-border">
-      <h2>${unlocked ? "Full Report" : "Report Preview (20%)"}</h2>
+      <h2>${unlocked ? escapeHtml(copy.detailFullTitle) : escapeHtml(copy.detailPreviewTitle)}</h2>
       <div class="${paywallShellClass}" data-unlocked="${unlocked ? "1" : "0"}" data-slug="${escapeHtml(report.slug)}" data-unlocked-address="${escapeHtml(unlockedAddress || "")}">
         <div class="obsidian-container">
           <article class="report-article article-body paywall-preview">${markdownHtml}</article>
@@ -1341,17 +1420,17 @@ function renderAnalysisDetailPage(report, { unlocked = false, unlockedAddress = 
           <div class="paywall-fog obsidian-fog"></div>
           <div class="mandala-wrap">${buildMandalaSvg()}</div>
           <div class="lock-message">${escapeHtml(lockMessage)}</div>
-          <button class="unlock-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : "[ SIGN OUROBOROS CONTRACT ]"}</button>
+          <button class="unlock-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : escapeHtml(copy.signBtn)}</button>
         </div>
       </div>
       <div class="route-line terminal-font">/analysis/${escapeHtml(report.slug)}</div>
-      <div class="muted">${unlocked ? "Access policy: signed wallet verified for this session." : "Access policy: preview only for public web distribution."}</div>
+      <div class="muted">${unlocked ? escapeHtml(copy.detailPolicySigned) : escapeHtml(copy.detailPolicyPublic)}</div>
     </section>
 
     <section class="panel glass-panel cyber-border">
-      <h2>Structured Data (JSON-LD)</h2>
+      <h2>${escapeHtml(copy.detailStructuredTitle)}</h2>
       <pre class="jsonld-preview">${escapeHtml(JSON.stringify(paywallJsonLd, null, 2))}</pre>
-      <div class="muted">This payload is also embedded in &lt;head&gt; for GEO indexing.</div>
+      <div class="muted">${escapeHtml(copy.detailStructuredLead)}</div>
     </section>
   </main>`;
 
@@ -1361,39 +1440,45 @@ function renderAnalysisDetailPage(report, { unlocked = false, unlockedAddress = 
     bodyHtml,
     jsonLd: paywallJsonLd,
     canonicalUrl,
+    locale,
+    keywords: copy.keywords,
     pageType: "analysis-detail",
   });
 }
 
-function renderAnalysisNotFoundPage(slug) {
+function renderAnalysisNotFoundPage(locale, slug) {
+  const copy = getOuroborosCopy(locale);
   return renderOuroborosDocument({
     title: "Not Found | Analysis",
     description: "Requested analysis page does not exist.",
     bodyHtml: `<main class="site-wrap">
       <section class="panel glass-panel cyber-border">
-        <h1>Analysis page not found</h1>
-        <p class="muted">No report matched slug: <code>${escapeHtml(slug)}</code></p>
-        <a class="btn btn-main" href="/analysis/">Back to report index</a>
+        <h1>${escapeHtml(copy.notFoundTitle)}</h1>
+        <p class="muted">${escapeHtml(copy.notFoundLead)}: <code>${escapeHtml(slug)}</code></p>
+        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.notFoundBack)}</a>
       </section>
     </main>`,
     jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    locale,
+    keywords: copy.keywords,
     pageType: "analysis-not-found",
   });
 }
 
-function goneResponse(res, pathname) {
+function goneResponse(res, pathname, locale = "en") {
+  const copy = getOuroborosCopy(locale);
   const html = renderOuroborosDocument({
     title: "410 Gone | LeiMai Oracle",
     description: "This legacy route has been permanently removed.",
     bodyHtml: `<main class="site-wrap">
       <section class="panel glass-panel cyber-border">
         <div class="hero-kicker terminal-font">410 GONE</div>
-        <h1>Legacy route removed</h1>
-        <p>Path <code>${escapeHtml(pathname)}</code> has been permanently decommissioned.</p>
+        <h1>${escapeHtml(copy.goneTitle)}</h1>
+        <p>${escapeHtml(copy.goneLead)} <code>${escapeHtml(pathname)}</code></p>
         <div class="hero-cta-row">
-          <a class="btn btn-main" href="/">Go to root</a>
-          <a class="btn" href="/analysis/">Analysis matrix</a>
+          <a class="btn btn-main" href="/">${escapeHtml(copy.goneRoot)}</a>
+          <a class="btn" href="/analysis/">${escapeHtml(copy.goneIndex)}</a>
         </div>
       </section>
     </main>`,
@@ -1404,6 +1489,8 @@ function goneResponse(res, pathname) {
       url: ROOT_CANONICAL_URL,
       description: "Legacy route removed.",
     },
+    locale,
+    keywords: copy.keywords,
     pageType: "gone",
   });
   res.writeHead(410, {
@@ -1418,9 +1505,10 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (String(pathname || "").startsWith("/api/")) {
     return false;
   }
+  const locale = resolveOuroborosLocale(req);
 
   if (method !== "GET") {
-    goneResponse(res, pathname);
+    goneResponse(res, pathname, locale);
     return true;
   }
 
@@ -1444,7 +1532,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   if (pathname === "/sitemap.xml") {
     const analysisPaths = await fetchAnalysisPaths(5000);
-    textResponse(res, 200, buildSitemap(CONFIG.siteUrl, ["/vault", ...analysisPaths]), "application/xml; charset=utf-8");
+    textResponse(res, 200, buildSitemap(ROOT_CANONICAL_URL.replace(/\/+$/, ""), ["/vault", ...analysisPaths]), "application/xml; charset=utf-8");
     return true;
   }
   if (pathname === "/llms.txt") {
@@ -1453,7 +1541,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   if (pathname === "/") {
     const reports = await fetchLatestReports(5);
-    textResponse(res, 200, renderRootLandingPage(reports), "text/html; charset=utf-8");
+    textResponse(res, 200, renderRootLandingPage(locale, reports), "text/html; charset=utf-8");
     return true;
   }
   if (pathname === "/vault") {
@@ -1464,7 +1552,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     textResponse(
       res,
       200,
-      renderVaultPage({
+      renderVaultPage(locale, {
         signed: Boolean(unlockSession),
         unlockedAddress: unlockSession?.addr || null,
       }),
@@ -1476,14 +1564,14 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   const normalized = normalizeAnalysisPath(pathname);
   if (normalized === "/analysis") {
     const reports = await fetchReportsForIndex(500);
-    textResponse(res, 200, renderAnalysisIndexPage(reports), "text/html; charset=utf-8");
+    textResponse(res, 200, renderAnalysisIndexPage(locale, reports), "text/html; charset=utf-8");
     return true;
   }
   if (normalized.startsWith("/analysis/")) {
     const slug = normalized.slice("/analysis/".length).trim().toLowerCase();
     const entry = await fetchReportBySlug(slug);
     if (!entry) {
-      textResponse(res, 404, renderAnalysisNotFoundPage(slug), "text/html; charset=utf-8");
+      textResponse(res, 404, renderAnalysisNotFoundPage(locale, slug), "text/html; charset=utf-8");
       return true;
     }
     const unlockSession = getUnlockSessionFromReq(req);
@@ -1493,7 +1581,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     textResponse(
       res,
       200,
-      renderAnalysisDetailPage(entry, {
+      renderAnalysisDetailPage(locale, entry, {
         unlocked: Boolean(unlockSession),
         unlockedAddress: unlockSession?.addr || null,
       }),
@@ -1502,7 +1590,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     return true;
   }
 
-  goneResponse(res, pathname);
+  goneResponse(res, pathname, locale);
   return true;
 }
 
@@ -1939,7 +2027,7 @@ export async function handleRequest(req, res) {
       return textResponse(res, 200, buildRobots(CONFIG.siteUrl));
     }
     if (method === "GET" && pathname === "/sitemap.xml") {
-      return textResponse(res, 200, buildSitemap(CONFIG.siteUrl), "application/xml; charset=utf-8");
+      return textResponse(res, 200, buildSitemap(ROOT_CANONICAL_URL.replace(/\/+$/, "")), "application/xml; charset=utf-8");
     }
     if (method === "GET" && pathname === "/llms.txt") {
       return textResponse(res, 200, buildLlmsTxt(CONFIG.siteUrl, CONFIG.mainSiteUrl));
@@ -1968,7 +2056,7 @@ export async function handleRequest(req, res) {
     }
 
     if (method === "GET" && pathname === "/api/v1/leaderboard") {
-      const locale = resolveLocale(searchParams.get("lang") || "en");
+      const locale = normalizeOuroborosLocale(searchParams.get("lang") || "en");
       const { chainState, appState } = await readStates();
       const board = buildLeaderboard(chainState, appState, { minAmount: CONFIG.minAmount, limit: 100 });
       return jsonResponse(res, 200, {
@@ -2006,7 +2094,7 @@ export async function handleRequest(req, res) {
     }
 
     if (method === "GET" && pathname === "/api/v1/knowledge") {
-      const locale = resolveLocale(searchParams.get("lang") || "en");
+      const locale = normalizeOuroborosLocale(searchParams.get("lang") || "en");
       const { chainState, appState } = await readStates();
       const board = buildLeaderboard(chainState, appState, { minAmount: CONFIG.minAmount, limit: 20 });
       const ads = extractAds(appState, { limit: 3 });
@@ -2027,7 +2115,7 @@ export async function handleRequest(req, res) {
     const declarationStatusMatch = pathname.match(/^\/api\/v1\/declarations\/([A-Za-z0-9_-]+)\/status$/);
     if (method === "GET" && declarationStatusMatch) {
       const id = declarationStatusMatch[1];
-      const locale = resolveLocale(searchParams.get("lang") || "en");
+      const locale = normalizeOuroborosLocale(searchParams.get("lang") || "en");
       const content = getContent(locale);
       const { appState } = await readStates();
       const row = (appState.declarations || []).find((item) => item?.id === id);
