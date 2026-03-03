@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T12:51:07Z`
+- Last Updated (UTC): `2026-03-03T12:57:17Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -739,9 +739,16 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 ### [x] B25_6_VERCEL_ENV_SYNC_ACTION_EXECUTED
 - Technical Dependency: `.github/workflows/vercel_env_sync.yml`, `scripts/vercel_ops.py`.
 - Business Value: manual `workflow_dispatch` sync completed and pushed latest `SUPABASE_*` + `SUPPORT_*` contract to Vercel targets (`production/preview/development`) with deployment trigger path verified.
-- Evidence: GitHub Actions run `22623724541` concluded `success` at `2026-03-03T12:49:17Z`.
+- Evidence: GitHub Actions runs `22623724541` and `22623990098` concluded `success` at `2026-03-03T12:49:17Z` and `2026-03-03T12:56:47Z`.
 - Read/Write Isolation Review: Pass. Control-plane env sync only; no strategy/data mutation.
 - Bai Ben (Minimalism) Review: Pass. Reuses existing sync workflow and script; no extra service added.
+
+### [x] B25_7_SUPABASE_USER_ACCESS_LOGS_SCHEMA_APPLIED
+- Technical Dependency: `supabase/schema_user_access_logs.sql`, Supabase Management API (`/v1/projects/{ref}/database/query`), PostgREST (`/rest/v1/user_access_logs`).
+- Business Value: `user_access_logs` table + indexes + RLS policies are now physically applied in production database, enabling wallet unlock telemetry write-path.
+- Evidence: DDL executed via management API and REST probe returned `HTTP 200` for `user_access_logs` endpoint.
+- Read/Write Isolation Review: Pass. DB schema update scoped to support telemetry table.
+- Bai Ben (Minimalism) Review: Pass. Single table contract without cross-module coupling.
 
 ## [BUSINESS_STATUS]
 
@@ -799,6 +806,13 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Evidence: `git push origin main` (`67db362 -> e31ed88`), Actions run `22623724541` = `success`.
 - 讀寫分離檢查: 通過（本輪為部署與配置同步，不涉及引擎策略寫路徑）。
 - 白賁極簡檢查: 通過（延續既有 workflow/script，不擴張新基礎設施）。
+
+### [x] Phase 3.4.1 解鎖會話金鑰已入雲端配置
+- Technical Dependency: GitHub Actions Variables (`SUPPORT_SESSION_SECRET`), `.github/workflows/vercel_env_sync.yml`, Vercel env targets.
+- Business Value: 修復 `/api/v1/auth/wallet/challenge` 在雲端可能返回 `unlock_not_configured` 的風險，解鎖流程具備必要簽名 session 金鑰。
+- Evidence: GitHub variable `SUPPORT_SESSION_SECRET` created; sync run `22623990098` success.
+- 讀寫分離檢查: 通過（僅控制平面配置寫入）。
+- 白賁極簡檢查: 通過（不修改應用邏輯，僅補必要配置）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.
