@@ -29,6 +29,9 @@ const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1"
 const ROOT_CANONICAL_URL = "https://leimaitech.com/";
 const DEFAULT_REPORT_LOCALE = "en";
 const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
+const REPORT_PREVIEW_RATIO = 0.2;
+const PAYWALL_SELECTOR = ".paywall-locked-content";
+const PAYWALL_NOTICE = "此預言受 LeiMai 權限協議保護，請連接冷錢包簽署『銜尾蛇契約』以解鎖 Alpha 全文。";
 
 function parseDotEnv(content) {
   const out = {};
@@ -465,6 +468,33 @@ function buildSummary(md, maxLen = 180) {
   return `${plain.slice(0, maxLen).trimEnd()}...`;
 }
 
+function buildPreviewMarkdown(md, ratio = REPORT_PREVIEW_RATIO) {
+  const src = String(md || "").trim();
+  if (!src) return "";
+
+  const safeRatio = Math.min(0.95, Math.max(0.05, Number(ratio) || REPORT_PREVIEW_RATIO));
+  const targetChars = Math.max(220, Math.floor(src.length * safeRatio));
+  const blocks = src.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+
+  let preview = "";
+  for (const block of blocks) {
+    const candidate = preview ? `${preview}\n\n${block}` : block;
+    if (candidate.length <= targetChars || !preview) {
+      preview = candidate;
+      continue;
+    }
+    break;
+  }
+
+  if (!preview) {
+    preview = src.slice(0, targetChars);
+  }
+  if (preview.length < Math.min(targetChars, src.length)) {
+    preview = src.slice(0, targetChars);
+  }
+  return preview.trim();
+}
+
 function sanitizeMarkdownHtml(md) {
   const rawHtml = String(marked.parse(String(md || ""), { breaks: true, gfm: true }));
   return sanitizeHtml(rawHtml, {
@@ -512,6 +542,52 @@ function normalizeJsonLd(raw, fallback = {}) {
 
 function serializeJsonLd(raw) {
   return JSON.stringify(normalizeJsonLd(raw)).replace(/</g, "\\u003c");
+}
+
+function paywallHasPart() {
+  return [
+    {
+      "@type": "WebPageElement",
+      "isAccessibleForFree": false,
+      "cssSelector": PAYWALL_SELECTOR,
+    },
+  ];
+}
+
+function withPaywallJsonLd(raw) {
+  const jsonLd = normalizeJsonLd(raw, {});
+  if (Array.isArray(jsonLd["@graph"])) {
+    return {
+      ...jsonLd,
+      "@graph": jsonLd["@graph"].map((node) => {
+        if (!node || typeof node !== "object") return node;
+        const nodeType = String(node["@type"] || "");
+        const isPaywallNode =
+          nodeType === "Article" ||
+          nodeType === "NewsArticle" ||
+          nodeType === "Report" ||
+          nodeType === "WebPage";
+        if (!isPaywallNode) return node;
+        return {
+          ...node,
+          isAccessibleForFree: false,
+          hasPart: paywallHasPart(),
+        };
+      }),
+    };
+  }
+  const nodeType = String(jsonLd["@type"] || "");
+  const isPaywallNode =
+    nodeType === "Article" ||
+    nodeType === "NewsArticle" ||
+    nodeType === "Report" ||
+    nodeType === "WebPage";
+  if (!isPaywallNode) return jsonLd;
+  return {
+    ...jsonLd,
+    isAccessibleForFree: false,
+    hasPart: paywallHasPart(),
+  };
 }
 
 async function fetchLatestReports(limit = 5) {
@@ -722,13 +798,18 @@ function buildFallbackJsonLd(report) {
     author: { "@type": "Organization", name: "LeiMai Oracle" },
     dateModified: report.updated_at || report.created_at || nowIso(),
     inLanguage: report.locale,
+    isAccessibleForFree: false,
+    hasPart: paywallHasPart(),
   };
 }
 
 function renderAnalysisDetailPage(report) {
-  const summary = buildSummary(report.body_md, 220);
-  const markdownHtml = sanitizeMarkdownHtml(report.body_md);
+  const previewMarkdown = buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
+  const summary = buildSummary(previewMarkdown || report.body_md, 220);
+  const markdownHtml = sanitizeMarkdownHtml(previewMarkdown);
   const canonicalUrl = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
+  const sourceJsonLd = normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report));
+  const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact">
       <div class="hero-kicker">ANALYSIS DETAIL</div>
@@ -751,15 +832,21 @@ function renderAnalysisDetailPage(report) {
     </section>
 
     <section class="panel">
-      <h2>Report Body</h2>
-      <article class="report-article">${markdownHtml}</article>
+      <h2>Report Preview (20%)</h2>
+      <div class="paywall-shell">
+        <article class="report-article paywall-preview">${markdownHtml}</article>
+        <div class="paywall-locked-content" aria-label="locked-content">
+          <div class="paywall-fog"></div>
+          <div class="paywall-message">${escapeHtml(PAYWALL_NOTICE)}</div>
+        </div>
+      </div>
       <div class="route-line">/analysis/${escapeHtml(report.slug)}</div>
-      <div class="muted">Generated from realtime <code>oracle_reports</code> feed.</div>
+      <div class="muted">Access policy: preview only for public web distribution.</div>
     </section>
 
     <section class="panel">
       <h2>Structured Data (JSON-LD)</h2>
-      <pre class="jsonld-preview">${escapeHtml(JSON.stringify(normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report)), null, 2))}</pre>
+      <pre class="jsonld-preview">${escapeHtml(JSON.stringify(paywallJsonLd, null, 2))}</pre>
       <div class="muted">This payload is also embedded in &lt;head&gt; for GEO indexing.</div>
     </section>
   </main>`;
@@ -768,7 +855,7 @@ function renderAnalysisDetailPage(report) {
     title: `LeiMai Oracle | ${report.title}`,
     description: summary || "Oracle report detail page.",
     bodyHtml,
-    jsonLd: normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report)),
+    jsonLd: paywallJsonLd,
     canonicalUrl,
   });
 }

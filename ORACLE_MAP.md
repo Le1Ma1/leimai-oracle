@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-02T21:31:18Z`
+- Last Updated (UTC): `2026-03-03T09:10:00Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -688,7 +688,43 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Changes are isolated to support render/read layer and environment contract; engine training pipeline untouched.
 - Bai Ben (Minimalism) Review: Pass. No new services introduced; only data-source swap and rendering hardening.
 
+### [x] B25_VERCEL_ENV_AUTOSYNC_SOVEREIGN_CONTRACT
+- Technical Dependency: `scripts/vercel_ops.py`, `.github/workflows/vercel_env_sync.yml`.
+- Business Value: admin-level environment convergence now auto-syncs `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and all `SUPPORT_*` repository variables into Vercel (`production/preview/development`) with overwrite-on-drift and optional deployment trigger.
+- Read/Write Isolation Review: Pass. Control-plane env synchronization only; no mutation to data/strategy runtime logic.
+- Bai Ben (Minimalism) Review: Pass. One script + one workflow, no extra service layer.
+
+### [x] B25_1_REPORT_HEARTBEAT_SELF_HEAL
+- Technical Dependency: `engine/src/monitor_heartbeat.py`, `.github/workflows/heartbeat_1h.yml`, `.github/workflows/ingest_4h.yml`, `engine/.env.example`.
+- Business Value: hourly heartbeat now checks `oracle_reports` freshness; when stale (>5h) it emits critical anomaly and dispatches ingestion recovery workflow automatically.
+- Read/Write Isolation Review: Pass. Monitoring and orchestration path only; report generation and UI rendering remain decoupled.
+- Bai Ben (Minimalism) Review: Pass. Single monitor module reuses existing anomaly/workflow contracts.
+
+### [x] B25_2_PAYWALL_BOUNDARY_WITH_SCHEMA_DISCIPLINE
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.css`.
+- Business Value: `/analysis/:slug` now enforces 20% preview boundary with locked-content overlay, and JSON-LD includes paywall semantics (`isAccessibleForFree=false`, `hasPart`) for compliant machine-readable monetization boundary.
+- Read/Write Isolation Review: Pass. Read-layer rendering policy only; no backend ingestion/report writes changed.
+- Bai Ben (Minimalism) Review: Pass. Reused existing report route and styling without introducing a separate paywall service.
+
 ## [BUSINESS_STATUS]
+
+### [x] Phase 3.1 主權自動化已落地（Vercel 變數同步）
+- Technical Dependency: `scripts/vercel_ops.py`, `.github/workflows/vercel_env_sync.yml`.
+- Business Value: 已建立「GitHub Variables/Secrets -> Vercel Environment」自動對齊機制，支援同名變數差異時強制覆蓋更新，降低人工維運風險與配置漂移。
+- 讀寫分離檢查: 通過（僅控制平面設定同步，未污染資料生產與前端內容邏輯）。
+- 白賁極簡檢查: 通過（單腳本單工作流，無多餘中介服務）。
+
+### [x] Phase 3.1 心跳自癒已落地（5 小時失活補救）
+- Technical Dependency: `engine/src/monitor_heartbeat.py`, `.github/workflows/heartbeat_1h.yml`.
+- Business Value: 當 `oracle_reports` 超過 5 小時未更新，系統會自動寫入 `critical` 級異常並觸發 `workflow_dispatch` 補救，確保預言內容供給不中斷。
+- 讀寫分離檢查: 通過（監控與調度層變更，未改動分析內容生成規則）。
+- 白賁極簡檢查: 通過（重用既有 anomaly/workflow 管線，不新增外部依賴平台）。
+
+### [x] Phase 3.1 價值門檻已落地（20% 內容預覽 + 結構化標記）
+- Technical Dependency: `support/server.mjs`, `support/web/ouroboros.css`.
+- Business Value: 分析頁已改為僅展示前 20% 內容並加入霧化鎖定提示，同步在 JSON-LD 輸出付費邊界語義，兼顧可轉換性與合規的 SEO/GEO 信號。
+- 讀寫分離檢查: 通過（僅前端渲染邊界調整，資料層與引擎層未受影響）。
+- 白賁極簡檢查: 通過（在既有路由內完成，不引入新鑑權系統）。
 
 ### [x] Phase 2.1 前端真實數據貫通完成（Support UI/UX Cutover）
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `support/.env.example`, `package.json`.

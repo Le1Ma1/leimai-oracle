@@ -4,6 +4,19 @@ on:
   schedule:
     - cron: "0 */4 * * *"
   workflow_dispatch:
+    inputs:
+      reason:
+        description: "Dispatch reason"
+        required: false
+        default: "manual"
+      detected_lag_hours:
+        description: "Heartbeat detected lag hours"
+        required: false
+        default: ""
+      latest_report_ts_utc:
+        description: "Latest report timestamp observed by heartbeat monitor"
+        required: false
+        default: ""
 
 concurrency:
   group: ingest-market-4h
