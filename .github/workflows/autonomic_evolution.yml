@@ -69,11 +69,28 @@ jobs:
         run: |
           python scripts/visual_autotune.py
 
+      - name: Validate evolution integrity
+        env:
+          SUPPORT_BASE_URL: http://127.0.0.1:4310
+          EVOLUTION_MIN_SCORE: "95"
+        run: |
+          python scripts/evolution_validator.py
+
       - name: Verify visual memory artifacts
         run: |
           test -s logs/current_vibe.png
           test -s logs/visual_state.json
           test -s logs/visual_tune.json
+          test -s logs/evolution_validation.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("logs/visual_state.json").read_text(encoding="utf-8"))
+          checks = data.get("checks", {})
+          if checks.get("index_has_reports", False) and not checks.get("detail_is_real_report", False):
+            raise SystemExit("detail_is_real_report=false")
+          print("visual detail page validation passed")
+          PY
           echo "visual artifacts verified"
 
       - name: Stop support server
@@ -87,7 +104,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add logs/current_vibe.png logs/visual_state.json logs/visual_tune.json support/web/ouroboros.css support/server.mjs
+          git add logs/current_vibe.png logs/visual_state.json logs/visual_tune.json logs/evolution_validation.json support/web/ouroboros.css support/server.mjs
           if git diff --cached --quiet; then
             echo "No visual changes detected."
             exit 0

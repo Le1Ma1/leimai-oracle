@@ -211,17 +211,22 @@ body.low-gpu #matrix-bg {
 .card-top {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   color: var(--muted);
 }
 
 .card-mid {
   font-size: 16px;
   font-weight: 700;
+  line-height: 1.44;
+  word-break: break-word;
 }
 
 .card-sub {
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.62;
+  word-break: break-word;
 }
 
 .report-card {
@@ -235,6 +240,36 @@ body.low-gpu #matrix-bg {
   color: var(--accent);
   font-size: 11px;
   letter-spacing: 0.03em;
+}
+
+.report-time {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.clamp-1,
+.clamp-2,
+.clamp-3,
+.clamp-4 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.clamp-1 {
+  -webkit-line-clamp: 1;
+}
+
+.clamp-2 {
+  -webkit-line-clamp: 2;
+}
+
+.clamp-3 {
+  -webkit-line-clamp: 3;
+}
+
+.clamp-4 {
+  -webkit-line-clamp: 4;
 }
 
 .empty-box {
@@ -267,6 +302,14 @@ body.low-gpu #matrix-bg {
 
 .kv-item strong {
   color: #fff;
+  word-break: break-word;
+}
+
+.meta-hash {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .muted {
@@ -425,6 +468,7 @@ body.low-gpu #matrix-bg {
   font-size: 12px;
   line-height: 1.68;
   letter-spacing: 0.04em;
+  max-width: min(680px, 92%);
   backdrop-filter: blur(calc(var(--lock-blur-px) * 1px));
 }
 
@@ -453,18 +497,34 @@ body.low-gpu #matrix-bg {
   border: 1px solid rgba(var(--accent-rgb), 0.3);
   padding: 8px 10px;
   color: #d8e2ea;
+  word-break: break-all;
 }
 
-.jsonld-preview {
-  margin: 0;
-  border: 1px solid rgba(var(--accent-rgb), 0.27);
-  background: rgba(2, 5, 8, 0.93);
-  color: #cfdae3;
-  font-size: 12px;
-  line-height: 1.55;
+.authority-note {
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  background: rgba(3, 6, 9, 0.75);
   padding: 12px;
-  overflow: auto;
-  max-height: 320px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.authority-line {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.authority-line span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.authority-line strong {
+  color: #fff;
+  font-size: 13px;
 }
 
 .vault-overlay {
@@ -705,5 +765,13 @@ body.low-gpu #matrix-bg {
 
   .paywall-locked-content {
     min-height: 220px;
+  }
+
+  .authority-line {
+    grid-template-columns: 1fr;
+  }
+
+  .report-time {
+    text-align: left;
   }
 }

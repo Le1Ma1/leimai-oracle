@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T07:34:00Z`
+- Last Updated (UTC): `2026-03-04T09:04:00Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -1236,6 +1236,30 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: completed white-noise copy cleanup, hybrid GEO locale resolution (country-first + language fallback), institutional bilingual tone hardening, Search Console sitemap submit automation, and mobile WebGL low-FPS static fallback.
 - [BUSINESS_STATUS] 商業進度: Phase 4.3 完成。`/vault`、`/analysis`、`/analysis/:slug` 已升級為雙語主權文案與 SEO/GEO 高壓輸出；canonical 全鎖 `https://leimai.io/...`；Google Search Console sitemap 提交已接入 4h 排程。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 support/engine/scripts/workflow 層改造）；白賁通過（以最小增量完成語言、SEO、GEO、性能降級，不擴散新服務）。
+
+### [x] B28_VISUAL_MEMORY_REAL_DETAIL_AND_EVOLUTION_VALIDATOR
+- [LOGIC_CORE] Technical Dependency: `scripts/visual_snapshot.py`, `scripts/visual_autotune.py`, `scripts/evolution_validator.py`, `.github/workflows/autonomic_evolution.yml`, `logs/{visual_state.json,visual_tune.json,evolution_validation.json,current_vibe.png}`.
+- [LOGIC_CORE] Business Value: visual self-management is now closed-loop with real-detail detection, readability/CTA/overflow scoring, and V-Score hard validation (`>=95`) before autonomous evolution commit.
+- [BUSINESS_STATUS] 商業進度: 視覺自理已升級為可驗證閉環。系統會先抓首頁+真實詳情頁，再評分可讀性、解鎖按鈕顯著度與溢出風險；未達門檻會直接阻擋自動演化提交。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅腳本/工作流/日誌）；白賁通過（沿用既有頁面與樣式，最小增量補上驗證器）。
+
+### [x] B28_1_FRONTEND_SIGNAL_DELEAK_AND_AUTHORITY_REFRAME
+- [LOGIC_CORE] Technical Dependency: `support/lib/messaging.mjs`, `support/server.mjs`, `support/web/ouroboros.css`, `engine/src/generate_reports.py`.
+- [LOGIC_CORE] Business Value: removed visible engineering leakage from user-facing surfaces (raw payload panel, corrupted copy, code-like event labels), added authority-style presentation and resilient text sanitization for legacy report strings.
+- [BUSINESS_STATUS] 商業進度: 前端已完成「白賁去噪」：不再向訪客暴露工程術語與原始載荷，改為主權權威摘要；卡片/詳頁完成長字串防爆版與可讀性強化。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅展示層與報告文案生成）；白賁通過（未新增框架，僅針對漏點做外科修復）。
+
+### [x] B27_1_BTC_VALIDATION_REBUILD_RECHECK_DONE
+- [LOGIC_CORE] Technical Dependency: `python -m engine.src.main --mode validate --summary-path engine/artifacts/optimization/single/2026-03-03/summary.json` with `ENGINE_VALIDATION_LIGHT_MODE=true`, `ENGINE_VALIDATION_SAMPLE_STEP=20`, `ENGINE_VALIDATION_MAX_RESULTS=120`; synced artifacts in `engine/artifacts/optimization/single/{2026-03-04,2026-03-03}`.
+- [LOGIC_CORE] Business Value: BTC validation/deploy artifacts are now readable and decision-safe (`pass_rate=0.7857`, `deploy=1 symbol / 2 rules`), replacing stale zero-pass snapshots caused by heavy validation drift.
+- [BUSINESS_STATUS] 商業進度: BTC 工件重建已完成，決策面板回到可判讀狀態（pass/deploy 已恢復，不再是全 0 假失敗）。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（純後端工件重建）；白賁通過（僅調整驗證執行模式與工件同步，不動策略核心）。
+
+### [ ] B27_2_BTC_PHASE_RUNNER_STAGE1_IN_PROGRESS
+- [LOGIC_CORE] Technical Dependency: background run `python -u scripts/btc_phase_runner.py --wait-existing --monitor-interval 2 --poll-sec 20` (PID `10716`), log `engine/artifacts/logs/btc_phase_runner_autostart_20260304_171756.out.log`, active run `iter_r1_7c12df373b27`.
+- [LOGIC_CORE] Business Value: phase runner moved from stale snapshot to live repair loop and entered `stage1_balanced` to recover `all_window_alpha` while preserving current deploy availability.
+- [BUSINESS_STATUS] 商業進度: BTC 已進入新一輪 Stage1 自動修復。當前先保住 deploy，再把 all-window alpha 從負值拉回門檻之上。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（純後端訓練調度）；白賁通過（沿用既有 phase runner/supervisor，不新增服務）。
 
 ## Governance Checks
 

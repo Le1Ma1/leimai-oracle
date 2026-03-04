@@ -332,6 +332,18 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function shortRef(value, head = 10, tail = 8) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  if (text.length <= head + tail + 3) return text;
+  return `${text.slice(0, head)}...${text.slice(-tail)}`;
+}
+
+function toLocaleTag(locale) {
+  const raw = String(locale || "").trim().toLowerCase();
+  return raw === "zh-tw" ? "ZH-TW" : "EN";
+}
+
 function buildSocialCardSvg() {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="LeiMai Throne">
@@ -814,15 +826,45 @@ function triggerEntityProfilerForAddress(walletAddress) {
   }
 }
 
+function sanitizeDisplayText(input, locale = "en") {
+  let text = String(input || "");
+  const isZh = String(locale || "").toLowerCase() === "zh-tw";
+  const pairs = isZh
+    ? [
+        [/oracle_report_pipeline_stale/gi, "主權結構偏移"],
+        [/oracle_report_generation_error/gi, "主權合成偏移"],
+        [/\bpipeline\b/gi, "結構脈絡"],
+        [/\bapi\b/gi, "資料中繼"],
+        [/\bmock\b/gi, "預演"],
+        [/\bpython\b/gi, "運算核心"],
+        [/\bgeo\b/gi, "主權網域"],
+      ]
+    : [
+        [/oracle_report_pipeline_stale/gi, "Sovereign Structure Deviation"],
+        [/oracle_report_generation_error/gi, "Sovereign Synthesis Deviation"],
+        [/\bpipeline\b/gi, "structure flow"],
+        [/\bapi\b/gi, "source relay"],
+        [/\bmock\b/gi, "preview"],
+        [/\bpython\b/gi, "compute core"],
+        [/\bgeo\b/gi, "sovereign domain"],
+      ];
+
+  for (const [pattern, replacement] of pairs) {
+    text = text.replace(pattern, replacement);
+  }
+  return text;
+}
+
 function normalizeReportRow(raw) {
   const row = raw && typeof raw === "object" ? raw : {};
+  const locale = String(row.locale || DEFAULT_REPORT_LOCALE);
   return {
     report_id: Number(row.report_id || 0),
     event_id: String(row.event_id || ""),
-    locale: String(row.locale || DEFAULT_REPORT_LOCALE),
-    title: String(row.title || ""),
+    locale,
+    title: sanitizeDisplayText(String(row.title || ""), locale),
     slug: String(row.slug || ""),
-    body_md: String(row.body_md || ""),
+    body_md: sanitizeDisplayText(String(row.body_md || ""), locale),
     jsonld: row.jsonld && typeof row.jsonld === "object" ? row.jsonld : {},
     unique_entity: String(row.unique_entity || ""),
     created_at: String(row.created_at || ""),
@@ -1077,16 +1119,19 @@ function renderOuroborosDocument({
 }
 
 function buildReportCard(report, copy) {
-  const summary = buildSummary(report.body_md, 220);
+  const summary = buildSummary(report.body_md, 176);
   const updatedAt = report.updated_at || report.created_at || "";
+  const localeTag = toLocaleTag(report.locale);
+  const title = String(report.title || "");
+  const entity = String(report.unique_entity || "LeiMai Liquidity Friction");
   return `<a class="matrix-card glass-panel cyber-border report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
     <div class="card-top terminal-font">
-      <span>${escapeHtml(report.locale.toUpperCase())}</span>
+      <span>${escapeHtml(localeTag)}</span>
       <span class="report-time terminal-font" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
     </div>
-    <div class="card-mid neon-text">${escapeHtml(report.title)}</div>
-    <div class="card-sub">${escapeHtml(summary || copy.analysisEmpty)}</div>
-    <div class="report-entity terminal-font">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</div>
+    <div class="card-mid neon-text clamp-3">${escapeHtml(title)}</div>
+    <div class="card-sub clamp-4">${escapeHtml(summary || copy.analysisEmpty)}</div>
+    <div class="report-entity terminal-font clamp-1">${escapeHtml(entity)}</div>
   </a>`;
 }
 
@@ -1388,11 +1433,12 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const paywallShellClass = unlocked ? "paywall-shell is-unlocked" : "paywall-shell";
   const lockMessage = unlocked ? copy.detailPolicySigned : copy.paywallNotice;
+  const eventRef = shortRef(report.event_id, 12, 10);
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
       <div class="hero-kicker terminal-font">${escapeHtml(copy.detailKicker)}</div>
-      <h1 class="neon-text">${escapeHtml(report.title)}</h1>
-      <p>${escapeHtml(summary)}</p>
+      <h1 class="neon-text clamp-3">${escapeHtml(report.title)}</h1>
+      <p class="clamp-3">${escapeHtml(summary)}</p>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.detailBack)}</a>
         <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
@@ -1402,9 +1448,9 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
     <section class="panel glass-panel cyber-border">
       <h2>${escapeHtml(copy.detailMetaTitle)}</h2>
       <div class="kv-grid">
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong>${escapeHtml(report.event_id || "-")}</strong></div>
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaLocale)}</span><strong>${escapeHtml(report.locale.toUpperCase())}</strong></div>
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong>${escapeHtml(report.unique_entity || "-")}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong class="meta-hash terminal-font">${escapeHtml(eventRef)}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaLocale)}</span><strong>${escapeHtml(toLocaleTag(report.locale))}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong class="clamp-2">${escapeHtml(report.unique_entity || "-")}</strong></div>
         <div class="kv-item"><span>${escapeHtml(copy.detailMetaUpdated)}</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
         <div class="kv-item"><span>${escapeHtml(copy.detailMetaAccess)}</span><strong>${unlocked ? copy.detailUnlocked : copy.detailLocked}</strong></div>
       </div>
@@ -1423,13 +1469,16 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
           <button class="unlock-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : escapeHtml(copy.signBtn)}</button>
         </div>
       </div>
-      <div class="route-line terminal-font">/analysis/${escapeHtml(report.slug)}</div>
+      <div class="route-line terminal-font">${escapeHtml(`/analysis/${report.slug}`)}</div>
       <div class="muted">${unlocked ? escapeHtml(copy.detailPolicySigned) : escapeHtml(copy.detailPolicyPublic)}</div>
     </section>
 
     <section class="panel glass-panel cyber-border">
       <h2>${escapeHtml(copy.detailStructuredTitle)}</h2>
-      <pre class="jsonld-preview">${escapeHtml(JSON.stringify(paywallJsonLd, null, 2))}</pre>
+      <div class="authority-note">
+        <div class="authority-line"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong class="clamp-2">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</strong></div>
+        <div class="authority-line"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong class="meta-hash terminal-font">${escapeHtml(eventRef)}</strong></div>
+      </div>
       <div class="muted">${escapeHtml(copy.detailStructuredLead)}</div>
     </section>
   </main>`;

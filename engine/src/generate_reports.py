@@ -148,8 +148,39 @@ def build_slug(event_id: str, locale: str) -> str:
     return slugify(f"oracle-{locale}-{short}")
 
 
+def humanize_event_type(event_type: str, locale: str) -> str:
+    raw = str(event_type or "").strip().lower()
+    en_map = {
+        "liquidation_spike": "Forced Liquidation Shock",
+        "open_interest_crash": "Open Interest Compression",
+        "open_interest_spike": "Open Interest Expansion",
+        "oracle_report_pipeline_stale": "Signal Freshness Deviation",
+        "oracle_report_generation_error": "Signal Synthesis Deviation",
+    }
+    zh_map = {
+        "liquidation_spike": "強制平倉衝擊",
+        "open_interest_crash": "未平倉量壓縮",
+        "open_interest_spike": "未平倉量擴張",
+        "oracle_report_pipeline_stale": "訊號新鮮度偏移",
+        "oracle_report_generation_error": "訊號合成偏移",
+    }
+    if locale == "zh-tw":
+        return zh_map.get(raw, "主權市場結構事件")
+    return en_map.get(raw, "Sovereign Market Structure Event")
+
+
+def short_event_ref(event_id: str) -> str:
+    text = str(event_id or "").strip()
+    if not text:
+        return "-"
+    if len(text) <= 22:
+        return text
+    return f"{text[:12]}...{text[-8:]}"
+
+
 def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
     payload_text = json.dumps(event.get("payload", {}), ensure_ascii=False, sort_keys=True)
+    event_label = humanize_event_type(str(event.get("event_type", "")), locale)
     if locale == "zh-tw":
         style_line = (
             "請使用繁體中文（zh-TW）。語氣需冷靜、精準、具機構紀律，"
@@ -165,10 +196,11 @@ def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
         "You are LeiMai Oracle. Produce a market-structure brief around 300 words.\n"
         f"{style_line}\n"
         "Do not use hype. Do not provide investment advice.\n"
+        "Do not reveal internal code names, pipeline labels, or implementation terms.\n"
         f"Mandatory entity phrase (exact match): {unique_entity}\n"
         "Return strict JSON only with keys: title, body_md, jsonld.\n"
         f"event_id={event.get('event_id')}\n"
-        f"event_type={event.get('event_type')}\n"
+        f"event_class={event_label}\n"
         f"severity={event.get('severity')}\n"
         f"event_ts_utc={event.get('ts_utc')}\n"
         f"payload={payload_text}\n"
@@ -299,16 +331,18 @@ def build_jsonld(
 def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) -> dict[str, Any]:
     event_id = str(event.get("event_id", ""))
     event_type = str(event.get("event_type", "unknown"))
+    event_label = humanize_event_type(event_type, locale)
     severity = str(event.get("severity", "medium")).lower()
     observed_at = str(event.get("ts_utc", ""))
+    event_ref = short_event_ref(event_id)
 
     if locale == "zh-tw":
-        title = f"主權結構簡報｜{event_type}｜{severity.upper()}"
+        title = f"主權結構簡報｜{event_label}｜{severity.upper()}"
         body_md = (
             "### 結論\n"
-            f"事件 `{event_id}` 目前評級為 **{severity}**，市場摩擦仍在累積，主要監測實體為 **{unique_entity}**。\n\n"
+            f"事件 `{event_ref}` 目前評級為 **{severity}**，市場摩擦仍在累積，主要監測實體為 **{unique_entity}**。\n\n"
             "### 證據\n"
-            f"- 事件類型：`{event_type}`\n"
+            f"- 事件分類：`{event_label}`\n"
             f"- 觀測時間：`{observed_at}`\n"
             "- 波動壓力尚未與倉位穩定同步，代表短期再定價風險仍在。\n\n"
             "### 風險邊界\n"
@@ -316,13 +350,13 @@ def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) ->
             "若槓桿與波動同向擴大，結構壓力將持續上升。"
         )
     else:
-        title = f"Sovereign Structure Brief | {event_type} | {severity.upper()}"
+        title = f"Sovereign Structure Brief | {event_label} | {severity.upper()}"
         body_md = (
             "### Conclusion\n"
-            f"Event `{event_id}` is rated **{severity}**, with persistent liquidity friction across the observed structure. "
+            f"Event `{event_ref}` is rated **{severity}**, with persistent liquidity friction across the observed structure. "
             f"Primary entity anchor: **{unique_entity}**.\n\n"
             "### Evidence\n"
-            f"- Event type: `{event_type}`\n"
+            f"- Event class: `{event_label}`\n"
             f"- Observed at: `{observed_at}`\n"
             "- Volatility pressure remains elevated relative to positioning stabilization.\n\n"
             "### Risk Boundary\n"

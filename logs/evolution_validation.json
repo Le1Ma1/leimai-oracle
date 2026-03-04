@@ -1,0 +1,42 @@
+{
+  "ts_utc": "2026-03-04T09:02:36Z",
+  "base_url": "http://127.0.0.1:4310",
+  "visual": {
+    "contrast_min": 11.26,
+    "readability_score": 100.0,
+    "cta_prominence_score": 69.0,
+    "index_has_reports": true,
+    "detail_is_real_report": true,
+    "overflow_hotspots_count": 0
+  },
+  "copy": {
+    "forbidden_hits": {},
+    "jsonld_present": {
+      "home": true,
+      "analysis": true,
+      "vault": true,
+      "detail": true
+    }
+  },
+  "business": {
+    "missing_server_tokens": [],
+    "missing_harvester_tokens": []
+  },
+  "prompt": {
+    "has_zh_style": true,
+    "has_en_style": true,
+    "has_unique_entity_guard": true,
+    "has_internal_code_guard": true
+  },
+  "issues": [],
+  "issue_count": 0,
+  "score": {
+    "quality_density": 100.0,
+    "brand_authority": 100.0,
+    "business_harvest": 100.0,
+    "sovereign_seo": 100.0,
+    "total": 100.0
+  },
+  "pass": true,
+  "threshold": 95.0
+}
