@@ -1,0 +1,11 @@
+{
+  "ts_utc": "2026-03-04T02:51:03Z",
+  "base_url": "http://127.0.0.1:4310",
+  "home_url": "http://127.0.0.1:4310/",
+  "detail_url": "http://127.0.0.1:4310/analysis/non-existent",
+  "model": "fallback",
+  "visual_note": "Current palette leans Platinum Silver, obsidian background remains stable, and the paywall zone keeps clear high contrast.",
+  "assets": {
+    "merged_png": "logs/current_vibe.png"
+  }
+}
