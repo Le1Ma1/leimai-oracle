@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T10:12:10Z`
+- Last Updated (UTC): `2026-03-04T14:22:03Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -1266,6 +1266,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: replaced no-wallet dead-end with guided Web3 modal onboarding, removed visible report-engineering leakage from detail UI, enforced locale-first report surfaces (`home/analysis`), added stricter zh-tw language isolation + forbidden-token stripping in report generation, and introduced archive/reset tooling for legacy noisy reports.
 - [BUSINESS_STATUS] 商業進度: 已完成「白賁淨化 + 交互升維」：詳情頁只保留標題/時間/分析/邊界，去除參考識別與路由噪音；無錢包用戶改為導引安裝流程；中文頁面優先顯示中文報告並避免中英混雜。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（前端展示、文案生成、驗證腳本、資料封存工具分層改造）；白賁通過（以外科式改動移除噪音，未引入額外框架與冗餘服務）。
+
+### [x] B29_1_RESEED_ARCHIVE_GRACEFUL_FALLBACK_AND_REPORT_REBUILD
+- [LOGIC_CORE] Technical Dependency: `scripts/reseed_reports.py`, `engine/src/generate_reports.py`.
+- [LOGIC_CORE] Business Value: reseed no longer aborts when `oracle_reports_archive` is absent; it gracefully downgrades and still completes purge/reopen flow, then reports regenerate clean content deterministically.
+- [BUSINESS_STATUS] 商業進度: 已在 Supabase 執行重建流程（刪除舊報告 16 筆、重開事件 8 筆、重新生成 16 筆雙語報告）。即使 archive 表尚未建置，也不會卡死整體清洗流程。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 reseed/generate 後端流程）；白賁通過（最小降級機制，避免人工介入）。
 
 ## Governance Checks
 

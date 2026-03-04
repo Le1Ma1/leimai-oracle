@@ -70,9 +70,9 @@ def fetch_reports(client: Client, batch_size: int) -> list[dict[str, Any]]:
     return rows
 
 
-def archive_reports(client: Client, rows: list[dict[str, Any]]) -> tuple[bool, int]:
+def archive_reports(client: Client, rows: list[dict[str, Any]]) -> tuple[bool, int, str | None]:
     if not rows:
-        return True, 0
+        return True, 0, None
     payload = []
     for row in rows:
         payload.append(
@@ -91,10 +91,13 @@ def archive_reports(client: Client, rows: list[dict[str, Any]]) -> tuple[bool, i
         )
     try:
         client.table("oracle_reports_archive").upsert(payload, on_conflict="report_id").execute()
-        return True, len(payload)
+        return True, len(payload), None
     except Exception as exc:  # noqa: BLE001
-        log_event("ARCHIVE_UPSERT_FAILED", error=str(exc))
-        return False, 0
+        error_text = str(exc)
+        log_event("ARCHIVE_UPSERT_FAILED", error=error_text)
+        if "PGRST205" in error_text and "oracle_reports_archive" in error_text:
+            return True, 0, "archive_table_missing"
+        return False, 0, "archive_failed"
 
 
 def delete_reports(client: Client) -> int:
@@ -136,8 +139,9 @@ def run() -> int:
         return 0
 
     archived = 0
+    skip_archive_reason: str | None = None
     if not args.skip_archive:
-        ok, archived = archive_reports(client, reports)
+        ok, archived, skip_archive_reason = archive_reports(client, reports)
         if not ok:
             log_event("RESEED_ABORTED", reason="archive_failed")
             return 1
@@ -150,10 +154,10 @@ def run() -> int:
         deleted=deleted,
         reopened_events=reopened,
         skip_archive=bool(args.skip_archive),
+        skip_archive_reason=skip_archive_reason,
     )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(run())
-
