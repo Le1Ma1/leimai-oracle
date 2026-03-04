@@ -30,6 +30,12 @@
       invoiceReady: "Request ready. Complete settlement before expiration.",
       unlockRequired: "Signed session required before creating request.",
       paymentCreateFailed: "Failed to prepare settlement request. Please retry.",
+      walletGuideTitle: "Sovereign Access Required",
+      walletGuideBody:
+        "To verify your identity and unlock Alpha intelligence, a Web3 Vault Key is required.",
+      walletGuideInstall: "Install MetaMask",
+      walletGuideLearn: "Learn More",
+      walletGuideClose: "Continue in Preview",
     },
     "zh-tw": {
       negotiating: "安全飛地協商中...",
@@ -53,6 +59,12 @@
       invoiceReady: "請求已建立，請在過期前完成結算。",
       unlockRequired: "請先完成簽署再建立請求。",
       paymentCreateFailed: "建立結算請求失敗，請重試。",
+      walletGuideTitle: "需要主權金鑰",
+      walletGuideBody:
+        "為了完成身份驗證並解鎖完整 Alpha 情報，需要先安裝 Web3 錢包金鑰。",
+      walletGuideInstall: "安裝 MetaMask",
+      walletGuideLearn: "了解流程",
+      walletGuideClose: "先維持預覽",
     },
   };
 
@@ -191,6 +203,55 @@
     }
   }
 
+  function closeWeb3GuideModal() {
+    const modal = document.getElementById("web3GuideModal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function ensureWeb3GuideModal() {
+    let modal = document.getElementById("web3GuideModal");
+    if (modal) return modal;
+    const copy = getLocaleCopy();
+    modal = document.createElement("div");
+    modal.id = "web3GuideModal";
+    modal.className = "web3-guide-modal";
+    modal.setAttribute("aria-hidden", "true");
+    modal.innerHTML = `
+      <div class="web3-guide-card glass-panel cyber-border">
+        <h3 class="web3-guide-title neon-text">${copy.walletGuideTitle}</h3>
+        <p class="web3-guide-body">${copy.walletGuideBody}</p>
+        <div class="web3-guide-actions">
+          <a class="btn btn-main" target="_blank" rel="noopener noreferrer" href="https://metamask.io/download/">${copy.walletGuideInstall}</a>
+          <a class="btn" target="_blank" rel="noopener noreferrer" href="https://support.metamask.io/start/getting-started-with-metamask/">${copy.walletGuideLearn}</a>
+          <button class="unlock-btn sign-btn" type="button" id="web3GuideCloseBtn">${copy.walletGuideClose}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const closeBtn = modal.querySelector("#web3GuideCloseBtn");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        closeWeb3GuideModal();
+      });
+    }
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) {
+        closeWeb3GuideModal();
+      }
+    });
+    return modal;
+  }
+
+  function openWeb3GuideModal() {
+    const modal = ensureWeb3GuideModal();
+    if (!modal) return;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
   function revealUnlockedContent() {
     const shells = Array.from(document.querySelectorAll(".paywall-shell"));
     for (const shell of shells) {
@@ -222,7 +283,9 @@
 
     const ethereum = window.ethereum;
     if (!ethereum || typeof ethereum.request !== "function") {
-      setLockMessage(getLocaleCopy().walletMissing);
+      const copy = getLocaleCopy();
+      setLockMessage(copy.walletMissing);
+      openWeb3GuideModal();
       return;
     }
 

@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T09:04:00Z`
+- Last Updated (UTC): `2026-03-04T10:12:10Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -1260,6 +1260,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: phase runner moved from stale snapshot to live repair loop and entered `stage1_balanced` to recover `all_window_alpha` while preserving current deploy availability.
 - [BUSINESS_STATUS] 商業進度: BTC 已進入新一輪 Stage1 自動修復。當前先保住 deploy，再把 all-window alpha 從負值拉回門檻之上。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（純後端訓練調度）；白賁通過（沿用既有 phase runner/supervisor，不新增服務）。
+
+### [x] B29_UNLOCK_FLOW_AND_DETAIL_DENOISE_RECONTRACT
+- [LOGIC_CORE] Technical Dependency: `support/server.mjs`, `support/lib/messaging.mjs`, `support/web/{ouroboros.js,ouroboros.css}`, `engine/src/generate_reports.py`, `scripts/evolution_validator.py`, `supabase/schema_reports_archive.sql`, `scripts/reseed_reports.py`.
+- [LOGIC_CORE] Business Value: replaced no-wallet dead-end with guided Web3 modal onboarding, removed visible report-engineering leakage from detail UI, enforced locale-first report surfaces (`home/analysis`), added stricter zh-tw language isolation + forbidden-token stripping in report generation, and introduced archive/reset tooling for legacy noisy reports.
+- [BUSINESS_STATUS] 商業進度: 已完成「白賁淨化 + 交互升維」：詳情頁只保留標題/時間/分析/邊界，去除參考識別與路由噪音；無錢包用戶改為導引安裝流程；中文頁面優先顯示中文報告並避免中英混雜。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（前端展示、文案生成、驗證腳本、資料封存工具分層改造）；白賁通過（以外科式改動移除噪音，未引入額外框架與冗餘服務）。
 
 ## Governance Checks
 

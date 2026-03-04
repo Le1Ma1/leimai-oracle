@@ -480,12 +480,36 @@ body.low-gpu #matrix-bg {
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
 
 .unlock-btn:disabled {
   opacity: 0.62;
   cursor: default;
   animation: none;
+}
+
+.unlock-btn:hover:not(:disabled),
+.upgrade-btn:hover:not(:disabled),
+.sign-btn:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+  border-color: rgba(var(--accent-rgb), 0.92);
+  box-shadow: 0 0 20px rgba(var(--accent-rgb), 0.35), inset 0 0 22px rgba(var(--accent-rgb), 0.15);
+}
+
+.unlock-btn:active:not(:disabled),
+.upgrade-btn:active:not(:disabled),
+.sign-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.24);
+}
+
+.unlock-btn:focus-visible,
+.upgrade-btn:focus-visible,
+.sign-btn:focus-visible {
+  outline: 1px solid rgba(var(--accent-rgb), 0.9);
+  outline-offset: 2px;
 }
 
 .pulse-glow {
@@ -525,6 +549,25 @@ body.low-gpu #matrix-bg {
 .authority-line strong {
   color: #fff;
   font-size: 13px;
+}
+
+.boundary-note {
+  margin-top: 14px;
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(4, 7, 10, 0.74);
+  padding: 12px;
+}
+
+.boundary-note h3 {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.boundary-note .article-body p {
+  margin: 8px 0 0;
 }
 
 .vault-overlay {
@@ -652,11 +695,17 @@ body.low-gpu #matrix-bg {
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
 
 .upgrade-btn:disabled {
   opacity: 0.62;
   cursor: default;
+}
+
+.sign-btn {
+  letter-spacing: 0.13em;
 }
 
 .payment-result {
@@ -681,6 +730,42 @@ body.low-gpu #matrix-bg {
 .payment-modal-card {
   width: min(640px, 96vw);
   padding: 18px;
+}
+
+.web3-guide-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 62;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(2, 4, 6, 0.78);
+}
+
+.web3-guide-modal.open {
+  display: flex;
+}
+
+.web3-guide-card {
+  width: min(620px, 96vw);
+  padding: 18px;
+}
+
+.web3-guide-title {
+  margin: 0 0 10px;
+  color: #fff;
+}
+
+.web3-guide-body {
+  margin: 0 0 14px;
+  color: #dce6ee;
+}
+
+.web3-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .payment-close-btn {

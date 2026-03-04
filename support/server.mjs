@@ -852,12 +852,19 @@ function sanitizeDisplayText(input, locale = "en") {
   for (const [pattern, replacement] of pairs) {
     text = text.replace(pattern, replacement);
   }
+  text = text
+    .replace(/\b[a-f0-9]{24,}\b/gi, "")
+    .replace(/\/analysis\/[a-z0-9_-]+/gi, "")
+    .replace(/^.*(?:參考識別|權限策略|Authority Record|Authority proof).*$\n?/gim, "")
+    .replace(/^.*(?:Conclusion Event|結論 事件).*$\n?/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return text;
 }
 
 function normalizeReportRow(raw) {
   const row = raw && typeof raw === "object" ? raw : {};
-  const locale = String(row.locale || DEFAULT_REPORT_LOCALE);
+  const locale = normalizeOuroborosLocale(String(row.locale || DEFAULT_REPORT_LOCALE));
   return {
     report_id: Number(row.report_id || 0),
     event_id: String(row.event_id || ""),
@@ -914,6 +921,21 @@ function buildPreviewMarkdown(md, ratio = REPORT_PREVIEW_RATIO) {
     preview = src.slice(0, targetChars);
   }
   return preview.trim();
+}
+
+function extractBoundaryText(md, locale = "en", fallback = "") {
+  const src = String(md || "").trim();
+  if (!src) return String(fallback || "").trim();
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
+  const headingPattern = isZh
+    ? /(?:^|\n)#{1,6}\s*風險邊界\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i
+    : /(?:^|\n)#{1,6}\s*Risk Boundary\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i;
+  const matched = src.match(headingPattern);
+  if (matched?.[1]) {
+    const extracted = String(matched[1]).trim();
+    if (extracted) return extracted;
+  }
+  return String(fallback || "").trim();
 }
 
 function sanitizeMarkdownHtml(md) {
@@ -1013,39 +1035,34 @@ function withPaywallJsonLd(raw) {
   };
 }
 
-async function fetchLatestReports(limit = 5) {
+async function fetchLatestReports(limit = 5, locale = DEFAULT_REPORT_LOCALE) {
   const client = getSupabaseClient();
   if (!client) return [];
   const safeLimit = Math.min(Math.max(1, Number(limit) || 5), 50);
+  const preferredLocale = normalizeOuroborosLocale(locale);
 
   const primary = await client
     .from("oracle_reports")
     .select(REPORT_SELECT_FIELDS)
-    .eq("locale", DEFAULT_REPORT_LOCALE)
+    .eq("locale", preferredLocale)
     .order("updated_at", { ascending: false })
     .limit(safeLimit);
   if (!primary.error && Array.isArray(primary.data) && primary.data.length > 0) {
     return primary.data.map(normalizeReportRow);
   }
 
-  const fallback = await client
-    .from("oracle_reports")
-    .select(REPORT_SELECT_FIELDS)
-    .order("updated_at", { ascending: false })
-    .limit(safeLimit);
-  if (fallback.error || !Array.isArray(fallback.data)) {
-    return [];
-  }
-  return fallback.data.map(normalizeReportRow);
+  return [];
 }
 
-async function fetchReportsForIndex(limit = 200) {
+async function fetchReportsForIndex(limit = 200, locale = DEFAULT_REPORT_LOCALE) {
   const client = getSupabaseClient();
   if (!client) return [];
   const safeLimit = Math.min(Math.max(1, Number(limit) || 200), 5000);
+  const preferredLocale = normalizeOuroborosLocale(locale);
   const { data, error } = await client
     .from("oracle_reports")
     .select(REPORT_SELECT_FIELDS)
+    .eq("locale", preferredLocale)
     .order("updated_at", { ascending: false })
     .limit(safeLimit);
   if (error || !Array.isArray(data)) return [];
@@ -1066,9 +1083,38 @@ async function fetchReportBySlug(slug) {
   return normalizeReportRow(data);
 }
 
+async function fetchReportByEventAndLocale(eventId, locale) {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const cleanedEventId = String(eventId || "").trim();
+  const preferredLocale = normalizeOuroborosLocale(locale);
+  if (!cleanedEventId) return null;
+  const { data, error } = await client
+    .from("oracle_reports")
+    .select(REPORT_SELECT_FIELDS)
+    .eq("event_id", cleanedEventId)
+    .eq("locale", preferredLocale)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return normalizeReportRow(data);
+}
+
 async function fetchAnalysisPaths(limit = 5000) {
-  const rows = await fetchReportsForIndex(limit);
-  return rows.map((row) => `/analysis/${row.slug}`);
+  const client = getSupabaseClient();
+  if (!client) return [];
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 5000), 5000);
+  const { data, error } = await client
+    .from("oracle_reports")
+    .select("slug")
+    .order("updated_at", { ascending: false })
+    .limit(safeLimit);
+  if (error || !Array.isArray(data)) return [];
+  return data
+    .map((row) => String(row?.slug || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((slug) => `/analysis/${slug}`);
 }
 
 function normalizeAnalysisPath(pathname) {
@@ -1213,7 +1259,7 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
       )}</div>
       <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign" data-payment-rail="trc20_usdt">${escapeHtml(copy.upgradeBtn)}</button>
       <div id="paymentResult" class="payment-result muted"></div>`
-    : `<button class="unlock-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
+    : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
@@ -1433,7 +1479,8 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const paywallShellClass = unlocked ? "paywall-shell is-unlocked" : "paywall-shell";
   const lockMessage = unlocked ? copy.detailPolicySigned : copy.paywallNotice;
-  const eventRef = shortRef(report.event_id, 12, 10);
+  const boundaryText = extractBoundaryText(report.body_md, locale, copy.detailBoundaryDefault);
+  const boundaryHtml = sanitizeMarkdownHtml(boundaryText);
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
       <div class="hero-kicker terminal-font">${escapeHtml(copy.detailKicker)}</div>
@@ -1448,11 +1495,8 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
     <section class="panel glass-panel cyber-border">
       <h2>${escapeHtml(copy.detailMetaTitle)}</h2>
       <div class="kv-grid">
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong class="meta-hash terminal-font">${escapeHtml(eventRef)}</strong></div>
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaLocale)}</span><strong>${escapeHtml(toLocaleTag(report.locale))}</strong></div>
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong class="clamp-2">${escapeHtml(report.unique_entity || "-")}</strong></div>
         <div class="kv-item"><span>${escapeHtml(copy.detailMetaUpdated)}</span><strong class="report-time terminal-font" data-utc="${escapeHtml(report.updated_at)}">${escapeHtml(report.updated_at || "-")}</strong></div>
-        <div class="kv-item"><span>${escapeHtml(copy.detailMetaAccess)}</span><strong>${unlocked ? copy.detailUnlocked : copy.detailLocked}</strong></div>
+        <div class="kv-item"><span>${escapeHtml(copy.detailMetaBoundary)}</span><strong class="clamp-3">${escapeHtml(buildSummary(boundaryText, 180))}</strong></div>
       </div>
     </section>
 
@@ -1466,20 +1510,13 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
           <div class="paywall-fog obsidian-fog"></div>
           <div class="mandala-wrap">${buildMandalaSvg()}</div>
           <div class="lock-message">${escapeHtml(lockMessage)}</div>
-          <button class="unlock-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : escapeHtml(copy.signBtn)}</button>
+          <button class="unlock-btn sign-btn pulse-glow" type="button" ${unlocked ? "disabled" : ""}>${unlocked ? "[ ACCESS VERIFIED ]" : escapeHtml(copy.signBtn)}</button>
         </div>
       </div>
-      <div class="route-line terminal-font">${escapeHtml(`/analysis/${report.slug}`)}</div>
-      <div class="muted">${unlocked ? escapeHtml(copy.detailPolicySigned) : escapeHtml(copy.detailPolicyPublic)}</div>
-    </section>
-
-    <section class="panel glass-panel cyber-border">
-      <h2>${escapeHtml(copy.detailStructuredTitle)}</h2>
-      <div class="authority-note">
-        <div class="authority-line"><span>${escapeHtml(copy.detailMetaEntity)}</span><strong class="clamp-2">${escapeHtml(report.unique_entity || "LeiMai Liquidity Friction")}</strong></div>
-        <div class="authority-line"><span>${escapeHtml(copy.detailMetaEvent)}</span><strong class="meta-hash terminal-font">${escapeHtml(eventRef)}</strong></div>
+      <div class="boundary-note">
+        <h3 class="terminal-font">${escapeHtml(copy.detailMetaBoundary)}</h3>
+        <article class="article-body">${boundaryHtml}</article>
       </div>
-      <div class="muted">${escapeHtml(copy.detailStructuredLead)}</div>
     </section>
   </main>`;
 
@@ -1589,7 +1626,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     return true;
   }
   if (pathname === "/") {
-    const reports = await fetchLatestReports(5);
+    const reports = await fetchLatestReports(5, locale);
     textResponse(res, 200, renderRootLandingPage(locale, reports), "text/html; charset=utf-8");
     return true;
   }
@@ -1612,7 +1649,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
 
   const normalized = normalizeAnalysisPath(pathname);
   if (normalized === "/analysis") {
-    const reports = await fetchReportsForIndex(500);
+    const reports = await fetchReportsForIndex(500, locale);
     textResponse(res, 200, renderAnalysisIndexPage(locale, reports), "text/html; charset=utf-8");
     return true;
   }
@@ -1622,6 +1659,14 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     if (!entry) {
       textResponse(res, 404, renderAnalysisNotFoundPage(locale, slug), "text/html; charset=utf-8");
       return true;
+    }
+    if (normalizeOuroborosLocale(entry.locale) !== locale) {
+      const localized = await fetchReportByEventAndLocale(entry.event_id, locale);
+      if (localized?.slug && localized.slug !== entry.slug) {
+        res.writeHead(302, { Location: `/analysis/${localized.slug}` });
+        res.end();
+        return true;
+      }
     }
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {

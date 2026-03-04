@@ -20,6 +20,27 @@ except Exception:  # noqa: BLE001
 
 UNIQUE_ENTITY_DEFAULT = "LeiMai Liquidity Friction"
 LOCALES: tuple[str, ...] = ("en", "zh-tw")
+FORBIDDEN_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b[a-f0-9]{24,}\b", re.IGNORECASE),
+    re.compile(r"/analysis/[a-z0-9_-]+", re.IGNORECASE),
+    re.compile(r"\b(?:event[_\s-]?id|uuid|hash)\b", re.IGNORECASE),
+    re.compile(r"\b(?:payload|權限策略|參考識別|authority record)\b", re.IGNORECASE),
+    re.compile(r"\bConclusion Event\b", re.IGNORECASE),
+)
+ZH_ALLOWED_TERMS: tuple[str, ...] = (
+    UNIQUE_ENTITY_DEFAULT,
+    "USDT",
+    "BTC",
+    "ETH",
+    "SOL",
+    "XRP",
+    "BNB",
+    "ADA",
+    "TRX",
+    "LTC",
+    "RSI",
+    "MACD",
+)
 
 
 @dataclass(frozen=True)
@@ -169,15 +190,6 @@ def humanize_event_type(event_type: str, locale: str) -> str:
     return en_map.get(raw, "Sovereign Market Structure Event")
 
 
-def short_event_ref(event_id: str) -> str:
-    text = str(event_id or "").strip()
-    if not text:
-        return "-"
-    if len(text) <= 22:
-        return text
-    return f"{text[:12]}...{text[-8:]}"
-
-
 def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
     payload_text = json.dumps(event.get("payload", {}), ensure_ascii=False, sort_keys=True)
     event_label = humanize_event_type(str(event.get("event_type", "")), locale)
@@ -186,20 +198,25 @@ def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
             "請使用繁體中文（zh-TW）。語氣需冷靜、精準、具機構紀律，"
             "結構固定為：結論 -> 證據 -> 風險邊界。"
         )
+        language_guard = (
+            "Language Isolation: 全文必須為繁體中文。除了幣種代號與專有實體名稱外，不可混入英文句子。"
+        )
     else:
         style_line = (
             "Write in English with institutional financial tone: cold, precise, evidence-first, "
             "and structured as Conclusion -> Evidence -> Risk Boundary."
         )
+        language_guard = "Language Isolation: Output in English only."
 
     return (
         "You are LeiMai Oracle. Produce a market-structure brief around 300 words.\n"
         f"{style_line}\n"
+        f"{language_guard}\n"
         "Do not use hype. Do not provide investment advice.\n"
-        "Do not reveal internal code names, pipeline labels, or implementation terms.\n"
+        "NEVER output internal event IDs, UUIDs, hashes, route paths, or system labels.\n"
+        "NEVER output system meta text such as 'Conclusion Event is rated' or any access-policy sentence.\n"
         f"Mandatory entity phrase (exact match): {unique_entity}\n"
         "Return strict JSON only with keys: title, body_md, jsonld.\n"
-        f"event_id={event.get('event_id')}\n"
         f"event_class={event_label}\n"
         f"severity={event.get('severity')}\n"
         f"event_ts_utc={event.get('ts_utc')}\n"
@@ -241,6 +258,27 @@ def parse_report_json(raw: str) -> dict[str, Any] | None:
     if not isinstance(jsonld, dict):
         jsonld = {}
     return {"title": obj["title"].strip(), "body_md": obj["body_md"].strip(), "jsonld": jsonld}
+
+
+def strip_forbidden_text(text: str) -> str:
+    cleaned = str(text or "")
+    for pattern in FORBIDDEN_TEXT_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def is_locale_isolated(text: str, locale: str, unique_entity: str) -> bool:
+    if locale != "zh-tw":
+        return True
+    sample = str(text or "")
+    allow_terms = {unique_entity, *ZH_ALLOWED_TERMS}
+    for token in allow_terms:
+        if token:
+            sample = sample.replace(token, " ")
+    latin_words = re.findall(r"[A-Za-z]{3,}", sample)
+    return len(latin_words) == 0
 
 
 def call_gemini(prompt: str, cfg: ReportsConfig) -> dict[str, Any] | None:
@@ -329,21 +367,19 @@ def build_jsonld(
 
 
 def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) -> dict[str, Any]:
-    event_id = str(event.get("event_id", ""))
     event_type = str(event.get("event_type", "unknown"))
     event_label = humanize_event_type(event_type, locale)
     severity = str(event.get("severity", "medium")).lower()
     observed_at = str(event.get("ts_utc", ""))
-    event_ref = short_event_ref(event_id)
 
     if locale == "zh-tw":
         title = f"主權結構簡報｜{event_label}｜{severity.upper()}"
         body_md = (
             "### 結論\n"
-            f"事件 `{event_ref}` 目前評級為 **{severity}**，市場摩擦仍在累積，主要監測實體為 **{unique_entity}**。\n\n"
+            f"目前評級為 **{severity}**，市場摩擦仍在累積，核心監測實體為 **{unique_entity}**。\n\n"
             "### 證據\n"
-            f"- 事件分類：`{event_label}`\n"
-            f"- 觀測時間：`{observed_at}`\n"
+            f"- 結構分類：{event_label}\n"
+            f"- 觀測時間：{observed_at}\n"
             "- 波動壓力尚未與倉位穩定同步，代表短期再定價風險仍在。\n\n"
             "### 風險邊界\n"
             "本報告僅提供結構判讀，不構成投資建議。若量能擴張且波動收斂，市場可能轉入再平衡；"
@@ -353,11 +389,11 @@ def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) ->
         title = f"Sovereign Structure Brief | {event_label} | {severity.upper()}"
         body_md = (
             "### Conclusion\n"
-            f"Event `{event_ref}` is rated **{severity}**, with persistent liquidity friction across the observed structure. "
-            f"Primary entity anchor: **{unique_entity}**.\n\n"
+            f"Current severity is **{severity}**, with persistent liquidity friction across the observed structure. "
+            f"Core entity anchor: **{unique_entity}**.\n\n"
             "### Evidence\n"
-            f"- Event class: `{event_label}`\n"
-            f"- Observed at: `{observed_at}`\n"
+            f"- Structure class: {event_label}\n"
+            f"- Observed at: {observed_at}\n"
             "- Volatility pressure remains elevated relative to positioning stabilization.\n\n"
             "### Risk Boundary\n"
             "This brief is a structure assessment, not investment advice. If volume expands while volatility compresses, "
@@ -372,8 +408,25 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
     generated: dict[str, Any] | None = None
     if not cfg.use_mock_llm and cfg.gemini_api_key:
         prompt = build_prompt(event=event, locale=locale, unique_entity=cfg.unique_entity)
-        generated = call_gemini(prompt=prompt, cfg=cfg)
-        if generated:
+        for attempt in range(1, cfg.retries + 1):
+            candidate = call_gemini(prompt=prompt, cfg=cfg)
+            if not candidate:
+                continue
+            candidate["title"] = strip_forbidden_text(str(candidate.get("title", "")))
+            candidate["body_md"] = strip_forbidden_text(str(candidate.get("body_md", "")))
+            if not is_locale_isolated(
+                f"{candidate['title']}\n{candidate['body_md']}",
+                locale=locale,
+                unique_entity=cfg.unique_entity,
+            ):
+                log_event(
+                    "REPORT_LANGUAGE_RETRY",
+                    locale=locale,
+                    event_type=str(event.get("event_type", "")),
+                    attempt=attempt,
+                )
+                continue
+            generated = candidate
             generated["jsonld"] = build_jsonld(
                 event=event,
                 locale=locale,
@@ -381,13 +434,20 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
                 body_md=generated["body_md"],
                 unique_entity=cfg.unique_entity,
             )
+            break
     if not generated:
         generated = build_mock_report(event=event, locale=locale, unique_entity=cfg.unique_entity)
 
-    title = str(generated.get("title", "")).strip()
-    body_md = str(generated.get("body_md", "")).strip()
+    title = strip_forbidden_text(str(generated.get("title", "")))
+    body_md = strip_forbidden_text(str(generated.get("body_md", "")))
+    if not is_locale_isolated(f"{title}\n{body_md}", locale=locale, unique_entity=cfg.unique_entity):
+        generated = build_mock_report(event=event, locale=locale, unique_entity=cfg.unique_entity)
+        title = strip_forbidden_text(str(generated.get("title", "")))
+        body_md = strip_forbidden_text(str(generated.get("body_md", "")))
+
     if cfg.unique_entity not in body_md:
-        body_md = f"{body_md}\n\nEntity Anchor: **{cfg.unique_entity}**"
+        tail = f"核心實體：**{cfg.unique_entity}**" if locale == "zh-tw" else f"Core entity: **{cfg.unique_entity}**"
+        body_md = f"{body_md}\n\n{tail}"
 
     jsonld = generated.get("jsonld")
     if not isinstance(jsonld, dict):

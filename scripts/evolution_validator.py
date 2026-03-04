@@ -20,7 +20,17 @@ SERVER_FILE = ROOT / "support" / "server.mjs"
 GEN_REPORTS_FILE = ROOT / "engine" / "src" / "generate_reports.py"
 HARVESTER_FILE = ROOT / "scripts" / "chain_harvester.py"
 
-FORBIDDEN_TERMS = ("GEO", "API", "MOCK", "PYTHON", "PIPELINE")
+FORBIDDEN_TERMS = (
+    "GEO",
+    "API",
+    "MOCK",
+    "PYTHON",
+    "PIPELINE",
+    "參考識別",
+    "權限策略",
+    "結構化載荷",
+)
+HASH_LEAK_RE = re.compile(r"\b[a-f0-9]{24,}\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -140,10 +150,23 @@ def check_copy_density(
 
         jsonld_present[key] = bool(re.search(r"<script[^>]+application/ld\+json", html, flags=re.IGNORECASE))
         text = strip_html_to_text(html)
-        hits = [term for term in FORBIDDEN_TERMS if re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE)]
+        hits: list[str] = []
+        for term in FORBIDDEN_TERMS:
+            if re.search(r"^[\x00-\x7F]+$", term):
+                if re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE):
+                    hits.append(term)
+            elif term in text:
+                hits.append(term)
         if hits:
             forbidden_hits[key] = hits
             issues.append(f"forbidden_terms:{key}:{','.join(hits)}")
+        if HASH_LEAK_RE.search(text):
+            issues.append(f"hash_leak:{key}")
+        if key == "detail" and "-zh-" in detail_url.lower():
+            english_words = len(re.findall(r"[A-Za-z]{3,}", text))
+            zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+            if zh_chars >= 40 and english_words > 8:
+                issues.append("detail_language_mixed:zh")
 
     if not jsonld_present.get("analysis", False):
         issues.append("jsonld_missing:analysis")
@@ -194,7 +217,7 @@ def check_prompt_density() -> tuple[dict[str, Any], list[str]]:
     has_zh_style = "結論 -> 證據 -> 風險邊界" in src
     has_en_style = "Conclusion -> Evidence -> Risk Boundary" in src
     has_unique_entity = "Mandatory entity phrase" in src and "unique_entity" in src
-    has_no_internal_code_guard = "Do not reveal internal code names" in src
+    has_no_internal_code_guard = "NEVER output internal event IDs" in src and "NEVER output system meta text" in src
 
     if not has_zh_style:
         issues.append("zh_prompt_density_missing")
