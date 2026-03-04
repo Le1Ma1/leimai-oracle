@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T19:34:31Z`
+- Last Updated (UTC): `2026-03-04T19:55:11Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -25,6 +25,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: report pipeline now emits offline 1600x900 PNG snapshots (`/generated/snapshots/{slug}.png`) with deterministic macro/micro + verdict layout; ingest workflow executes snapshot generation after report synthesis; support runtime serves generated PNG with legacy SVG fallback redirect.
 - [BUSINESS_STATUS] 商業進度: Phase 4.5 第二階段完成。標題/首段已強制包含資產實體，快照改為離線 PNG 產線並可直接在詳情頁載入，視覺與資料路徑完成對齊。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（後端產圖、工作流、前端靜態服務分層落地）；白賁通過（沿用既有腳本與路由，僅補必要契約，不新增服務）。
+
+### [x] B30_3_AUTONOMIC_VALIDATOR_FALSE_POSITIVE_FIX
+- [LOGIC_CORE] Technical Dependency: `scripts/visual_snapshot.py`.
+- [LOGIC_CORE] Business Value: fixed `autonomic-evolution` validation false-positive by changing report-presence detection from broad `/analysis/*` link count to strict `.report-card` count; prevents `detail_not_real_report` when index has no real reports.
+- [BUSINESS_STATUS] 商業進度: 已修復 GitHub 通知中的兩次 `Validate evolution integrity` 失敗根因，後續排程不再因空索引頁誤判而中止。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅視覺自檢腳本判定邏輯調整）；白賁通過（單點修復，無流程擴張）。
 
 ### [x] G0_PROTOCOL_BASELINE
 - Technical Dependency: `ORACLE_MAP.md`, `.cursorrules`

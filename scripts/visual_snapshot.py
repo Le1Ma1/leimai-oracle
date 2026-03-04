@@ -590,6 +590,7 @@ def collect_page_checks(page: Page) -> dict[str, Any]:
             has_report_article: hasReportArticle,
             has_paywall_shell: hasPaywallShell,
             detail_is_real_report: detailIsReal,
+            report_card_count: document.querySelectorAll('.report-card').length,
             analysis_links_count: document.querySelectorAll("a[href^='/analysis/']").length,
             paywall_lock_visible: isVisible('.paywall-locked-content'),
             paywall_unlock_visible: isVisible('.unlock-btn'),
@@ -621,7 +622,7 @@ def aggregate_checks(page_checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
     detail_page = page_checks.get("detail", {})
     index_page = page_checks.get("index", {})
     detail_is_real_report = bool(detail_page.get("detail_is_real_report", False))
-    index_has_reports = int(index_page.get("analysis_links_count", 0) or 0) > 1
+    index_has_reports = int(index_page.get("report_card_count", 0) or 0) > 0
     paywall_lock_visible = bool(detail_page.get("paywall_lock_visible", False))
     paywall_unlock_visible = bool(detail_page.get("paywall_unlock_visible", False))
     paywall_fog_visible = bool(detail_page.get("paywall_fog_visible", False))
@@ -663,6 +664,7 @@ def aggregate_checks(page_checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "paywall_unlock_visible": paywall_unlock_visible,
         "paywall_fog_visible": paywall_fog_visible,
         "index_has_reports": index_has_reports,
+        "index_report_card_count": int(index_page.get("report_card_count", 0) or 0),
         "detail_is_real_report": detail_is_real_report,
         "matrix_canvas_visible": matrix_canvas_visible,
         "low_gpu_mode": low_gpu_mode,
