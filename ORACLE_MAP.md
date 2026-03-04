@@ -2,11 +2,23 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T15:39:32Z`
+- Last Updated (UTC): `2026-03-04T18:32:09Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
 ## [LOGIC_CORE]
+
+### [x] B30_PHASE45_HYBRID_METRICS_SNAPSHOT_AND_GATED_VERDICT
+- [LOGIC_CORE] Technical Dependency: `engine/src/features.py`, `engine/src/generate_reports.py`, `supabase/schema_reports.sql`, `support/server.mjs`, `support/web/ouroboros.css`.
+- [LOGIC_CORE] Business Value: report generation now injects hybrid V1+V2 hard metrics (`evidence_pack`), deterministic verdict contract (`verdict_pack`), and offline snapshot SVG (`snapshot_svg/snapshot_url`) per locale; detail page now exposes public chart + public metric layer while locking structural verdict/confidence until signature unlock.
+- [BUSINESS_STATUS] 商業進度: Phase 4.5 第一階段落地完成。訪客可先看宏微觀快照與公開指標，再透過簽署解鎖裁決與姿態；內容從泛化敘述升級為數值證據導向。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（引擎產報、資料結構、support 展示分層改造）；白賁通過（外科增量，無新框架與冗餘服務）。
+
+### [x] B30_1_SCHEMA_APPLY_AND_REPORT_REBUILD_EXECUTED
+- [LOGIC_CORE] Technical Dependency: `scripts/apply_sql.py`, `scripts/reseed_reports.py`, `engine/src/generate_reports.py`.
+- [LOGIC_CORE] Business Value: phase contract is active in production data path; schema upgraded and all existing events regenerated with snapshot/evidence/verdict payloads.
+- [BUSINESS_STATUS] 商業進度: 已完成 `schema_reports.sql` 套用、舊報告重開與再生成（8 事件 / 16 報告），詳情頁快照路由已可回傳 `200`。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（資料治理與報告再生在後端完成）；白賁通過（沿用既有腳本，無額外服務擴張）。
 
 ### [x] G0_PROTOCOL_BASELINE
 - Technical Dependency: `ORACLE_MAP.md`, `.cursorrules`

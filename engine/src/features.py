@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -110,6 +111,67 @@ def _infer_feature_family(name: str) -> str:
     if name.startswith("ttc_"):
         return "timing_execution"
     return "misc"
+
+
+def calc_v1_hard_metrics(
+    payload: dict[str, Any] | None,
+    *,
+    event_type: str = "",
+    severity: str = "",
+) -> dict[str, float | str]:
+    source = payload if isinstance(payload, dict) else {}
+
+    def _f(key: str, default: float = 0.0) -> float:
+        try:
+            out = float(source.get(key, default))
+        except (TypeError, ValueError):
+            return default
+        if not np.isfinite(out):
+            return default
+        return out
+
+    range_pct = max(0.0, _f("range_pct", 0.0))
+    range_threshold = max(1e-6, _f("threshold_pct", 5.0))
+    step_drop_pct = max(0.0, _f("step_drop_pct", 0.0))
+    drop_from_peak_pct = max(0.0, _f("drop_from_peak_pct", 0.0))
+    oi_drop_pct = max(step_drop_pct, drop_from_peak_pct)
+
+    vol_z_score = (range_pct / range_threshold) if range_threshold > 0 else 0.0
+    k_line_delta = range_pct - range_threshold
+    oi_stress = oi_drop_pct / max(range_threshold, 1.0)
+
+    severity_boost = {
+        "critical": 1.0,
+        "high": 0.72,
+        "medium": 0.46,
+        "low": 0.24,
+    }.get(str(severity).lower(), 0.36)
+    type_boost = {
+        "price_range_spike_4h": 0.18,
+        "open_interest_drop": 0.28,
+    }.get(str(event_type).lower(), 0.12)
+
+    sovereign_bias = (vol_z_score * 0.55) + (oi_stress * 0.35) + severity_boost + type_boost
+    sovereign_bias_mapped = float(np.clip(sovereign_bias * 20.0, 0.0, 100.0))
+
+    if sovereign_bias_mapped >= 78:
+        pulse = "extreme"
+    elif sovereign_bias_mapped >= 58:
+        pulse = "elevated"
+    elif sovereign_bias_mapped >= 35:
+        pulse = "moderate"
+    else:
+        pulse = "contained"
+
+    return {
+        "vol_z_score": float(np.round(vol_z_score, 4)),
+        "k_line_delta": float(np.round(k_line_delta, 4)),
+        "oi_stress_score": float(np.round(oi_stress, 4)),
+        "sovereign_bias_mapped": float(np.round(sovereign_bias_mapped, 2)),
+        "pulse_label": pulse,
+        "range_pct_4h": float(np.round(range_pct, 4)),
+        "open_interest_drop_pct": float(np.round(oi_drop_pct, 4)),
+    }
 
 
 def build_feature_registry(feature_df: pd.DataFrame) -> list[dict[str, object]]:

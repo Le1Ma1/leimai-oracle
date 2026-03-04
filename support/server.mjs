@@ -38,7 +38,7 @@ const LEGACY_HOST_REDIRECT_MAP = new Map([
   ["support.leimaitech.com", "support.leimai.io"],
 ]);
 const DEFAULT_REPORT_LOCALE = "en";
-const REPORT_SELECT_FIELDS = "report_id,event_id,locale,title,slug,body_md,jsonld,unique_entity,created_at,updated_at";
+const REPORT_SELECT_FIELDS = "*";
 const REPORT_PREVIEW_RATIO = 0.2;
 const PAYWALL_SELECTOR = ".paywall-locked-content";
 const UNLOCK_COOKIE_NAME = "leimai_unlock";
@@ -862,6 +862,43 @@ function sanitizeDisplayText(input, locale = "en") {
   return text;
 }
 
+function normalizeEvidencePack(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const v1 = src.v1 && typeof src.v1 === "object" ? src.v1 : {};
+  const v2 = src.v2 && typeof src.v2 === "object" ? src.v2 : {};
+  return {
+    entity: String(src.entity || ""),
+    event_type: String(src.event_type || ""),
+    severity: String(src.severity || ""),
+    v1: {
+      vol_z_score: Number(v1.vol_z_score || 0),
+      k_line_delta: Number(v1.k_line_delta || 0),
+      open_interest_stress: Number(v1.open_interest_stress || 0),
+      sovereign_bias_mapped: Number(v1.sovereign_bias_mapped || 0),
+      pulse_label: String(v1.pulse_label || ""),
+      range_pct_4h: Number(v1.range_pct_4h || 0),
+      open_interest_drop_pct: Number(v1.open_interest_drop_pct || 0),
+    },
+    v2: {
+      orderflow_proxy: Number(v2.orderflow_proxy || 0),
+      depth_imbalance_proxy: Number(v2.depth_imbalance_proxy || 0),
+      regime_pressure: Number(v2.regime_pressure || 0),
+      calibration_state: String(v2.calibration_state || "calibrating"),
+    },
+    window_contract: src.window_contract && typeof src.window_contract === "object" ? src.window_contract : {},
+  };
+}
+
+function normalizeVerdictPack(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    structural_verdict: String(src.structural_verdict || "rebalancing_watch"),
+    confidence_score: Number(src.confidence_score || 0),
+    alpha_posture: String(src.alpha_posture || "balanced"),
+    restriction: String(src.restriction || "locked_for_unsigned_users"),
+  };
+}
+
 function normalizeReportRow(raw) {
   const row = raw && typeof raw === "object" ? raw : {};
   const locale = normalizeOuroborosLocale(String(row.locale || DEFAULT_REPORT_LOCALE));
@@ -874,6 +911,10 @@ function normalizeReportRow(raw) {
     body_md: sanitizeDisplayText(String(row.body_md || ""), locale),
     jsonld: row.jsonld && typeof row.jsonld === "object" ? row.jsonld : {},
     unique_entity: String(row.unique_entity || ""),
+    evidence_pack: normalizeEvidencePack(row.evidence_pack),
+    verdict_pack: normalizeVerdictPack(row.verdict_pack),
+    snapshot_svg: String(row.snapshot_svg || ""),
+    snapshot_url: String(row.snapshot_url || ""),
     created_at: String(row.created_at || ""),
     updated_at: String(row.updated_at || row.created_at || ""),
   };
@@ -921,6 +962,26 @@ function buildPreviewMarkdown(md, ratio = REPORT_PREVIEW_RATIO) {
     preview = src.slice(0, targetChars);
   }
   return preview.trim();
+}
+
+function stripLockedVerdictSections(md, locale = "en") {
+  const src = String(md || "");
+  if (!src) return src;
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
+  const patterns = isZh
+    ? [
+        /(?:^|\n)#{1,6}\s*結構裁決\s*\n[\s\S]*?(?=\n#{1,6}\s|$)/gi,
+        /(?:^|\n)#{1,6}\s*結論\s*\n[\s\S]*?(?=\n#{1,6}\s|$)/gi,
+      ]
+    : [
+        /(?:^|\n)#{1,6}\s*Structural Verdict\s*\n[\s\S]*?(?=\n#{1,6}\s|$)/gi,
+        /(?:^|\n)#{1,6}\s*Conclusion\s*\n[\s\S]*?(?=\n#{1,6}\s|$)/gi,
+      ];
+  let cleaned = src;
+  for (const pattern of patterns) {
+    cleaned = cleaned.replace(pattern, "\n");
+  }
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function extractBoundaryText(md, locale = "en", fallback = "") {
@@ -1406,9 +1467,62 @@ function renderAnalysisIndexPage(locale, reports) {
   });
 }
 
+function getPublicSnapshotUrl(report) {
+  const raw = String(report?.snapshot_url || "").trim();
+  if (raw.startsWith("/analysis/") && raw.endsWith("/snapshot.svg")) {
+    return raw;
+  }
+  return `/analysis/${encodeURIComponent(String(report?.slug || "").trim().toLowerCase())}/snapshot.svg`;
+}
+
+function buildSnapshotFallbackSvg(report, locale = "en") {
+  const title = String(report?.title || "LeiMai Oracle Snapshot").slice(0, 80);
+  const tag = normalizeOuroborosLocale(locale) === "zh-tw" ? "快照生成中" : "Snapshot Pending";
+  const updated = String(report?.updated_at || report?.created_at || nowIso());
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img">
+  <rect width="1200" height="630" fill="#050507"/>
+  <rect x="34" y="34" width="1132" height="562" fill="none" stroke="#D4AF37" stroke-opacity="0.38"/>
+  <text x="64" y="112" fill="#D4AF37" font-size="24" font-family="JetBrains Mono, monospace">${escapeHtml(tag)}</text>
+  <text x="64" y="162" fill="#f2f5f7" font-size="19" font-family="JetBrains Mono, monospace">${escapeHtml(title)}</text>
+  <text x="64" y="540" fill="#b7c0ca" font-size="14" font-family="JetBrains Mono, monospace">${escapeHtml(updated)} UTC</text>
+</svg>`;
+}
+
+function verdictLabel(key, locale) {
+  const val = String(key || "").trim().toLowerCase();
+  const zh = {
+    structural_stress_expansion: "結構壓力擴張",
+    liquidity_friction_persistent: "流動性摩擦延續",
+    rebalancing_watch: "再平衡觀察",
+  };
+  const en = {
+    structural_stress_expansion: "Structural Stress Expansion",
+    liquidity_friction_persistent: "Persistent Liquidity Friction",
+    rebalancing_watch: "Rebalancing Watch",
+  };
+  return normalizeOuroborosLocale(locale) === "zh-tw" ? (zh[val] || "結構再定價") : (en[val] || "Structural Repricing");
+}
+
+function postureLabel(key, locale) {
+  const val = String(key || "").trim().toLowerCase();
+  const zh = {
+    defensive: "防禦姿態",
+    defensive_to_balanced: "防禦轉平衡",
+    balanced: "平衡姿態",
+  };
+  const en = {
+    defensive: "Defensive",
+    defensive_to_balanced: "Defensive to Balanced",
+    balanced: "Balanced",
+  };
+  return normalizeOuroborosLocale(locale) === "zh-tw" ? (zh[val] || "平衡姿態") : (en[val] || "Balanced");
+}
+
 function buildFallbackJsonLd(report) {
   const url = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
   const summary = buildSummary(report.body_md, 240);
+  const imageUrl = `${ROOT_CANONICAL_URL.replace(/\/+$/, "")}${getPublicSnapshotUrl(report)}`;
   return {
     "@context": "https://schema.org",
     "@graph": [
@@ -1416,6 +1530,7 @@ function buildFallbackJsonLd(report) {
         "@type": "NewsArticle",
         headline: report.title,
         description: summary,
+        image: imageUrl,
         mainEntityOfPage: url,
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
         author: { "@type": "Organization", name: "LeiMai Oracle" },
@@ -1430,6 +1545,7 @@ function buildFallbackJsonLd(report) {
         description: summary,
         creator: { "@type": "Organization", name: "LeiMai Oracle" },
         url,
+        image: imageUrl,
         isAccessibleForFree: false,
         hasPart: paywallHasPart(),
       },
@@ -1471,10 +1587,54 @@ function buildMandalaSvg() {
 
 function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAddress = null } = {}) {
   const copy = getOuroborosCopy(locale);
-  const previewMarkdown = unlocked ? String(report.body_md || "") : buildPreviewMarkdown(report.body_md, REPORT_PREVIEW_RATIO);
-  const summary = buildSummary(previewMarkdown || report.body_md, 220);
+  const reportBody = String(report.body_md || "");
+  const visibleSource = unlocked ? reportBody : stripLockedVerdictSections(reportBody, locale);
+  const previewMarkdown = unlocked ? visibleSource : buildPreviewMarkdown(visibleSource, REPORT_PREVIEW_RATIO);
+  const summary = buildSummary(visibleSource || reportBody, 220);
   const markdownHtml = sanitizeMarkdownHtml(previewMarkdown);
   const canonicalUrl = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
+  const snapshotUrl = getPublicSnapshotUrl(report);
+  const evidence = report.evidence_pack && typeof report.evidence_pack === "object" ? report.evidence_pack : {};
+  const evidenceV1 = evidence.v1 && typeof evidence.v1 === "object" ? evidence.v1 : {};
+  const evidenceV2 = evidence.v2 && typeof evidence.v2 === "object" ? evidence.v2 : {};
+  const verdict = report.verdict_pack && typeof report.verdict_pack === "object" ? report.verdict_pack : {};
+  const verdictName = verdictLabel(verdict.structural_verdict, locale);
+  const postureName = postureLabel(verdict.alpha_posture, locale);
+  const confidenceValue = Number(verdict.confidence_score || 0);
+  const confidenceText = unlocked ? `${confidenceValue.toFixed(1)} / 100` : "-- / 100";
+  const verdictText = unlocked
+    ? verdictName
+    : normalizeOuroborosLocale(locale) === "zh-tw"
+      ? "簽署後解鎖結構裁決"
+      : "Unlock to reveal structural verdict";
+  const postureText = unlocked
+    ? postureName
+    : normalizeOuroborosLocale(locale) === "zh-tw"
+      ? "簽署後解鎖姿態"
+      : "Unlock to reveal posture";
+  const publicMetricLabels = normalizeOuroborosLocale(locale) === "zh-tw"
+    ? {
+        snapshot: "宏微觀快照",
+        metrics: "公開指標層",
+        volz: "Vol_Z",
+        kdelta: "K 線差分",
+        oi: "未平倉壓力",
+        regime: "體制壓力",
+        verdict: "結構裁決",
+        confidence: "信心值",
+        posture: "主權姿態",
+      }
+    : {
+        snapshot: "Macro / Micro Snapshot",
+        metrics: "Public Metrics Layer",
+        volz: "Vol_Z",
+        kdelta: "K-line Delta",
+        oi: "OI Stress",
+        regime: "Regime Pressure",
+        verdict: "Structural Verdict",
+        confidence: "Confidence",
+        posture: "Alpha Posture",
+      };
   const sourceJsonLd = normalizeJsonLd(report.jsonld, buildFallbackJsonLd(report));
   const paywallJsonLd = withPaywallJsonLd(sourceJsonLd);
   const paywallShellClass = unlocked ? "paywall-shell is-unlocked" : "paywall-shell";
@@ -1501,10 +1661,28 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
     </section>
 
     <section class="panel glass-panel cyber-border">
+      <h2>${escapeHtml(publicMetricLabels.snapshot)}</h2>
+      <figure class="snapshot-frame">
+        <img src="${escapeHtml(snapshotUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(report.title)} snapshot">
+      </figure>
+      <div class="signal-public-grid">
+        <div class="signal-public-item"><span>${escapeHtml(publicMetricLabels.volz)}</span><strong>${escapeHtml(Number(evidenceV1.vol_z_score || 0).toFixed(2))}</strong></div>
+        <div class="signal-public-item"><span>${escapeHtml(publicMetricLabels.kdelta)}</span><strong>${escapeHtml(Number(evidenceV1.k_line_delta || 0).toFixed(2))}</strong></div>
+        <div class="signal-public-item"><span>${escapeHtml(publicMetricLabels.oi)}</span><strong>${escapeHtml(Number(evidenceV1.open_interest_stress || 0).toFixed(2))}</strong></div>
+        <div class="signal-public-item"><span>${escapeHtml(publicMetricLabels.regime)}</span><strong>${escapeHtml(Number(evidenceV2.regime_pressure || 0).toFixed(1))}</strong></div>
+      </div>
+    </section>
+
+    <section class="panel glass-panel cyber-border">
       <h2>${unlocked ? escapeHtml(copy.detailFullTitle) : escapeHtml(copy.detailPreviewTitle)}</h2>
       <div class="${paywallShellClass}" data-unlocked="${unlocked ? "1" : "0"}" data-slug="${escapeHtml(report.slug)}" data-unlocked-address="${escapeHtml(unlockedAddress || "")}">
         <div class="obsidian-container">
           <article class="report-article article-body paywall-preview">${markdownHtml}</article>
+        </div>
+        <div class="verdict-gate">
+          <div class="verdict-item"><span>${escapeHtml(publicMetricLabels.verdict)}</span><strong>${escapeHtml(verdictText)}</strong></div>
+          <div class="verdict-item"><span>${escapeHtml(publicMetricLabels.confidence)}</span><strong>${escapeHtml(confidenceText)}</strong></div>
+          <div class="verdict-item"><span>${escapeHtml(publicMetricLabels.posture)}</span><strong>${escapeHtml(postureText)}</strong></div>
         </div>
         <div class="paywall-locked-content" aria-label="locked-content">
           <div class="paywall-fog obsidian-fog"></div>
@@ -1648,6 +1826,22 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
 
   const normalized = normalizeAnalysisPath(pathname);
+  const snapshotMatch = normalized.match(/^\/analysis\/([a-z0-9_-]+)\/snapshot\.svg$/i);
+  if (snapshotMatch) {
+    const slug = String(snapshotMatch[1] || "").trim().toLowerCase();
+    const report = await fetchReportBySlug(slug);
+    if (!report) {
+      textResponse(res, 404, "snapshot_not_found");
+      return true;
+    }
+    const snapshotSvg = String(report.snapshot_svg || "").trim() || buildSnapshotFallbackSvg(report, locale);
+    res.writeHead(200, {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+    });
+    res.end(snapshotSvg);
+    return true;
+  }
   if (normalized === "/analysis") {
     const reports = await fetchReportsForIndex(500, locale);
     textResponse(res, 200, renderAnalysisIndexPage(locale, reports), "text/html; charset=utf-8");

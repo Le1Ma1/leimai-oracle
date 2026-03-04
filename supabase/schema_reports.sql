@@ -12,11 +12,27 @@ create table if not exists public.oracle_reports (
   body_md text not null,
   jsonld jsonb not null default '{}'::jsonb,
   unique_entity text not null,
+  evidence_pack jsonb not null default '{}'::jsonb,
+  verdict_pack jsonb not null default '{}'::jsonb,
+  snapshot_svg text not null default '',
+  snapshot_url text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (event_id, locale),
   unique (locale, slug)
 );
+
+alter table public.oracle_reports
+  add column if not exists evidence_pack jsonb not null default '{}'::jsonb;
+
+alter table public.oracle_reports
+  add column if not exists verdict_pack jsonb not null default '{}'::jsonb;
+
+alter table public.oracle_reports
+  add column if not exists snapshot_svg text not null default '';
+
+alter table public.oracle_reports
+  add column if not exists snapshot_url text not null default '';
 
 create index if not exists idx_oracle_reports_event_id on public.oracle_reports(event_id);
 create index if not exists idx_oracle_reports_locale_created_at_desc on public.oracle_reports(locale, created_at desc);

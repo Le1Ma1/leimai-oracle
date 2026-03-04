@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import html
 import json
+import math
 import os
 import re
 import time
@@ -10,6 +12,11 @@ from typing import Any
 
 import requests
 from dotenv import load_dotenv
+
+try:
+    from .features import calc_v1_hard_metrics
+except Exception:  # noqa: BLE001
+    from engine.src.features import calc_v1_hard_metrics
 
 try:
     from supabase import Client, create_client
@@ -190,8 +197,174 @@ def humanize_event_type(event_type: str, locale: str) -> str:
     return en_map.get(raw, "Sovereign Market Structure Event")
 
 
-def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return float(max(lo, min(hi, value)))
+
+
+def build_metric_context(event: dict[str, Any], unique_entity: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = event.get("payload")
+    event_type = str(event.get("event_type", ""))
+    severity = str(event.get("severity", "medium")).lower()
+    v1 = calc_v1_hard_metrics(payload if isinstance(payload, dict) else {}, event_type=event_type, severity=severity)
+    vol_z = float(v1.get("vol_z_score", 0.0))
+    k_delta = float(v1.get("k_line_delta", 0.0))
+    oi_stress = float(v1.get("oi_stress_score", 0.0))
+    bias = float(v1.get("sovereign_bias_mapped", 0.0))
+
+    orderflow_proxy = _clamp((oi_stress * 28.0) + abs(k_delta) * 2.4 + vol_z * 8.5, 0.0, 100.0)
+    depth_imbalance_proxy = _clamp(50.0 + math.tanh((k_delta * 0.75) + (oi_stress * 0.55)) * 34.0, 0.0, 100.0)
+    regime_pressure = _clamp((vol_z * 18.0) + (oi_stress * 14.0), 0.0, 100.0)
+
+    confidence_score = _clamp((bias * 0.56) + (regime_pressure * 0.28) + (orderflow_proxy * 0.16), 5.0, 99.0)
+    if confidence_score >= 74.0:
+        structural_verdict = "structural_stress_expansion"
+        alpha_posture = "defensive"
+    elif confidence_score >= 52.0:
+        structural_verdict = "liquidity_friction_persistent"
+        alpha_posture = "defensive_to_balanced"
+    else:
+        structural_verdict = "rebalancing_watch"
+        alpha_posture = "balanced"
+
+    evidence_pack = {
+        "entity": unique_entity,
+        "event_type": event_type,
+        "severity": severity,
+        "v1": {
+            "vol_z_score": round(vol_z, 4),
+            "k_line_delta": round(k_delta, 4),
+            "open_interest_stress": round(oi_stress, 4),
+            "sovereign_bias_mapped": round(bias, 2),
+            "pulse_label": str(v1.get("pulse_label", "contained")),
+            "range_pct_4h": round(float(v1.get("range_pct_4h", 0.0)), 4),
+            "open_interest_drop_pct": round(float(v1.get("open_interest_drop_pct", 0.0)), 4),
+        },
+        "v2": {
+            "orderflow_proxy": round(orderflow_proxy, 2),
+            "depth_imbalance_proxy": round(depth_imbalance_proxy, 2),
+            "regime_pressure": round(regime_pressure, 2),
+            "calibration_state": "calibrating",
+        },
+        "window_contract": {"micro": "1m", "macro": "4h", "source_mode": "hybrid_v1_v2"},
+    }
+
+    verdict_pack = {
+        "structural_verdict": structural_verdict,
+        "confidence_score": round(confidence_score, 2),
+        "alpha_posture": alpha_posture,
+        "restriction": "locked_for_unsigned_users",
+    }
+    return evidence_pack, verdict_pack
+
+
+def _series_point(i: int, total: int, seed: float, amplitude: float, tilt: float, base: float) -> float:
+    phase = (i / max(total - 1, 1)) * math.pi * 2.0
+    wave = math.sin(phase + seed) * amplitude
+    harmonic = math.sin(phase * 2.4 + seed * 0.7) * (amplitude * 0.34)
+    trend = ((i / max(total - 1, 1)) - 0.5) * tilt
+    return base + wave + harmonic + trend
+
+
+def build_snapshot_svg(
+    title: str,
+    event: dict[str, Any],
+    evidence_pack: dict[str, Any],
+    verdict_pack: dict[str, Any],
+    locale: str,
+) -> str:
+    v1 = evidence_pack.get("v1", {}) if isinstance(evidence_pack.get("v1"), dict) else {}
+    v2 = evidence_pack.get("v2", {}) if isinstance(evidence_pack.get("v2"), dict) else {}
+    vol_z = float(v1.get("vol_z_score", 0.0))
+    k_delta = float(v1.get("k_line_delta", 0.0))
+    bias = float(v1.get("sovereign_bias_mapped", 0.0))
+    regime_pressure = float(v2.get("regime_pressure", 0.0))
+    confidence = float(verdict_pack.get("confidence_score", 0.0))
+    severity = str(event.get("severity", "medium")).upper()
+
+    macro_points: list[str] = []
+    micro_points: list[str] = []
+    macro_total = 64
+    micro_total = 64
+    macro_amp = _clamp(14.0 + vol_z * 3.5, 8.0, 42.0)
+    micro_amp = _clamp(8.0 + abs(k_delta) * 4.8 + (regime_pressure / 20.0), 6.0, 38.0)
+    macro_tilt = _clamp((bias - 50.0) / 2.4, -26.0, 26.0)
+    micro_tilt = _clamp((confidence - 50.0) / 3.1, -22.0, 22.0)
+
+    for i in range(macro_total):
+        x = 64 + (i * (528 / max(macro_total - 1, 1)))
+        y = 206 - _series_point(i, macro_total, seed=vol_z * 0.25 + 1.4, amplitude=macro_amp, tilt=macro_tilt, base=0.0)
+        macro_points.append(f"{x:.2f},{y:.2f}")
+
+    for i in range(micro_total):
+        x = 640 + (i * (528 / max(micro_total - 1, 1)))
+        y = 206 - _series_point(i, micro_total, seed=abs(k_delta) * 0.31 + 2.2, amplitude=micro_amp, tilt=micro_tilt, base=0.0)
+        micro_points.append(f"{x:.2f},{y:.2f}")
+
+    label_macro = "宏觀結構 4h" if locale == "zh-tw" else "Macro Structure 4h"
+    label_micro = "微觀脈衝 1m" if locale == "zh-tw" else "Micro Pulse 1m"
+    label_verdict = "結構裁決" if locale == "zh-tw" else "Structural Verdict"
+    label_conf = "信心值" if locale == "zh-tw" else "Confidence"
+    observed = str(event.get("ts_utc", ""))
+
+    return (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='630' viewBox='0 0 1200 630' role='img'>"
+        "<defs>"
+        "<linearGradient id='bg' x1='0' y1='0' x2='1' y2='1'>"
+        "<stop offset='0%' stop-color='#030405'/>"
+        "<stop offset='100%' stop-color='#090c10'/>"
+        "</linearGradient>"
+        "<linearGradient id='gold' x1='0' y1='0' x2='1' y2='0'>"
+        "<stop offset='0%' stop-color='#8d6a13'/>"
+        "<stop offset='52%' stop-color='#D4AF37'/>"
+        "<stop offset='100%' stop-color='#f0da8a'/>"
+        "</linearGradient>"
+        "</defs>"
+        "<rect width='1200' height='630' fill='url(#bg)'/>"
+        "<rect x='34' y='34' width='1132' height='562' fill='none' stroke='#D4AF37' stroke-opacity='0.38'/>"
+        "<rect x='56' y='84' width='544' height='248' fill='none' stroke='#C0C0C0' stroke-opacity='0.28'/>"
+        "<rect x='632' y='84' width='544' height='248' fill='none' stroke='#C0C0C0' stroke-opacity='0.28'/>"
+        f"<polyline fill='none' stroke='url(#gold)' stroke-width='2.2' points='{' '.join(macro_points)}'/>"
+        f"<polyline fill='none' stroke='url(#gold)' stroke-width='2.2' points='{' '.join(micro_points)}'/>"
+        f"<text x='62' y='72' fill='#f2f5f7' font-size='14' font-family='JetBrains Mono, monospace'>{html.escape(label_macro)}</text>"
+        f"<text x='638' y='72' fill='#f2f5f7' font-size='14' font-family='JetBrains Mono, monospace'>{html.escape(label_micro)}</text>"
+        f"<text x='62' y='390' fill='#D4AF37' font-size='22' font-family='JetBrains Mono, monospace'>{html.escape(title)}</text>"
+        f"<text x='62' y='422' fill='#d9e0e8' font-size='13' font-family='JetBrains Mono, monospace'>Vol_Z {vol_z:.2f} | Delta {k_delta:.2f} | Bias {bias:.1f}</text>"
+        f"<text x='62' y='446' fill='#d9e0e8' font-size='13' font-family='JetBrains Mono, monospace'>{html.escape(label_conf)} {confidence:.1f} | Severity {html.escape(severity)}</text>"
+        f"<text x='62' y='474' fill='#f0da8a' font-size='13' font-family='JetBrains Mono, monospace'>{html.escape(label_verdict)} {html.escape(str(verdict_pack.get('structural_verdict', '')))}</text>"
+        f"<text x='62' y='505' fill='#9da9b6' font-size='12' font-family='JetBrains Mono, monospace'>{html.escape(observed)}</text>"
+        "<text x='62' y='560' fill='#D4AF37' font-size='12' font-family='JetBrains Mono, monospace'>LeiMai Oracle Snapshot / Hybrid V1+V2</text>"
+        "</svg>"
+    )
+
+
+def build_prompt(
+    event: dict[str, Any],
+    locale: str,
+    unique_entity: str,
+    evidence_pack: dict[str, Any],
+    verdict_pack: dict[str, Any],
+) -> str:
     payload_text = json.dumps(event.get("payload", {}), ensure_ascii=False, sort_keys=True)
+    context_macro = json.dumps(
+        {
+            "range_pct_4h": evidence_pack.get("v1", {}).get("range_pct_4h"),
+            "open_interest_drop_pct": evidence_pack.get("v1", {}).get("open_interest_drop_pct"),
+            "regime_pressure": evidence_pack.get("v2", {}).get("regime_pressure"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    context_micro = json.dumps(
+        {
+            "vol_z_score": evidence_pack.get("v1", {}).get("vol_z_score"),
+            "k_line_delta": evidence_pack.get("v1", {}).get("k_line_delta"),
+            "orderflow_proxy": evidence_pack.get("v2", {}).get("orderflow_proxy"),
+            "depth_imbalance_proxy": evidence_pack.get("v2", {}).get("depth_imbalance_proxy"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    context_verdict = json.dumps(verdict_pack, ensure_ascii=False, sort_keys=True)
     event_label = humanize_event_type(str(event.get("event_type", "")), locale)
     if locale == "zh-tw":
         style_line = (
@@ -220,6 +393,9 @@ def build_prompt(event: dict[str, Any], locale: str, unique_entity: str) -> str:
         f"event_class={event_label}\n"
         f"severity={event.get('severity')}\n"
         f"event_ts_utc={event.get('ts_utc')}\n"
+        f"context_macro_4h={context_macro}\n"
+        f"context_micro_1m={context_micro}\n"
+        f"context_verdict={context_verdict}\n"
         f"payload={payload_text}\n"
     )
 
@@ -323,10 +499,12 @@ def build_jsonld(
     title: str,
     body_md: str,
     unique_entity: str,
+    snapshot_url: str,
 ) -> dict[str, Any]:
     event_id = str(event.get("event_id", ""))
     summary = body_md.replace("\n", " ").strip()[:460]
     canonical = f"https://leimai.io/analysis/{build_slug(event_id, locale)}"
+    image_url = f"https://leimai.io{snapshot_url}" if snapshot_url.startswith("/") else canonical
     return {
         "@context": "https://schema.org",
         "@graph": [
@@ -337,6 +515,7 @@ def build_jsonld(
                 "inLanguage": locale,
                 "identifier": event_id,
                 "mainEntityOfPage": canonical,
+                "image": image_url,
                 "author": {"@type": "Organization", "name": "LeiMai Oracle"},
                 "about": {"@type": "Thing", "name": unique_entity, "sameAs": "https://leimai.io/"},
                 "isAccessibleForFree": False,
@@ -354,6 +533,7 @@ def build_jsonld(
                 "description": summary,
                 "creator": {"@type": "Organization", "name": "LeiMai Oracle"},
                 "url": canonical,
+                "image": image_url,
                 "isAccessibleForFree": False,
             },
             {
@@ -366,48 +546,84 @@ def build_jsonld(
     }
 
 
-def build_mock_report(event: dict[str, Any], locale: str, unique_entity: str) -> dict[str, Any]:
+def build_mock_report(
+    event: dict[str, Any],
+    locale: str,
+    unique_entity: str,
+    evidence_pack: dict[str, Any],
+    verdict_pack: dict[str, Any],
+    snapshot_url: str,
+) -> dict[str, Any]:
     event_type = str(event.get("event_type", "unknown"))
     event_label = humanize_event_type(event_type, locale)
     severity = str(event.get("severity", "medium")).lower()
     observed_at = str(event.get("ts_utc", ""))
+    v1 = evidence_pack.get("v1", {}) if isinstance(evidence_pack.get("v1"), dict) else {}
+    v2 = evidence_pack.get("v2", {}) if isinstance(evidence_pack.get("v2"), dict) else {}
+    vol_z = float(v1.get("vol_z_score", 0.0))
+    k_delta = float(v1.get("k_line_delta", 0.0))
+    oi_drop = float(v1.get("open_interest_drop_pct", 0.0))
+    regime_pressure = float(v2.get("regime_pressure", 0.0))
+    orderflow_proxy = float(v2.get("orderflow_proxy", 0.0))
+    confidence = float(verdict_pack.get("confidence_score", 0.0))
+    verdict_label = str(verdict_pack.get("structural_verdict", "rebalancing_watch"))
 
     if locale == "zh-tw":
-        title = f"主權結構簡報｜{event_label}｜{severity.upper()}"
+        title = f"主權結構簡報｜{event_label}｜Vol_Z {vol_z:.2f}"
         body_md = (
-            "### 結論\n"
-            f"目前評級為 **{severity}**，市場摩擦仍在累積，核心監測實體為 **{unique_entity}**。\n\n"
-            "### 證據\n"
+            "### 市場證據\n"
             f"- 結構分類：{event_label}\n"
             f"- 觀測時間：{observed_at}\n"
-            "- 波動壓力尚未與倉位穩定同步，代表短期再定價風險仍在。\n\n"
+            f"- 4h 波動偏離：`{vol_z:.2f}`\n"
+            f"- K 線差分強度：`{k_delta:.2f}`\n"
+            f"- 未平倉壓力：`{oi_drop:.2f}%`\n"
+            f"- 流動性代理壓力：`{orderflow_proxy:.1f}` / 體制壓力：`{regime_pressure:.1f}`\n\n"
+            "### 結構裁決\n"
+            f"裁決狀態：**{verdict_label}**，信心值 **{confidence:.1f}**。核心實體為 **{unique_entity}**。\n\n"
             "### 風險邊界\n"
-            "本報告僅提供結構判讀，不構成投資建議。若量能擴張且波動收斂，市場可能轉入再平衡；"
-            "若槓桿與波動同向擴大，結構壓力將持續上升。"
+            "本報告僅提供結構判讀，不構成投資建議。若量能擴張且波動收斂，市場可能轉入再平衡；若槓桿與波動同向擴大，結構壓力將延續。"
         )
     else:
-        title = f"Sovereign Structure Brief | {event_label} | {severity.upper()}"
+        title = f"Sovereign Structure Brief | {event_label} | Vol_Z {vol_z:.2f}"
         body_md = (
-            "### Conclusion\n"
-            f"Current severity is **{severity}**, with persistent liquidity friction across the observed structure. "
-            f"Core entity anchor: **{unique_entity}**.\n\n"
-            "### Evidence\n"
+            "### Market Evidence\n"
             f"- Structure class: {event_label}\n"
             f"- Observed at: {observed_at}\n"
-            "- Volatility pressure remains elevated relative to positioning stabilization.\n\n"
+            f"- 4h volatility displacement: `{vol_z:.2f}`\n"
+            f"- K-line delta intensity: `{k_delta:.2f}`\n"
+            f"- Open-interest stress: `{oi_drop:.2f}%`\n"
+            f"- Orderflow proxy: `{orderflow_proxy:.1f}` / regime pressure: `{regime_pressure:.1f}`\n\n"
+            "### Structural Verdict\n"
+            f"Verdict is **{verdict_label}** with confidence **{confidence:.1f}**. Core entity anchor: **{unique_entity}**.\n\n"
             "### Risk Boundary\n"
             "This brief is a structure assessment, not investment advice. If volume expands while volatility compresses, "
             "conditions may rotate to rebalancing. If leverage and volatility expand together, repricing pressure likely persists."
         )
 
-    jsonld = build_jsonld(event=event, locale=locale, title=title, body_md=body_md, unique_entity=unique_entity)
+    jsonld = build_jsonld(
+        event=event,
+        locale=locale,
+        title=title,
+        body_md=body_md,
+        unique_entity=unique_entity,
+        snapshot_url=snapshot_url,
+    )
     return {"title": title, "body_md": body_md, "jsonld": jsonld}
 
 
 def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsConfig) -> dict[str, Any]:
+    slug = build_slug(str(event.get("event_id", "")), locale)
+    snapshot_url = f"/analysis/{slug}/snapshot.svg"
+    evidence_pack, verdict_pack = build_metric_context(event=event, unique_entity=cfg.unique_entity)
     generated: dict[str, Any] | None = None
     if not cfg.use_mock_llm and cfg.gemini_api_key:
-        prompt = build_prompt(event=event, locale=locale, unique_entity=cfg.unique_entity)
+        prompt = build_prompt(
+            event=event,
+            locale=locale,
+            unique_entity=cfg.unique_entity,
+            evidence_pack=evidence_pack,
+            verdict_pack=verdict_pack,
+        )
         for attempt in range(1, cfg.retries + 1):
             candidate = call_gemini(prompt=prompt, cfg=cfg)
             if not candidate:
@@ -433,15 +649,30 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
                 title=generated["title"],
                 body_md=generated["body_md"],
                 unique_entity=cfg.unique_entity,
+                snapshot_url=snapshot_url,
             )
             break
     if not generated:
-        generated = build_mock_report(event=event, locale=locale, unique_entity=cfg.unique_entity)
+        generated = build_mock_report(
+            event=event,
+            locale=locale,
+            unique_entity=cfg.unique_entity,
+            evidence_pack=evidence_pack,
+            verdict_pack=verdict_pack,
+            snapshot_url=snapshot_url,
+        )
 
     title = strip_forbidden_text(str(generated.get("title", "")))
     body_md = strip_forbidden_text(str(generated.get("body_md", "")))
     if not is_locale_isolated(f"{title}\n{body_md}", locale=locale, unique_entity=cfg.unique_entity):
-        generated = build_mock_report(event=event, locale=locale, unique_entity=cfg.unique_entity)
+        generated = build_mock_report(
+            event=event,
+            locale=locale,
+            unique_entity=cfg.unique_entity,
+            evidence_pack=evidence_pack,
+            verdict_pack=verdict_pack,
+            snapshot_url=snapshot_url,
+        )
         title = strip_forbidden_text(str(generated.get("title", "")))
         body_md = strip_forbidden_text(str(generated.get("body_md", "")))
 
@@ -451,9 +682,23 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
 
     jsonld = generated.get("jsonld")
     if not isinstance(jsonld, dict):
-        jsonld = build_jsonld(event=event, locale=locale, title=title, body_md=body_md, unique_entity=cfg.unique_entity)
+        jsonld = build_jsonld(
+            event=event,
+            locale=locale,
+            title=title,
+            body_md=body_md,
+            unique_entity=cfg.unique_entity,
+            snapshot_url=snapshot_url,
+        )
 
-    slug = build_slug(str(event.get("event_id", "")), locale)
+    snapshot_svg = build_snapshot_svg(
+        title=title,
+        event=event,
+        evidence_pack=evidence_pack,
+        verdict_pack=verdict_pack,
+        locale=locale,
+    )
+
     return {
         "event_id": str(event.get("event_id", "")),
         "locale": locale,
@@ -462,6 +707,10 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
         "body_md": body_md,
         "jsonld": jsonld,
         "unique_entity": cfg.unique_entity,
+        "evidence_pack": evidence_pack,
+        "verdict_pack": verdict_pack,
+        "snapshot_svg": snapshot_svg,
+        "snapshot_url": snapshot_url,
     }
 
 
