@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T14:22:03Z`
+- Last Updated (UTC): `2026-03-04T14:49:44Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -1272,6 +1272,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: reseed no longer aborts when `oracle_reports_archive` is absent; it gracefully downgrades and still completes purge/reopen flow, then reports regenerate clean content deterministically.
 - [BUSINESS_STATUS] 商業進度: 已在 Supabase 執行重建流程（刪除舊報告 16 筆、重開事件 8 筆、重新生成 16 筆雙語報告）。即使 archive 表尚未建置，也不會卡死整體清洗流程。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅 reseed/generate 後端流程）；白賁通過（最小降級機制，避免人工介入）。
+
+### [x] B29_2_SUPABASE_DB_URL_DDL_ENTRYPOINT
+- [LOGIC_CORE] Technical Dependency: `scripts/apply_sql.py`, `engine/.env.example`, `support/.env.example`, `docs/TOKEN_ROTATION_SYNC_CHECKLIST.md`.
+- [LOGIC_CORE] Business Value: established a direct DDL execution entrypoint via `SUPABASE_DB_URL` so schema creation/alter can be automated without manual SQL copy-paste.
+- [BUSINESS_STATUS] 商業進度: 已統一變數命名為 `SUPABASE_DB_URL`，並寫入 env 範本與輪替清單。填值後可直接執行 `python scripts/apply_sql.py --sql-file ...` 建表。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（僅維運與模板層）；白賁通過（單腳本 + 單變數，無額外服務）。
 
 ## Governance Checks
 

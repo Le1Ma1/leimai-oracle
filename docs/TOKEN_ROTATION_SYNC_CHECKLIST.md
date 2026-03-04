@@ -9,6 +9,7 @@ This checklist is for post-rotation rebind only. Non-token business config can r
     - `SUPABASE_URL`
     - `SUPABASE_ANON_KEY`
     - `SUPABASE_SERVICE_ROLE_KEY`
+    - `SUPABASE_DB_URL` (optional, for direct SQL/DDL automation)
     - `SUPPORT_SESSION_SECRET`
     - `CRON_SECRET`
     - `SUPPORT_ADMIN_TOKEN`
@@ -23,6 +24,7 @@ This checklist is for post-rotation rebind only. Non-token business config can r
     - `SUPABASE_URL`
     - `SUPABASE_ANON_KEY`
     - `SUPABASE_SERVICE_ROLE_KEY`
+    - `SUPABASE_DB_URL` (optional, for direct SQL/DDL automation)
     - `SUPPORT_TRONGRID_API_KEY`
     - `ALCHEMY_API_KEY`
 
@@ -66,6 +68,14 @@ This checklist is for post-rotation rebind only. Non-token business config can r
 - `/api/v1/payment/create` returns `invoice_id`
 - `/api/v1/payment/status?invoice_id=...` returns `pending|paid|expired`
 - `vercel-env-sync` workflow finishes without env sync errors
+
+## 4.1) Optional SQL/DDL Apply (Direct DB URL)
+
+- Fill `SUPABASE_DB_URL` in root `.env` (or current shell env).
+- Run:
+  - `python scripts/apply_sql.py --sql-file supabase/schema_reports_archive.sql`
+- Expected:
+  - log event `APPLY_SQL_OK`.
 
 ## 5) Alchemy Extra Setup
 
