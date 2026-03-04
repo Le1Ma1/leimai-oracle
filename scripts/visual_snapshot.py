@@ -2,7 +2,9 @@
 
 import argparse
 import base64
+import hashlib
 import json
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -24,15 +26,35 @@ DETAIL_IMAGE = LOGS_DIR / ".detail_vibe_tmp.png"
 DETAIL_FOLD_IMAGE = LOGS_DIR / ".detail_fold_vibe_tmp.png"
 MERGED_IMAGE = LOGS_DIR / "current_vibe.png"
 STATE_FILE = LOGS_DIR / "visual_state.json"
+SNAPSHOT_DIR = ROOT / "support" / "web" / "generated" / "snapshots"
 
 
 @dataclass(frozen=True)
-class SnapshotConfig:
+class UiQaConfig:
     base_url: str
     timeout_sec: float
     gemini_api_key: str
     gemini_model: str
     force_fallback: bool
+
+
+@dataclass(frozen=True)
+class ReportConfig:
+    supabase_url: str
+    supabase_service_role_key: str
+    timeout_sec: float
+    limit: int
+    locale: str
+    slug: str
+    output_dir: Path
+    binance_base_url: str
+
+
+@dataclass(frozen=True)
+class SnapshotConfig:
+    mode: str
+    uiqa: UiQaConfig
+    report: ReportConfig
 
 
 def utc_now_iso() -> str:
@@ -60,20 +82,381 @@ def normalize_sentence(raw: str) -> str:
 
 
 def parse_args() -> SnapshotConfig:
-    parser = argparse.ArgumentParser(description="Capture visual snapshot and persist compact visual memory.")
+    parser = argparse.ArgumentParser(description="Visual snapshot tool: uiqa memory + report snapshot generation.")
+    parser.add_argument("--mode", choices=("uiqa", "report"), default=os.getenv("VISUAL_SNAPSHOT_MODE", "uiqa"))
     parser.add_argument("--base-url", default=os.getenv("SUPPORT_BASE_URL", "http://127.0.0.1:4310"))
     parser.add_argument("--timeout-sec", type=float, default=float(os.getenv("VISUAL_TIMEOUT_SEC", "25")))
     parser.add_argument("--gemini-model", default=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+    parser.add_argument("--limit", type=int, default=int(os.getenv("SNAPSHOT_REPORT_LIMIT", "40")))
+    parser.add_argument("--locale", default=str(os.getenv("SNAPSHOT_REPORT_LOCALE", "")).strip().lower())
+    parser.add_argument("--slug", default=str(os.getenv("SNAPSHOT_REPORT_SLUG", "")).strip().lower())
     parser.add_argument("--force-fallback", action="store_true")
     args = parser.parse_args()
 
-    return SnapshotConfig(
+    uiqa_cfg = UiQaConfig(
         base_url=normalize_base_url(args.base_url),
         timeout_sec=max(8.0, float(args.timeout_sec)),
         gemini_api_key=str(os.getenv("GEMINI_API_KEY", "")).strip(),
         gemini_model=str(args.gemini_model or "").strip() or "gemini-1.5-flash",
         force_fallback=bool(args.force_fallback),
     )
+    report_cfg = ReportConfig(
+        supabase_url=str(os.getenv("SUPABASE_URL", "")).strip().rstrip("/"),
+        supabase_service_role_key=str(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")).strip(),
+        timeout_sec=max(8.0, float(args.timeout_sec)),
+        limit=max(1, min(500, int(args.limit))),
+        locale=str(args.locale or "").strip().lower(),
+        slug=str(args.slug or "").strip().lower(),
+        output_dir=SNAPSHOT_DIR,
+        binance_base_url=str(os.getenv("BINANCE_SPOT_BASE_URL", "https://api.binance.com")).strip().rstrip("/"),
+    )
+    return SnapshotConfig(mode=str(args.mode or "uiqa"), uiqa=uiqa_cfg, report=report_cfg)
+
+
+def ensure_matplotlib():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.patches import Rectangle
+
+    return plt, GridSpec, Rectangle
+
+
+def parse_float(raw: Any, default: float = 0.0) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(value) or math.isinf(value):
+        return default
+    return value
+
+
+def normalize_symbol(raw: str) -> str:
+    token = re.sub(r"[^A-Za-z]", "", str(raw or "").upper())
+    if not token:
+        return "BTCUSDT"
+    if token.endswith("USDT"):
+        return token
+    return f"{token}USDT"
+
+
+def infer_symbol(row: dict[str, Any]) -> str:
+    evidence = row.get("evidence_pack")
+    if isinstance(evidence, dict):
+        asset = evidence.get("asset")
+        if isinstance(asset, dict):
+            symbol = str(asset.get("symbol") or "").strip()
+            if symbol:
+                return normalize_symbol(symbol)
+
+    title = str(row.get("title") or "").upper()
+    match = re.search(r"\(([A-Z]{2,10})\)", title)
+    if match:
+        return normalize_symbol(match.group(1))
+    match = re.search(r"\b([A-Z]{2,10})/USDT\b", title)
+    if match:
+        return normalize_symbol(match.group(1))
+    return "BTCUSDT"
+
+
+def infer_asset_display_name(row: dict[str, Any], symbol: str) -> str:
+    evidence = row.get("evidence_pack")
+    if isinstance(evidence, dict):
+        asset = evidence.get("asset")
+        if isinstance(asset, dict):
+            name = str(asset.get("name") or "").strip()
+            ticker = str(asset.get("ticker") or "").strip().upper()
+            if name and ticker:
+                return f"{name} ({ticker})"
+    ticker = symbol.replace("USDT", "")
+    return f"{ticker.title()} ({ticker})"
+
+
+def hash_seed(value: str) -> int:
+    digest = hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+    return int(digest[:12], 16)
+
+
+def build_synthetic_klines(symbol: str, interval: str, limit: int, seed_source: str) -> list[dict[str, float]]:
+    seed = hash_seed(f"{symbol}:{interval}:{seed_source}")
+    base_price = 80.0 + (seed % 9000) / 10.0
+    amplitude = 0.008 if interval == "1m" else 0.022
+    candles: list[dict[str, float]] = []
+    for idx in range(limit):
+        phase = (idx / max(1, limit - 1)) * math.pi * 4.0
+        wave = math.sin(phase + (seed % 97) * 0.01) * amplitude
+        drift = ((seed % 31) - 15) / 12000.0
+        open_price = base_price * (1.0 + wave + drift * idx)
+        close_price = open_price * (1.0 + math.sin(phase * 1.9) * amplitude * 0.6)
+        high_price = max(open_price, close_price) * (1.0 + abs(math.cos(phase * 1.4)) * amplitude * 0.8 + 0.0008)
+        low_price = min(open_price, close_price) * (1.0 - abs(math.sin(phase * 1.6)) * amplitude * 0.8 - 0.0008)
+        candles.append({"open": open_price, "high": high_price, "low": low_price, "close": close_price})
+    return candles
+
+
+def fetch_binance_klines(cfg: ReportConfig, symbol: str, interval: str, limit: int, seed_source: str) -> list[dict[str, float]]:
+    endpoint = f"{cfg.binance_base_url}/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": str(limit)}
+    try:
+        resp = requests.get(endpoint, params=params, timeout=(5.0, cfg.timeout_sec))
+        resp.raise_for_status()
+        payload = resp.json()
+        if not isinstance(payload, list):
+            raise ValueError("invalid_klines_payload")
+        out: list[dict[str, float]] = []
+        for row in payload:
+            if not isinstance(row, list) or len(row) < 5:
+                continue
+            out.append(
+                {
+                    "open": parse_float(row[1], 0.0),
+                    "high": parse_float(row[2], 0.0),
+                    "low": parse_float(row[3], 0.0),
+                    "close": parse_float(row[4], 0.0),
+                }
+            )
+        if len(out) < max(12, limit // 3):
+            raise ValueError("insufficient_klines")
+        return out[-limit:]
+    except Exception as exc:  # noqa: BLE001
+        log_event("REPORT_SNAPSHOT_BINANCE_FALLBACK", symbol=symbol, interval=interval, error=str(exc))
+        return build_synthetic_klines(symbol=symbol, interval=interval, limit=limit, seed_source=seed_source)
+
+
+def supabase_headers(cfg: ReportConfig) -> dict[str, str]:
+    return {
+        "apikey": cfg.supabase_service_role_key,
+        "Authorization": f"Bearer {cfg.supabase_service_role_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def fetch_reports_for_snapshots(cfg: ReportConfig) -> list[dict[str, Any]]:
+    if not cfg.supabase_url or not cfg.supabase_service_role_key:
+        log_event(
+            "REPORT_SNAPSHOT_CONFIG_MISSING",
+            has_url=bool(cfg.supabase_url),
+            has_service_role_key=bool(cfg.supabase_service_role_key),
+        )
+        return []
+
+    params: dict[str, str] = {
+        "select": "report_id,event_id,slug,title,locale,evidence_pack,verdict_pack,snapshot_url,updated_at,created_at",
+        "order": "updated_at.desc",
+        "limit": str(cfg.limit),
+    }
+    if cfg.slug:
+        params["slug"] = f"eq.{cfg.slug}"
+    if cfg.locale:
+        params["locale"] = f"eq.{cfg.locale}"
+
+    try:
+        resp = requests.get(
+            f"{cfg.supabase_url}/rest/v1/oracle_reports",
+            headers=supabase_headers(cfg),
+            params=params,
+            timeout=(5.0, cfg.timeout_sec),
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        if not isinstance(payload, list):
+            return []
+        return [row for row in payload if isinstance(row, dict) and str(row.get("slug") or "").strip()]
+    except Exception as exc:  # noqa: BLE001
+        log_event("REPORT_SNAPSHOT_FETCH_FAILED", error=str(exc))
+        return []
+
+
+def update_snapshot_url(cfg: ReportConfig, report_id: Any, snapshot_url: str) -> bool:
+    if not report_id:
+        return False
+    try:
+        resp = requests.patch(
+            f"{cfg.supabase_url}/rest/v1/oracle_reports",
+            headers={**supabase_headers(cfg), "Prefer": "return=minimal"},
+            params={"report_id": f"eq.{int(report_id)}"},
+            json={"snapshot_url": snapshot_url},
+            timeout=(5.0, cfg.timeout_sec),
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log_event("REPORT_SNAPSHOT_DB_UPDATE_FAILED", report_id=report_id, error=str(exc))
+        return False
+
+
+def draw_candles(ax: Any, candles: list[dict[str, float]], color: str, rectangle_cls: Any, *, down_fill: bool = True) -> None:
+    width = 0.62
+    for idx, candle in enumerate(candles):
+        o = parse_float(candle.get("open"), 0.0)
+        h = parse_float(candle.get("high"), o)
+        l = parse_float(candle.get("low"), o)
+        c = parse_float(candle.get("close"), o)
+        ax.vlines(idx, min(l, o, c), max(h, o, c), color=color, linewidth=0.8, alpha=0.98)
+        body_low = min(o, c)
+        body_height = max(abs(c - o), 1e-7)
+        is_up = c >= o
+        face = "none" if is_up else (color if down_fill else "none")
+        body = rectangle_cls((idx - width / 2.0, body_low), width, body_height, linewidth=0.8, edgecolor=color, facecolor=face, alpha=0.98)
+        ax.add_patch(body)
+
+
+def apply_axis_style(ax: Any, grid_color: str) -> None:
+    ax.set_facecolor("#050505")
+    ax.grid(color=grid_color, linestyle="-", linewidth=0.4, alpha=0.4)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_color("#151515")
+        spine.set_linewidth(0.9)
+
+
+def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool, str]:
+    plt, GridSpec, Rectangle = ensure_matplotlib()
+    slug = str(row.get("slug") or "").strip().lower()
+    if not slug:
+        return False, ""
+
+    evidence = row.get("evidence_pack") if isinstance(row.get("evidence_pack"), dict) else {}
+    verdict = row.get("verdict_pack") if isinstance(row.get("verdict_pack"), dict) else {}
+    v1 = evidence.get("v1") if isinstance(evidence.get("v1"), dict) else {}
+
+    symbol = infer_symbol(row)
+    asset_name = infer_asset_display_name(row, symbol)
+    event_hash = str(row.get("event_id") or "")
+    confidence = max(0.0, min(100.0, parse_float(verdict.get("confidence_score"), 0.0)))
+    verdict_raw = str(verdict.get("structural_verdict") or "REBALANCING_WATCH").upper()
+    vol_z = parse_float(v1.get("vol_z_score"), 0.0)
+    k_delta = parse_float(v1.get("k_line_delta"), 0.0)
+
+    micro = fetch_binance_klines(cfg=cfg, symbol=symbol, interval="1m", limit=80, seed_source=f"{event_hash}:{slug}:1m")
+    macro = fetch_binance_klines(cfg=cfg, symbol=symbol, interval="4h", limit=80, seed_source=f"{event_hash}:{slug}:4h")
+    if not micro or not macro:
+        return False, slug
+
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = cfg.output_dir / f"{slug}.png"
+
+    fig = plt.figure(figsize=(16, 9), facecolor="#000000")
+    grid = GridSpec(1, 3, width_ratios=[2, 1, 2], figure=fig, wspace=0.04)
+    ax_left = fig.add_subplot(grid[0, 0])
+    ax_center = fig.add_subplot(grid[0, 1])
+    ax_right = fig.add_subplot(grid[0, 2])
+
+    # Left panel: micro 1m
+    apply_axis_style(ax_left, grid_color="#0a0a0a")
+    draw_candles(ax_left, micro, "#D4AF37", Rectangle, down_fill=True)
+    micro_lows = [parse_float(c.get("low"), 0.0) for c in micro]
+    micro_highs = [parse_float(c.get("high"), 0.0) for c in micro]
+    anomaly_idx = len(micro) - 1
+    anomaly_y = micro_lows[anomaly_idx] if anomaly_idx >= 0 else 0.0
+    ax_left.scatter([anomaly_idx], [anomaly_y], s=460, color="#FF4500", alpha=0.5, zorder=6)
+    ax_left.scatter([anomaly_idx], [anomaly_y], s=180, color="#FF4500", alpha=0.8, zorder=7)
+    ax_left.axvline(anomaly_idx, color="#333333", linestyle="--", linewidth=0.8, alpha=0.85)
+    ax_left.axhline(anomaly_y, color="#333333", linestyle="--", linewidth=0.8, alpha=0.85)
+    ax_left.set_xlim(-1, len(micro))
+    if micro_lows and micro_highs:
+        pad = (max(micro_highs) - min(micro_lows)) * 0.08 or 1.0
+        ax_left.set_ylim(min(micro_lows) - pad, max(micro_highs) + pad)
+    ax_left.text(0.98, 0.96, "MICRO_VIEW : 1M", transform=ax_left.transAxes, ha="right", va="top", color="#D4AF37", fontsize=11, family="monospace")
+    ax_left.text(0.98, 0.91, f"{symbol}_PERP", transform=ax_left.transAxes, ha="right", va="top", color="#D4AF37", fontsize=9, family="monospace")
+    ax_left.text(0.02, 0.04, "ANOMALY DETECTED // T-MINUS 0:00", transform=ax_left.transAxes, ha="left", va="bottom", color="#FF4500", fontsize=8.5, family="monospace")
+
+    # Right panel: macro 4h
+    apply_axis_style(ax_right, grid_color="#101010")
+    draw_candles(ax_right, macro, "#C0C0C0", Rectangle, down_fill=True)
+    macro_lows = [parse_float(c.get("low"), 0.0) for c in macro]
+    macro_highs = [parse_float(c.get("high"), 0.0) for c in macro]
+    if macro_lows and macro_highs:
+        recent = macro[-24:] if len(macro) >= 24 else macro
+        recent_high = [parse_float(c.get("high"), 0.0) for c in recent]
+        recent_low = [parse_float(c.get("low"), 0.0) for c in recent]
+        top = max(recent_high)
+        bottom = min(recent_low)
+        span = (top - bottom) * 0.12
+        ax_right.axhspan(top - span, top, facecolor="#141414", alpha=0.8)
+        ax_right.axhspan(bottom, bottom + span, facecolor="#141414", alpha=0.8)
+        ax_right.text(0.02, 0.89, "RESISTANCE_ZONE // R1", transform=ax_right.transAxes, color="#C0C0C0", fontsize=8, family="monospace")
+        ax_right.text(0.02, 0.08, "SUPPORT_ZONE // S1", transform=ax_right.transAxes, color="#C0C0C0", fontsize=8, family="monospace")
+        pad = (max(macro_highs) - min(macro_lows)) * 0.08 or 1.0
+        ax_right.set_ylim(min(macro_lows) - pad, max(macro_highs) + pad)
+    ax_right.set_xlim(-1, len(macro))
+    ax_right.text(0.02, 0.96, "MACRO_VIEW : 4H", transform=ax_right.transAxes, ha="left", va="top", color="#C0C0C0", fontsize=11, family="monospace")
+    ax_right.text(0.02, 0.91, "STRUCTURAL_TENSION", transform=ax_right.transAxes, ha="left", va="top", color="#C0C0C0", fontsize=9, family="monospace")
+
+    # Center panel: oracle verdict pillar
+    ax_center.set_facecolor("#000000")
+    ax_center.set_xticks([])
+    ax_center.set_yticks([])
+    for spine in ax_center.spines.values():
+        spine.set_visible(False)
+    pillar = Rectangle((0.08, 0.08), 0.84, 0.84, transform=ax_center.transAxes, facecolor="#050505", edgecolor=(1, 1, 1, 0.10), linewidth=1.0)
+    ax_center.add_patch(pillar)
+    ax_center.plot([0.10, 0.90], [0.91, 0.91], transform=ax_center.transAxes, color="#D4AF37", linewidth=1.4, alpha=0.9)
+    ax_center.plot([0.10, 0.90], [0.09, 0.09], transform=ax_center.transAxes, color="#D4AF37", linewidth=1.4, alpha=0.9)
+    ax_center.text(0.5, 0.83, "CONFIDENCE METRIC", transform=ax_center.transAxes, ha="center", va="center", color="#666666", fontsize=9, family="monospace")
+    ax_center.text(0.5, 0.57, f"{confidence:.0f}%", transform=ax_center.transAxes, ha="center", va="center", color="#D4AF37", fontsize=46, family="monospace", fontweight="bold")
+    ax_center.text(0.5, 0.40, f"STRUCTURAL BIAS: {verdict_raw}", transform=ax_center.transAxes, ha="center", va="center", color="#FF4500", fontsize=10, family="monospace")
+    ax_center.text(0.5, 0.26, f"{asset_name} | {symbol}", transform=ax_center.transAxes, ha="center", va="center", color="#C0C0C0", fontsize=8.8, family="monospace")
+    ax_center.text(0.5, 0.13, "> SYSTEM PROTOCOL EXECUTED...\n> DEPLOY CAPITAL.", transform=ax_center.transAxes, ha="center", va="center", color="#555555", fontsize=8, family="monospace")
+
+    # Global watermark
+    fig.text(0.03, 0.96, "LEIMAI ORACLE", color="#E0E0E0", fontsize=16, family="serif", ha="left", va="top")
+    fig.text(0.03, 0.925, "OMNISCIENT QUANTITATIVE ENGINE", color="#666666", fontsize=9, family="monospace", ha="left", va="top")
+    fig.text(0.97, 0.06, "DIGITAL SIGNATURE STAMP", color="#666666", fontsize=8.5, family="monospace", ha="right", va="bottom")
+    fig.text(0.97, 0.035, event_hash[-32:] if event_hash else slug, color="#444444", fontsize=8, family="monospace", ha="right", va="bottom")
+    fig.text(0.03, 0.03, f"Vol_Z {vol_z:.2f} | Delta {k_delta:.2f} | {utc_now_iso()}", color="#666666", fontsize=8, family="monospace", ha="left", va="bottom")
+
+    fig.savefig(output_path, dpi=100, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    try:
+        img = Image.open(output_path).convert("RGB")
+        if img.size != (1600, 900):
+            img = img.resize((1600, 900), Image.Resampling.LANCZOS)
+            img.save(output_path, format="PNG")
+    except Exception as exc:  # noqa: BLE001
+        log_event("REPORT_SNAPSHOT_POSTPROCESS_WARN", slug=slug, error=str(exc))
+    return True, slug
+
+
+def run_report_snapshot_mode(cfg: ReportConfig) -> int:
+    log_event(
+        "REPORT_SNAPSHOT_MODE_START",
+        limit=cfg.limit,
+        locale=cfg.locale or "all",
+        slug=cfg.slug or "",
+        output_dir=str(cfg.output_dir.relative_to(ROOT)).replace("\\", "/"),
+    )
+    reports = fetch_reports_for_snapshots(cfg)
+    if not reports:
+        log_event("REPORT_SNAPSHOT_NO_REPORTS")
+        return 0
+
+    generated = 0
+    failed = 0
+    db_updated = 0
+    for row in reports:
+        ok, slug = render_report_snapshot(cfg, row)
+        if not ok or not slug:
+            failed += 1
+            continue
+        generated += 1
+        snapshot_url = f"/generated/snapshots/{slug}.png"
+        if update_snapshot_url(cfg, row.get("report_id"), snapshot_url):
+            db_updated += 1
+        log_event("REPORT_SNAPSHOT_WRITTEN", report_id=row.get("report_id"), slug=slug, snapshot_url=snapshot_url)
+
+    log_event(
+        "REPORT_SNAPSHOT_MODE_DONE",
+        total=len(reports),
+        generated=generated,
+        failed=failed,
+        db_updated=db_updated,
+    )
+    return 0
 
 
 def collect_page_checks(page: Page) -> dict[str, Any]:
@@ -293,7 +676,7 @@ def aggregate_checks(page_checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def capture_images(cfg: SnapshotConfig) -> tuple[dict[str, str], dict[str, Any]]:
+def capture_images(cfg: UiQaConfig) -> tuple[dict[str, str], dict[str, Any]]:
     timeout_ms = int(cfg.timeout_sec * 1000)
     home_url = f"{cfg.base_url}/"
     index_url = f"{cfg.base_url}/analysis/"
@@ -402,7 +785,7 @@ def fallback_note(quality: dict[str, Any]) -> str:
     )
 
 
-def describe_with_gemini(cfg: SnapshotConfig, quality: dict[str, Any]) -> tuple[str, str]:
+def describe_with_gemini(cfg: UiQaConfig, quality: dict[str, Any]) -> tuple[str, str]:
     if cfg.force_fallback or not cfg.gemini_api_key:
         return normalize_sentence(fallback_note(quality)), "fallback"
 
@@ -453,7 +836,7 @@ def describe_with_gemini(cfg: SnapshotConfig, quality: dict[str, Any]) -> tuple[
 
 
 def write_state(
-    cfg: SnapshotConfig,
+    cfg: UiQaConfig,
     page_urls: dict[str, str],
     quality: dict[str, Any],
     note: str,
@@ -493,8 +876,7 @@ def cleanup_temp_files() -> None:
             continue
 
 
-def main() -> int:
-    cfg = parse_args()
+def run_uiqa_mode(cfg: UiQaConfig) -> int:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     log_event("VISUAL_SNAPSHOT_START", base_url=cfg.base_url)
 
@@ -519,6 +901,13 @@ def main() -> int:
         state=str(STATE_FILE.relative_to(ROOT)).replace("\\", "/"),
     )
     return 0
+
+
+def main() -> int:
+    cfg = parse_args()
+    if cfg.mode == "report":
+        return run_report_snapshot_mode(cfg.report)
+    return run_uiqa_mode(cfg.uiqa)
 
 
 if __name__ == "__main__":

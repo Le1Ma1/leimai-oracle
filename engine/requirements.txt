@@ -8,3 +8,5 @@ requests
 supabase
 google-auth
 google-api-python-client
+matplotlib
+Pillow

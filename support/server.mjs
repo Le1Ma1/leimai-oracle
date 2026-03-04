@@ -1469,10 +1469,13 @@ function renderAnalysisIndexPage(locale, reports) {
 
 function getPublicSnapshotUrl(report) {
   const raw = String(report?.snapshot_url || "").trim();
+  if (raw.startsWith("/generated/snapshots/") && raw.endsWith(".png")) {
+    return raw;
+  }
   if (raw.startsWith("/analysis/") && raw.endsWith("/snapshot.svg")) {
     return raw;
   }
-  return `/analysis/${encodeURIComponent(String(report?.slug || "").trim().toLowerCase())}/snapshot.svg`;
+  return `/generated/snapshots/${encodeURIComponent(String(report?.slug || "").trim().toLowerCase())}.png`;
 }
 
 function buildSnapshotFallbackSvg(report, locale = "en") {
@@ -1789,6 +1792,29 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (pathname === "/assets/social-card.svg") {
     textResponse(res, 200, buildSocialCardSvg(), "image/svg+xml; charset=utf-8");
     return true;
+  }
+  const generatedSnapshotMatch = String(pathname || "").match(/^\/generated\/snapshots\/([a-z0-9_-]+)\.png$/i);
+  if (generatedSnapshotMatch) {
+    const slug = String(generatedSnapshotMatch[1] || "").trim().toLowerCase();
+    const pngPath = path.join(__dirname, "web", "generated", "snapshots", `${slug}.png`);
+    try {
+      const image = await fs.readFile(pngPath);
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+      });
+      res.end(image);
+      return true;
+    } catch {
+      const report = await fetchReportBySlug(slug);
+      if (report) {
+        res.writeHead(302, { Location: `/analysis/${slug}/snapshot.svg` });
+        res.end();
+        return true;
+      }
+      textResponse(res, 404, "snapshot_not_found");
+      return true;
+    }
   }
   if (pathname === "/robots.txt") {
     textResponse(res, 200, buildRobots(CONFIG.siteUrl));

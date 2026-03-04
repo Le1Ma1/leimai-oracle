@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T18:32:09Z`
+- Last Updated (UTC): `2026-03-04T19:34:31Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -19,6 +19,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - [LOGIC_CORE] Business Value: phase contract is active in production data path; schema upgraded and all existing events regenerated with snapshot/evidence/verdict payloads.
 - [BUSINESS_STATUS] 商業進度: 已完成 `schema_reports.sql` 套用、舊報告重開與再生成（8 事件 / 16 報告），詳情頁快照路由已可回傳 `200`。
 - [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（資料治理與報告再生在後端完成）；白賁通過（沿用既有腳本，無額外服務擴張）。
+
+### [x] B30_2_PNG_SNAPSHOT_PIPELINE_AND_SERVING_CONTRACT
+- [LOGIC_CORE] Technical Dependency: `scripts/visual_snapshot.py`, `.github/workflows/ingest_4h.yml`, `engine/requirements.txt`, `engine/src/generate_reports.py`, `support/server.mjs`, `support/web/generated/snapshots/.gitkeep`, `.gitignore`.
+- [LOGIC_CORE] Business Value: report pipeline now emits offline 1600x900 PNG snapshots (`/generated/snapshots/{slug}.png`) with deterministic macro/micro + verdict layout; ingest workflow executes snapshot generation after report synthesis; support runtime serves generated PNG with legacy SVG fallback redirect.
+- [BUSINESS_STATUS] 商業進度: Phase 4.5 第二階段完成。標題/首段已強制包含資產實體，快照改為離線 PNG 產線並可直接在詳情頁載入，視覺與資料路徑完成對齊。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（後端產圖、工作流、前端靜態服務分層落地）；白賁通過（沿用既有腳本與路由，僅補必要契約，不新增服務）。
 
 ### [x] G0_PROTOCOL_BASELINE
 - Technical Dependency: `ORACLE_MAP.md`, `.cursorrules`

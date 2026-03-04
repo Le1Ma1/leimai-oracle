@@ -67,6 +67,16 @@ jobs:
         run: |
           python -m engine.src.generate_reports
 
+      - name: Generate offline oracle snapshots
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BINANCE_SPOT_BASE_URL: https://api.binance.com
+          VISUAL_TIMEOUT_SEC: "20"
+          SNAPSHOT_REPORT_LIMIT: "80"
+        run: |
+          python scripts/visual_snapshot.py --mode report --limit 80
+
       - name: Submit sitemap to Google Search Console
         continue-on-error: true
         env:

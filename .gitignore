@@ -9,6 +9,8 @@ engine/data/
 engine/artifacts/
 logs/.home_vibe_tmp.png
 logs/.detail_vibe_tmp.png
+support/web/generated/snapshots/*.png
+!support/web/generated/snapshots/.gitkeep
 
 node_modules/
 .next/

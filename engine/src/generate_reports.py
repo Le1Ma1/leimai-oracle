@@ -49,6 +49,25 @@ ZH_ALLOWED_TERMS: tuple[str, ...] = (
     "MACD",
 )
 
+ASSET_CATALOG: dict[str, dict[str, str]] = {
+    "BTCUSDT": {"name": "Bitcoin", "ticker": "BTC", "pair": "BTC/USDT"},
+    "ETHUSDT": {"name": "Ethereum", "ticker": "ETH", "pair": "ETH/USDT"},
+    "BNBUSDT": {"name": "Binance Coin", "ticker": "BNB", "pair": "BNB/USDT"},
+    "XRPUSDT": {"name": "Ripple", "ticker": "XRP", "pair": "XRP/USDT"},
+    "SOLUSDT": {"name": "Solana", "ticker": "SOL", "pair": "SOL/USDT"},
+    "ADAUSDT": {"name": "Cardano", "ticker": "ADA", "pair": "ADA/USDT"},
+    "DOGEUSDT": {"name": "Dogecoin", "ticker": "DOGE", "pair": "DOGE/USDT"},
+    "TRXUSDT": {"name": "TRON", "ticker": "TRX", "pair": "TRX/USDT"},
+    "LTCUSDT": {"name": "Litecoin", "ticker": "LTC", "pair": "LTC/USDT"},
+    "LINKUSDT": {"name": "Chainlink", "ticker": "LINK", "pair": "LINK/USDT"},
+}
+
+STRUCTURAL_VERDICT_LABELS: dict[str, str] = {
+    "structural_stress_expansion": "Structural Stress Expansion",
+    "liquidity_friction_persistent": "Liquidity Friction Persistent",
+    "rebalancing_watch": "Rebalancing Watch",
+}
+
 
 @dataclass(frozen=True)
 class ReportsConfig:
@@ -197,6 +216,55 @@ def humanize_event_type(event_type: str, locale: str) -> str:
     return en_map.get(raw, "Sovereign Market Structure Event")
 
 
+def normalize_symbol(raw: str) -> str:
+    token = re.sub(r"[^A-Za-z]", "", str(raw or "").upper())
+    if not token:
+        return "BTCUSDT"
+    if token.endswith("USDT"):
+        return token
+    return f"{token}USDT"
+
+
+def resolve_asset_identity(event: dict[str, Any]) -> dict[str, str]:
+    payload = event.get("payload")
+    source = payload if isinstance(payload, dict) else {}
+    raw_symbol = str(
+        source.get("symbol")
+        or source.get("pair")
+        or source.get("asset")
+        or source.get("market")
+        or "",
+    ).strip()
+    if not raw_symbol:
+        event_type = str(event.get("event_type", "")).upper()
+        match = re.search(r"\b([A-Z]{2,10})USDT\b", event_type)
+        if match:
+            raw_symbol = match.group(0)
+
+    symbol = normalize_symbol(raw_symbol or "BTCUSDT")
+    catalog_row = ASSET_CATALOG.get(symbol)
+    if catalog_row:
+        name = catalog_row["name"]
+        ticker = catalog_row["ticker"]
+        pair = catalog_row["pair"]
+    else:
+        ticker = symbol.replace("USDT", "") or "BTC"
+        name = ticker.title()
+        pair = f"{ticker}/USDT"
+    display_name = f"{name} ({ticker})"
+    return {
+        "symbol": symbol,
+        "ticker": ticker,
+        "name": name,
+        "display_name": display_name,
+        "pair": pair,
+    }
+
+
+def title_verdict_label(verdict_key: str) -> str:
+    return STRUCTURAL_VERDICT_LABELS.get(str(verdict_key or "").lower(), "Structural Repricing Watch")
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, value)))
 
@@ -205,6 +273,7 @@ def build_metric_context(event: dict[str, Any], unique_entity: str) -> tuple[dic
     payload = event.get("payload")
     event_type = str(event.get("event_type", ""))
     severity = str(event.get("severity", "medium")).lower()
+    asset = resolve_asset_identity(event)
     v1 = calc_v1_hard_metrics(payload if isinstance(payload, dict) else {}, event_type=event_type, severity=severity)
     vol_z = float(v1.get("vol_z_score", 0.0))
     k_delta = float(v1.get("k_line_delta", 0.0))
@@ -230,6 +299,7 @@ def build_metric_context(event: dict[str, Any], unique_entity: str) -> tuple[dic
         "entity": unique_entity,
         "event_type": event_type,
         "severity": severity,
+        "asset": asset,
         "v1": {
             "vol_z_score": round(vol_z, 4),
             "k_line_delta": round(k_delta, 4),
@@ -345,6 +415,11 @@ def build_prompt(
     verdict_pack: dict[str, Any],
 ) -> str:
     payload_text = json.dumps(event.get("payload", {}), ensure_ascii=False, sort_keys=True)
+    asset = evidence_pack.get("asset", {}) if isinstance(evidence_pack.get("asset"), dict) else {}
+    asset_display = str(asset.get("display_name") or "Bitcoin (BTC)")
+    asset_pair = str(asset.get("pair") or "BTC/USDT")
+    verdict_title = title_verdict_label(str(verdict_pack.get("structural_verdict", "")))
+    vol_z = float(evidence_pack.get("v1", {}).get("vol_z_score", 0.0))
     context_macro = json.dumps(
         {
             "range_pct_4h": evidence_pack.get("v1", {}).get("range_pct_4h"),
@@ -389,6 +464,10 @@ def build_prompt(
         "NEVER output internal event IDs, UUIDs, hashes, route paths, or system labels.\n"
         "NEVER output system meta text such as 'Conclusion Event is rated' or any access-policy sentence.\n"
         f"Mandatory entity phrase (exact match): {unique_entity}\n"
+        f"Asset identity must appear in title and first paragraph: {asset_display} on pair {asset_pair}.\n"
+        "Title format MUST be exactly: {Asset Name} - {Structural Verdict} [Vol_Z: {Value}].\n"
+        f"Example title target: {asset_display} - {verdict_title} [Vol_Z: {vol_z:.2f}]\n"
+        "The first paragraph MUST explicitly include the full asset name with ticker and pair.\n"
         "Return strict JSON only with keys: title, body_md, jsonld.\n"
         f"event_class={event_label}\n"
         f"severity={event.get('severity')}\n"
@@ -546,6 +625,39 @@ def build_jsonld(
     }
 
 
+def format_structured_title(asset: dict[str, str], verdict_pack: dict[str, Any], evidence_pack: dict[str, Any]) -> str:
+    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
+    verdict_label = title_verdict_label(str(verdict_pack.get("structural_verdict", "")))
+    vol_z = float(evidence_pack.get("v1", {}).get("vol_z_score", 0.0))
+    return f"{display_name} - {verdict_label} [Vol_Z: {vol_z:.2f}]"
+
+
+def first_paragraph_contains_asset(body_md: str, display_name: str, pair: str) -> bool:
+    text = str(body_md or "").strip()
+    if not text:
+        return False
+    paragraphs = [segment.strip() for segment in re.split(r"\n\s*\n", text) if segment.strip()]
+    if not paragraphs:
+        return False
+    first = paragraphs[0]
+    return display_name in first and pair in first
+
+
+def enforce_asset_first_paragraph(body_md: str, locale: str, asset: dict[str, str]) -> str:
+    text = str(body_md or "").strip()
+    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
+    pair = str(asset.get("pair") or "BTC/USDT")
+    if first_paragraph_contains_asset(text, display_name, pair):
+        return text
+    if locale == "zh-tw":
+        intro = f"{display_name} 交易對 {pair} 當前處於主權結構評估區間，以下為結構證據與風險邊界。"
+    else:
+        intro = f"{display_name} on {pair} is currently under sovereign structural assessment; evidence and boundary conditions follow."
+    if not text:
+        return intro
+    return f"{intro}\n\n{text}"
+
+
 def build_mock_report(
     event: dict[str, Any],
     locale: str,
@@ -556,8 +668,10 @@ def build_mock_report(
 ) -> dict[str, Any]:
     event_type = str(event.get("event_type", "unknown"))
     event_label = humanize_event_type(event_type, locale)
-    severity = str(event.get("severity", "medium")).lower()
     observed_at = str(event.get("ts_utc", ""))
+    asset = evidence_pack.get("asset", {}) if isinstance(evidence_pack.get("asset"), dict) else {}
+    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
+    pair = str(asset.get("pair") or "BTC/USDT")
     v1 = evidence_pack.get("v1", {}) if isinstance(evidence_pack.get("v1"), dict) else {}
     v2 = evidence_pack.get("v2", {}) if isinstance(evidence_pack.get("v2"), dict) else {}
     vol_z = float(v1.get("vol_z_score", 0.0))
@@ -567,10 +681,12 @@ def build_mock_report(
     orderflow_proxy = float(v2.get("orderflow_proxy", 0.0))
     confidence = float(verdict_pack.get("confidence_score", 0.0))
     verdict_label = str(verdict_pack.get("structural_verdict", "rebalancing_watch"))
+    structured_title = format_structured_title(asset=asset, verdict_pack=verdict_pack, evidence_pack=evidence_pack)
 
     if locale == "zh-tw":
-        title = f"主權結構簡報｜{event_label}｜Vol_Z {vol_z:.2f}"
+        title = structured_title
         body_md = (
+            f"{display_name} 交易對 {pair} 正在進行主權結構裁決，當前事件分類為 {event_label}。\n\n"
             "### 市場證據\n"
             f"- 結構分類：{event_label}\n"
             f"- 觀測時間：{observed_at}\n"
@@ -584,8 +700,9 @@ def build_mock_report(
             "本報告僅提供結構判讀，不構成投資建議。若量能擴張且波動收斂，市場可能轉入再平衡；若槓桿與波動同向擴大，結構壓力將延續。"
         )
     else:
-        title = f"Sovereign Structure Brief | {event_label} | Vol_Z {vol_z:.2f}"
+        title = structured_title
         body_md = (
+            f"{display_name} on {pair} is under sovereign structural adjudication with event class {event_label}.\n\n"
             "### Market Evidence\n"
             f"- Structure class: {event_label}\n"
             f"- Observed at: {observed_at}\n"
@@ -613,8 +730,9 @@ def build_mock_report(
 
 def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsConfig) -> dict[str, Any]:
     slug = build_slug(str(event.get("event_id", "")), locale)
-    snapshot_url = f"/analysis/{slug}/snapshot.svg"
+    snapshot_url = f"/generated/snapshots/{slug}.png"
     evidence_pack, verdict_pack = build_metric_context(event=event, unique_entity=cfg.unique_entity)
+    asset = evidence_pack.get("asset", {}) if isinstance(evidence_pack.get("asset"), dict) else {}
     generated: dict[str, Any] | None = None
     if not cfg.use_mock_llm and cfg.gemini_api_key:
         prompt = build_prompt(
@@ -680,23 +798,16 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
         tail = f"核心實體：**{cfg.unique_entity}**" if locale == "zh-tw" else f"Core entity: **{cfg.unique_entity}**"
         body_md = f"{body_md}\n\n{tail}"
 
-    jsonld = generated.get("jsonld")
-    if not isinstance(jsonld, dict):
-        jsonld = build_jsonld(
-            event=event,
-            locale=locale,
-            title=title,
-            body_md=body_md,
-            unique_entity=cfg.unique_entity,
-            snapshot_url=snapshot_url,
-        )
+    body_md = enforce_asset_first_paragraph(body_md=body_md, locale=locale, asset=asset)
+    title = format_structured_title(asset=asset, verdict_pack=verdict_pack, evidence_pack=evidence_pack)
 
-    snapshot_svg = build_snapshot_svg(
-        title=title,
+    jsonld = build_jsonld(
         event=event,
-        evidence_pack=evidence_pack,
-        verdict_pack=verdict_pack,
         locale=locale,
+        title=title,
+        body_md=body_md,
+        unique_entity=cfg.unique_entity,
+        snapshot_url=snapshot_url,
     )
 
     return {
@@ -709,7 +820,7 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
         "unique_entity": cfg.unique_entity,
         "evidence_pack": evidence_pack,
         "verdict_pack": verdict_pack,
-        "snapshot_svg": snapshot_svg,
+        "snapshot_svg": "",
         "snapshot_url": snapshot_url,
     }
 
