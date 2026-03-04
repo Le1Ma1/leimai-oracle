@@ -52,7 +52,7 @@ def main() -> int:
         return 0
 
     try:
-        with psycopg.connect(**conn_kwargs) as conn:
+        with connect_with_fallback(conn_kwargs) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql_text)
             conn.commit()
@@ -79,6 +79,8 @@ def normalize_db_url(raw: str) -> str:
     user, password = userinfo.split(":", 1)
     if not password:
         return text
+    if password.startswith("[") and password.endswith("]") and len(password) >= 2:
+        password = password[1:-1]
 
     encoded_password = quote(password, safe="")
     return f"{scheme}{marker}{user}:{encoded_password}@{tail}"
@@ -109,6 +111,44 @@ def to_conn_kwargs(raw: str) -> dict[str, object]:
         "sslmode": "require",
         "connect_timeout": 12,
     }
+
+
+def connect_with_fallback(conn_kwargs: dict[str, object]):
+    ref = ""
+    supabase_url = str(os.getenv("SUPABASE_URL", "")).strip()
+    if supabase_url:
+        try:
+            ref_host = urlsplit(supabase_url).hostname or ""
+            ref = ref_host.split(".")[0]
+        except Exception:
+            ref = ""
+
+    primary_user = str(conn_kwargs.get("user") or "").strip() or "postgres"
+    candidates = [primary_user]
+    if ref:
+        candidates.append(f"postgres.{ref}")
+    candidates.append("postgres")
+    deduped = []
+    for item in candidates:
+        if item not in deduped:
+            deduped.append(item)
+
+    last_exc: Exception | None = None
+    for user in deduped:
+        trial = dict(conn_kwargs)
+        trial["user"] = user
+        try:
+            conn = psycopg.connect(**trial)
+            log_event("APPLY_SQL_CONNECT_OK", user=user)
+            return conn
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            log_event("APPLY_SQL_CONNECT_RETRY", user=user, error=str(exc).split("\n")[0])
+            continue
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("unable_to_connect")
 
 
 if __name__ == "__main__":
