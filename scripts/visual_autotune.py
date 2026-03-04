@@ -15,9 +15,9 @@ TUNE_LOG_FILE = LOGS_DIR / "visual_tune.json"
 CSS_FILE = ROOT / "support" / "web" / "ouroboros.css"
 SERVER_FILE = ROOT / "support" / "server.mjs"
 PAYWALL_NOTICE = (
-    "\u6b64\u9810\u8a00\u53d7 LeiMai \u6b0a\u9650\u5354\u8b70\u4fdd\u8b77\uff0c"
-    "\u8acb\u9023\u63a5\u51b7\u9322\u5305\u7c3d\u7f72\u300e\u929c\u5c3e\u86c7\u5951\u7d04\u300f"
-    "\u4ee5\u89e3\u9396 Alpha \u5168\u6587\u3002"
+    "此預言受 LeiMai 權限協議保護，"
+    "請連接冷錢包簽署『銜尾蛇契約』"
+    "以解鎖 Alpha 全文。"
 )
 
 
@@ -29,6 +29,7 @@ class TuneProfile:
     line_strong_alpha: float
     neon_near_alpha: float
     neon_far_alpha: float
+    glass_blur_px: int
     lock_bg_alpha: float
     lock_blur_px: int
 
@@ -47,36 +48,67 @@ def load_visual_state() -> dict[str, Any]:
     return json.loads(STATE_FILE.read_text(encoding="utf-8"))
 
 
-def choose_profile(note: str) -> TuneProfile:
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def choose_profile(note: str, state: dict[str, Any]) -> tuple[TuneProfile, list[str]]:
     text = str(note or "")
     lowered = text.lower()
+    checks = state.get("checks", {}) if isinstance(state.get("checks"), dict) else {}
+    reasons: list[str] = []
+
+    contrast_min = _safe_float(checks.get("text_contrast_min"), 0.0)
+    detail_has_analysis = bool(checks.get("detail_has_analysis", False))
+    lock_visible = bool(checks.get("paywall_lock_visible", True))
+    unlock_visible = bool(checks.get("paywall_unlock_visible", True))
+    fog_visible = bool(checks.get("paywall_fog_visible", True))
+
+    if 0 < contrast_min < 4.5:
+        reasons.append(f"contrast_low:{contrast_min:.2f}")
+    if detail_has_analysis:
+        if not lock_visible:
+            reasons.append("paywall_lock_hidden")
+        if not unlock_visible:
+            reasons.append("unlock_btn_hidden")
+        if not fog_visible:
+            reasons.append("paywall_fog_hidden")
+
     low_keywords = (
         "contrast low",
         "dim",
         "blur",
         "hazy",
-        "\u5c0d\u6bd4\u4e0d\u8db3",
-        "\u504f\u6697",
-        "\u6a21\u7cca",
-        "\u767c\u9727",
-        "\u4e0d\u6e05\u6670",
+        "對比不足",
+        "偏暗",
+        "模糊",
+        "發霧",
+        "不清晰",
     )
     high_keywords = (
         "too bright",
         "harsh",
         "overexposed",
         "too strong",
-        "\u904e\u4eae",
-        "\u523a\u773c",
-        "\u904e\u66dd",
-        "\u592a\u5f37",
-        "\u904e\u5ea6",
+        "過亮",
+        "刺眼",
+        "過曝",
+        "太強",
+        "過度",
     )
-    if any(k in lowered or k in text for k in low_keywords):
-        return TuneProfile("boost", 0.80, 0.24, 0.34, 0.52, 0.28, 0.56, 16)
+
+    if reasons or any(k in lowered or k in text for k in low_keywords):
+        if not reasons:
+            reasons.append("note_low_quality")
+        return TuneProfile("boost", 0.80, 0.24, 0.34, 0.52, 0.28, 11, 0.56, 16), reasons
+
     if any(k in lowered or k in text for k in high_keywords):
-        return TuneProfile("soft", 0.72, 0.16, 0.24, 0.32, 0.14, 0.38, 14)
-    return TuneProfile("balanced", 0.76, 0.18, 0.28, 0.42, 0.18, 0.45, 15)
+        return TuneProfile("soft", 0.72, 0.16, 0.24, 0.32, 0.14, 9, 0.38, 14), ["note_overbright"]
+
+    return TuneProfile("balanced", 0.76, 0.18, 0.28, 0.42, 0.18, 10, 0.45, 15), ["quality_stable"]
 
 
 def replace_once(text: str, pattern: str, repl: str) -> tuple[str, bool]:
@@ -84,48 +116,30 @@ def replace_once(text: str, pattern: str, repl: str) -> tuple[str, bool]:
     return new_text, count > 0
 
 
+def set_css_var(text: str, var_name: str, var_value: str) -> tuple[str, bool]:
+    pattern = rf"({re.escape(var_name)}\\s*:\\s*)([^;]+)(;)"
+    replacement = rf"\\g<1>{var_value}\\g<3>"
+    return replace_once(text, pattern, replacement)
+
+
 def tune_css(profile: TuneProfile) -> bool:
     original = CSS_FILE.read_text(encoding="utf-8")
     text = original
     changed = False
 
-    replacements = [
-        (
-            r"--panel:\s*rgba\(8,\s*10,\s*12,\s*[0-9.]+\);",
-            f"--panel: rgba(8, 10, 12, {profile.panel_alpha:.2f});",
-        ),
-        (
-            r"--line:\s*rgba\(255,\s*255,\s*255,\s*[0-9.]+\);",
-            f"--line: rgba(255, 255, 255, {profile.line_alpha:.2f});",
-        ),
-        (
-            r"--line-strong:\s*rgba\(255,\s*255,\s*255,\s*[0-9.]+\);",
-            f"--line-strong: rgba(255, 255, 255, {profile.line_strong_alpha:.2f});",
-        ),
-        (
-            r"text-shadow:\s*0 0 22px rgba\(var\(--accent-rgb\),\s*[0-9.]+\),\s*0 0 38px rgba\(var\(--accent-rgb\),\s*[0-9.]+\);",
-            (
-                "text-shadow: "
-                f"0 0 22px rgba(var(--accent-rgb), {profile.neon_near_alpha:.2f}), "
-                f"0 0 38px rgba(var(--accent-rgb), {profile.neon_far_alpha:.2f});"
-            ),
-        ),
-        (
-            r"\.lock-message\s*\{[^}]*?background:\s*rgba\(4,\s*8,\s*12,\s*[0-9.]+\);",
-            (
-                ".lock-message {\n"
-                "  border: 1px solid rgba(var(--accent-rgb), 0.45);\n"
-                f"  background: rgba(4, 8, 12, {profile.lock_bg_alpha:.2f});"
-            ),
-        ),
-        (
-            r"backdrop-filter:\s*blur\([0-9.]+px\);",
-            f"backdrop-filter: blur({profile.lock_blur_px}px);",
-        ),
-    ]
+    css_vars = {
+        "--panel": f"rgba(8, 10, 12, {profile.panel_alpha:.2f})",
+        "--line": f"rgba(255, 255, 255, {profile.line_alpha:.2f})",
+        "--line-strong": f"rgba(255, 255, 255, {profile.line_strong_alpha:.2f})",
+        "--neon-near-alpha": f"{profile.neon_near_alpha:.2f}",
+        "--neon-far-alpha": f"{profile.neon_far_alpha:.2f}",
+        "--glass-blur-px": str(profile.glass_blur_px),
+        "--lock-bg-alpha": f"{profile.lock_bg_alpha:.2f}",
+        "--lock-blur-px": str(profile.lock_blur_px),
+    }
 
-    for pattern, repl in replacements:
-        text, did = replace_once(text, pattern, repl)
+    for var_name, var_value in css_vars.items():
+        text, did = set_css_var(text, var_name, var_value)
         changed = changed or did
 
     if changed and text != original:
@@ -138,19 +152,21 @@ def tune_server_template() -> bool:
     original = SERVER_FILE.read_text(encoding="utf-8")
     pattern = r'const PAYWALL_NOTICE = ".*";'
     replacement = f'const PAYWALL_NOTICE = "{PAYWALL_NOTICE}";'
-    updated, count = re.subn(pattern, replacement, original, count=1)
+    updated, count = re.subn(pattern, lambda _m: replacement, original, count=1)
     if count > 0 and updated != original:
         SERVER_FILE.write_text(updated, encoding="utf-8")
         return True
     return False
 
 
-def write_tune_log(state: dict[str, Any], profile: TuneProfile, changed_files: list[str]) -> None:
+def write_tune_log(state: dict[str, Any], profile: TuneProfile, reasons: list[str], changed_files: list[str]) -> None:
     payload = {
         "ts_utc": utc_now_iso(),
         "source_state_ts_utc": state.get("ts_utc"),
         "visual_note": state.get("visual_note", ""),
+        "checks": state.get("checks", {}),
         "profile": profile.name,
+        "reasons": reasons,
         "changed_files": changed_files,
     }
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -165,7 +181,7 @@ def main() -> int:
         return 2
 
     note = str(state.get("visual_note", "")).strip()
-    profile = choose_profile(note)
+    profile, reasons = choose_profile(note, state)
     changed_files: list[str] = []
 
     if tune_css(profile):
@@ -173,11 +189,11 @@ def main() -> int:
     if tune_server_template():
         changed_files.append("support/server.mjs")
 
-    write_tune_log(state, profile, changed_files)
+    write_tune_log(state, profile, reasons, changed_files)
     if changed_files:
-        log_event("VISUAL_AUTOTUNE_DONE", profile=profile.name, changed_files=changed_files)
+        log_event("VISUAL_AUTOTUNE_DONE", profile=profile.name, reasons=reasons, changed_files=changed_files)
     else:
-        log_event("VISUAL_AUTOTUNE_NO_CHANGE", profile=profile.name)
+        log_event("VISUAL_AUTOTUNE_NO_CHANGE", profile=profile.name, reasons=reasons)
     return 0
 
 

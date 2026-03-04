@@ -69,6 +69,13 @@ jobs:
         run: |
           python scripts/visual_autotune.py
 
+      - name: Verify visual memory artifacts
+        run: |
+          test -s logs/current_vibe.png
+          test -s logs/visual_state.json
+          test -s logs/visual_tune.json
+          echo "visual artifacts verified"
+
       - name: Stop support server
         if: always()
         run: |

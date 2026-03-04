@@ -655,6 +655,91 @@ def _build_deploy_pool(rows: list[dict[str, object]], max_rules_per_symbol: int)
     }
 
 
+def _build_failure_breakdown(
+    *,
+    run_id: str,
+    strictness: str,
+    now_utc: datetime,
+    rows: list[dict[str, object]],
+    deploy_payload: dict[str, object],
+) -> dict[str, object]:
+    reason_counts: dict[str, int] = {}
+    trades_by_window: dict[str, dict[str, float | int]] = {}
+    for row in rows:
+        failed_reasons = row.get("failed_reasons", [])
+        if isinstance(failed_reasons, list):
+            for reason in failed_reasons:
+                key = str(reason).strip().lower()
+                if not key:
+                    continue
+                reason_counts[key] = int(reason_counts.get(key, 0)) + 1
+
+        window = str(row.get("window", "unknown"))
+        trades = int(row.get("trades", 0) or 0)
+        slot = trades_by_window.setdefault(window, {"count": 0, "trades_total": 0})
+        slot["count"] = int(slot.get("count", 0)) + 1
+        slot["trades_total"] = int(slot.get("trades_total", 0)) + trades
+
+    for window, payload in trades_by_window.items():
+        count = int(payload.get("count", 0))
+        trades_total = int(payload.get("trades_total", 0))
+        payload["trades_avg"] = float(trades_total / count) if count > 0 else 0.0
+        trades_by_window[window] = payload
+
+    def _row_view(item: dict[str, object]) -> dict[str, object]:
+        scores = item.get("scores", {})
+        if not isinstance(scores, dict):
+            scores = {}
+        return {
+            "symbol": item.get("symbol"),
+            "window": item.get("window"),
+            "gate_mode": item.get("gate_mode"),
+            "core_id": item.get("core_id", item.get("indicator_id")),
+            "rule_key": item.get("rule_key"),
+            "trades": int(item.get("trades", 0) or 0),
+            "alpha_vs_spot": float(_safe_float(item.get("alpha_vs_spot"), 0.0)),
+            "final_score": float(_safe_float(scores.get("final_score"), 0.0)),
+            "passes_validation": bool(item.get("passes_validation")),
+            "failed_reasons": item.get("failed_reasons", []),
+        }
+
+    ranked_score = sorted(
+        rows,
+        key=lambda item: _safe_float((item.get("scores", {}) or {}).get("final_score"), 0.0),
+        reverse=True,
+    )
+    ranked_alpha = sorted(
+        rows,
+        key=lambda item: _safe_float(item.get("alpha_vs_spot"), 0.0),
+        reverse=True,
+    )
+    top_by_score = [_row_view(item) for item in ranked_score[:8]]
+    top_by_alpha = [_row_view(item) for item in ranked_alpha[:8]]
+
+    pass_count = sum(1 for item in rows if bool(item.get("passes_validation")))
+    deploy_symbols = int(deploy_payload.get("total_symbols", 0) or 0)
+    deploy_rules = int(deploy_payload.get("total_rules", 0) or 0)
+    deploy_ready = bool(pass_count > 0 and deploy_symbols > 0 and deploy_rules > 0)
+    rerun_needed = not deploy_ready
+
+    return {
+        "run_id": run_id,
+        "generated_at_utc": now_utc.isoformat(),
+        "strictness": strictness,
+        "candidates_total": len(rows),
+        "candidates_passed": pass_count,
+        "failed_reason_counts": reason_counts,
+        "trades_distribution_by_window": trades_by_window,
+        "top_rules_by_final_score": top_by_score,
+        "top_rules_by_alpha_vs_spot": top_by_alpha,
+        "deploy_symbols": deploy_symbols,
+        "deploy_rules": deploy_rules,
+        "deploy_ready": deploy_ready,
+        "rerun_needed": rerun_needed,
+        "recommendation": "deploy_ready" if deploy_ready else "rerun_needed",
+    }
+
+
 def _write_validation_payloads(
     *,
     run_id: str,
@@ -687,14 +772,24 @@ def _write_validation_payloads(
         "max_rules_per_symbol": int(cfg.max_deploy_rules_per_symbol),
         **_build_deploy_pool(validation_rows, max_rules_per_symbol=cfg.max_deploy_rules_per_symbol),
     }
+    failure_payload = _build_failure_breakdown(
+        run_id=run_id,
+        strictness=strictness,
+        now_utc=now_utc,
+        rows=validation_rows,
+        deploy_payload=deploy_payload,
+    )
 
     validation_path = base_dir / "validation_report.json"
     deploy_path = base_dir / "deploy_pool.json"
+    failure_path = base_dir / "failure_breakdown.json"
     _serialize_json(validation_payload, validation_path)
     _serialize_json(deploy_payload, deploy_path)
+    _serialize_json(failure_payload, failure_path)
     return {
         "validation_report": str(validation_path),
         "deploy_pool": str(deploy_path),
+        "failure_breakdown": str(failure_path),
     }
 
 

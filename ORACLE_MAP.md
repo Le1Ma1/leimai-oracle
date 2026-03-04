@@ -2,7 +2,7 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-03T14:00:22Z`
+- Last Updated (UTC): `2026-03-04T07:34:00Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
@@ -730,6 +730,12 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 - Read/Write Isolation Review: Pass. Loop mutates only visual-layer files and logs; backend ingestion/model pipelines remain isolated.
 - Bai Ben (Minimalism) Review: Pass. Uses two lightweight scripts and one workflow without adding new infrastructure services.
 
+### [x] B25_4_1_VISUAL_HUMAN_EYE_PROBES_AND_GATING
+- Technical Dependency: `scripts/visual_snapshot.py`, `scripts/visual_autotune.py`, `.github/workflows/autonomic_evolution.yml`, `support/web/ouroboros.css`.
+- Business Value: upgraded visual memory from image-only notes to four-page snapshots (`/`, `/vault`, `/analysis/`, `/analysis/:slug`) plus DOM-level readability probes (contrast, paywall visibility, overflow, matrix background health), with workflow hard-gate on visual artifact existence.
+- Read/Write Isolation Review: Pass. Changes remain in visual QA/tuning loop and static CSS variables; engine training and ingestion are untouched.
+- Bai Ben (Minimalism) Review: Pass. Reused existing scripts/workflow with additive probes; no new service introduced.
+
 ### [x] B25_5_WEB3_PAYWALL_SIGNATURE_UNLOCK
 - Technical Dependency: `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `supabase/schema_user_access_logs.sql`, `support/.env.example`, `package.json`.
 - Business Value: added wallet challenge/signature verification flow (`personal_sign` -> `verifyMessage`) with HttpOnly signed unlock session, enabling `/analysis/:slug` full-content unlock for verified wallets.
@@ -811,7 +817,7 @@ Source of Truth for LeiMai Oracle architecture and execution status.
 
 ### [x] 視覺自覺閉環已上線（Snapshot + 記憶 + 微調）
 - Technical Dependency: `scripts/visual_snapshot.py`, `scripts/visual_autotune.py`, `.github/workflows/autonomic_evolution.yml`, `logs/visual_state.json`, `logs/current_vibe.png`.
-- Business Value: 每輪先拍首頁/詳情合成快照，生成一句視覺狀態筆記，再依記憶做小幅樣式與模板修正，讓 UI 迭代可持續且不跑偏。
+- Business Value: 每輪先拍四頁快照（`/`、`/vault`、`/analysis/`、`/analysis/:slug`），同步產出可讀性/遮罩可見性/溢位等人眼近似指標，再依記憶做小幅樣式修正，讓 UI 迭代可持續且不跑偏。
 - 讀寫分離檢查: 通過（僅視覺層與自動化流程更新，不觸碰交易引擎訓練路徑）。
 - 白賁極簡檢查: 通過（不引入新服務，維持最小腳本閉環）。
 

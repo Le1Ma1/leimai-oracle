@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #050506;
   --panel: rgba(8, 10, 12, 0.76);
   --line: rgba(255, 255, 255, 0.18);
@@ -8,8 +8,12 @@
   --accent: #c0c0c0;
   --accent-rgb: 192, 192, 192;
   --accent-shadow: rgba(192, 192, 192, 0.22);
+  --glass-blur-px: 10;
+  --neon-near-alpha: 0.42;
+  --neon-far-alpha: 0.18;
+  --lock-bg-alpha: 0.45;
+  --lock-blur-px: 15;
 }
-
 * {
   box-sizing: border-box;
 }
@@ -80,7 +84,7 @@ body.low-gpu #matrix-bg {
 
 .glass-panel {
   background: linear-gradient(165deg, rgba(8, 10, 12, 0.74), rgba(5, 6, 8, 0.82));
-  backdrop-filter: blur(15px);
+  backdrop-filter: blur(calc(var(--glass-blur-px) * 1px));
 }
 
 .cyber-border {
@@ -122,7 +126,7 @@ body.low-gpu #matrix-bg {
 
 .neon-text {
   color: #fff;
-  text-shadow: 0 0 22px rgba(var(--accent-rgb), 0.42), 0 0 38px rgba(var(--accent-rgb), 0.18);
+  text-shadow: 0 0 22px rgba(var(--accent-rgb), var(--neon-near-alpha)), 0 0 38px rgba(var(--accent-rgb), var(--neon-far-alpha));
 }
 
 .geo-badge {
@@ -414,14 +418,14 @@ body.low-gpu #matrix-bg {
 
 .lock-message {
   border: 1px solid rgba(var(--accent-rgb), 0.45);
-  background: rgba(4, 8, 12, 0.45);
+  background: rgba(4, 8, 12, var(--lock-bg-alpha));
   color: #eef3f7;
   padding: 14px 16px;
   text-align: center;
   font-size: 12px;
   line-height: 1.68;
   letter-spacing: 0.04em;
-  backdrop-filter: blur(15px);
+  backdrop-filter: blur(calc(var(--lock-blur-px) * 1px));
 }
 
 .unlock-btn {

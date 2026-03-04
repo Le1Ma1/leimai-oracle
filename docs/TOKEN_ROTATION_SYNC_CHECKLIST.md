@@ -76,3 +76,19 @@ This checklist is for post-rotation rebind only. Non-token business config can r
 - If ERC20/L2 rails are intended to be active, set:
   - Secret: `ALCHEMY_API_KEY`
   - Variables: `ETH_L1_ERC20_RECIPIENT`, `L2_NETWORK`, `L2_USDC_RECIPIENT`
+
+## 6) Google Search Console Service Account
+
+- Secret: `GOOGLE_SERVICE_ACCOUNT_JSON`
+  - Value must be the **full JSON key content** (single-line JSON is acceptable), for example fields:
+    - `type: "service_account"`
+    - `project_id`
+    - `private_key_id`
+    - `private_key`
+    - `client_email`
+    - `client_id`
+    - `token_uri`
+- Secret/Variable: `GSC_SITE_URL`
+  - Use canonical property URL with trailing slash, e.g. `https://leimai.io/`
+- Required Search Console grant:
+  - Add service account `client_email` as Owner/Full user on `https://leimai.io/` property.

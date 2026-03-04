@@ -48,6 +48,7 @@ def main() -> int:
                 summary_path=args.summary_path,
                 validation_report=paths.get("validation_report"),
                 deploy_pool=paths.get("deploy_pool"),
+                failure_breakdown=paths.get("failure_breakdown"),
             )
             return 0
         except Exception as error:

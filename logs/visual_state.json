@@ -1,10 +1,136 @@
 {
-  "ts_utc": "2026-03-04T07:07:39Z",
+  "ts_utc": "2026-03-04T07:35:16Z",
   "base_url": "http://127.0.0.1:4310",
   "home_url": "http://127.0.0.1:4310/",
+  "vault_url": "http://127.0.0.1:4310/vault",
+  "index_url": "http://127.0.0.1:4310/analysis/",
   "detail_url": "http://127.0.0.1:4310/analysis/non-existent",
+  "pages_checked": [
+    "http://127.0.0.1:4310/",
+    "http://127.0.0.1:4310/vault",
+    "http://127.0.0.1:4310/analysis/",
+    "http://127.0.0.1:4310/analysis/non-existent"
+  ],
+  "dominant_palette": "Platinum Silver",
+  "contrast_status": "high",
+  "paywall_visibility_status": "not_applicable",
+  "checks": {
+    "text_contrast_min": 11.26,
+    "text_contrast_avg": 18.62,
+    "paywall_lock_visible": false,
+    "paywall_unlock_visible": false,
+    "paywall_fog_visible": false,
+    "detail_has_analysis": false,
+    "matrix_canvas_visible": true,
+    "low_gpu_mode": false,
+    "has_horizontal_overflow": false,
+    "issues": [],
+    "issue_count": 0,
+    "pages": {
+      "home": {
+        "url": "http://127.0.0.1:4310/",
+        "title": "LeiMai Oracle | Ouroboros Root Authority",
+        "low_gpu_mode": false,
+        "matrix_canvas_visible": true,
+        "has_report_article": false,
+        "has_paywall_shell": false,
+        "paywall_lock_visible": false,
+        "paywall_unlock_visible": false,
+        "paywall_fog_visible": false,
+        "has_horizontal_overflow": false,
+        "text_nodes": 2,
+        "body_font_px": 16,
+        "body_line_height_px": 24.8,
+        "accent_css": "#C0C0C0",
+        "contrast_samples": {
+          "hero_title": 20.48,
+          "panel_text": 18.71,
+          "paywall_message": null,
+          "unlock_button": null,
+          "article_text": null
+        },
+        "text_contrast_min": 18.71,
+        "text_contrast_avg": 19.59
+      },
+      "vault": {
+        "url": "http://127.0.0.1:4310/vault",
+        "title": "LeiMai Oracle | Vault Preheat",
+        "low_gpu_mode": false,
+        "matrix_canvas_visible": true,
+        "has_report_article": false,
+        "has_paywall_shell": false,
+        "paywall_lock_visible": false,
+        "paywall_unlock_visible": true,
+        "paywall_fog_visible": false,
+        "has_horizontal_overflow": false,
+        "text_nodes": 1,
+        "body_font_px": 16,
+        "body_line_height_px": 24.8,
+        "accent_css": "#C0C0C0",
+        "contrast_samples": {
+          "hero_title": 20.48,
+          "panel_text": 18.71,
+          "paywall_message": 18.34,
+          "unlock_button": 11.26,
+          "article_text": null
+        },
+        "text_contrast_min": 11.26,
+        "text_contrast_avg": 17.2
+      },
+      "index": {
+        "url": "http://127.0.0.1:4310/analysis/",
+        "title": "LeiMai Oracle | Analysis Matrix",
+        "low_gpu_mode": false,
+        "matrix_canvas_visible": true,
+        "has_report_article": false,
+        "has_paywall_shell": false,
+        "paywall_lock_visible": false,
+        "paywall_unlock_visible": false,
+        "paywall_fog_visible": false,
+        "has_horizontal_overflow": false,
+        "text_nodes": 2,
+        "body_font_px": 16,
+        "body_line_height_px": 24.8,
+        "accent_css": "#C0C0C0",
+        "contrast_samples": {
+          "hero_title": 20.48,
+          "panel_text": 18.71,
+          "paywall_message": null,
+          "unlock_button": null,
+          "article_text": null
+        },
+        "text_contrast_min": 18.71,
+        "text_contrast_avg": 19.59
+      },
+      "detail": {
+        "url": "http://127.0.0.1:4310/analysis/non-existent",
+        "title": "Not Found | Analysis",
+        "low_gpu_mode": false,
+        "matrix_canvas_visible": true,
+        "has_report_article": false,
+        "has_paywall_shell": false,
+        "paywall_lock_visible": false,
+        "paywall_unlock_visible": false,
+        "paywall_fog_visible": false,
+        "has_horizontal_overflow": false,
+        "text_nodes": 1,
+        "body_font_px": 16,
+        "body_line_height_px": 24.8,
+        "accent_css": "#C0C0C0",
+        "contrast_samples": {
+          "hero_title": 18.71,
+          "panel_text": 17.51,
+          "paywall_message": null,
+          "unlock_button": null,
+          "article_text": null
+        },
+        "text_contrast_min": 17.51,
+        "text_contrast_avg": 18.11
+      }
+    }
+  },
   "model": "fallback",
-  "visual_note": "Current palette leans Platinum Silver, obsidian background remains stable, and the paywall zone keeps clear high contrast.",
+  "visual_note": "Current palette leans Platinum Silver, minimum text contrast is 11.26, obsidian background status is stable, and paywall visibility is not_applicable.",
   "assets": {
     "merged_png": "logs/current_vibe.png"
   }
