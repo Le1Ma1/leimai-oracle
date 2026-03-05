@@ -64,6 +64,18 @@ Skip ingestion and only run iterative optimization:
 python scripts/alpha_supervisor.py --max-rounds 2 --skip-ingest
 ```
 
+Dual-track BTC execution (legacy model + new nonlinear grid model):
+
+```bash
+python scripts/btc_phase_runner.py --profile dual_track_train --wait-existing
+```
+
+New-model only branch (still generates legacy progress report first):
+
+```bash
+python scripts/btc_phase_runner.py --profile nonlinear_grid_v1 --wait-existing
+```
+
 ## Run Scheduler
 
 ```bash

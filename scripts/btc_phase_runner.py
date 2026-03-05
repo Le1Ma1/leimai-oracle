@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -16,6 +17,8 @@ READ_RETRY_BACKOFF = 1.7
 @dataclass(frozen=True)
 class PhaseTarget:
     name: str
+    validation_mode: str
+    validation_strictness: str
     pass_rate: float
     deploy_symbols: int
     deploy_rules: int
@@ -26,9 +29,9 @@ class PhaseTarget:
     max_rounds: int
 
 
-def _run(cmd: list[str], cwd: Path) -> None:
+def _run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
     print(f"[run] {' '.join(cmd)}")
-    proc = subprocess.run(cmd, cwd=str(cwd), check=False)
+    proc = subprocess.run(cmd, cwd=str(cwd), env=env, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
 
@@ -55,7 +58,9 @@ def _load_json(path: Path) -> dict:
     return {}
 
 
-def _ensure_validate_sync(repo_root: Path, summary_path: Path) -> None:
+def _ensure_validate_sync(repo_root: Path, summary_path: Path, strictness: str) -> None:
+    env = dict(os.environ)
+    env["ENGINE_VALIDATION_STRICTNESS"] = str(strictness).strip().lower()
     _run(
         [
             "python",
@@ -67,6 +72,7 @@ def _ensure_validate_sync(repo_root: Path, summary_path: Path) -> None:
             str(summary_path),
         ],
         cwd=repo_root,
+        env=env,
     )
 
 
@@ -176,6 +182,8 @@ def _launch_phase(repo_root: Path, phase: PhaseTarget, monitor_interval: float) 
         f"{phase.deploy_alpha:.2f}",
         "--stable-rounds",
         str(max(1, int(phase.stable_rounds))),
+        "--validation-mode",
+        str(phase.validation_mode),
         "--with-monitor",
         "--monitor-interval",
         f"{max(0.2, float(monitor_interval))}",
@@ -183,8 +191,33 @@ def _launch_phase(repo_root: Path, phase: PhaseTarget, monitor_interval: float) 
     _run(cmd, cwd=repo_root)
 
 
+def _run_ml_progress_report(repo_root: Path) -> None:
+    _run(["python", "scripts/ml_progress_report.py"], cwd=repo_root)
+
+
+def _run_nonlinear_grid_backtest(repo_root: Path) -> None:
+    _run(
+        [
+            "python",
+            "scripts/nonlinear_grid_backtest.py",
+            "--symbol",
+            "BTCUSDT",
+            "--max-bars",
+            "300000",
+        ],
+        cwd=repo_root,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BTC first-principles phase runner (bootstrap -> institutional ramp).")
+    parser.add_argument(
+        "--profile",
+        type=str,
+        choices=("deploy_recovery", "institutional_ramp", "nonlinear_grid_v1", "dual_track_train"),
+        default="deploy_recovery",
+        help="Execution profile.",
+    )
     parser.add_argument("--wait-existing", action="store_true", help="Wait for any active supervisor/iterate before starting.")
     parser.add_argument("--monitor-interval", type=float, default=2.0, help="Monitor refresh interval in seconds.")
     parser.add_argument("--poll-sec", type=int, default=20, help="Polling interval when waiting for active runs.")
@@ -196,37 +229,125 @@ def main() -> int:
     if args.wait_existing:
         _wait_for_no_supervisor(repo_root=repo_root, poll_sec=max(5, int(args.poll_sec)))
 
-    phases = [
-        PhaseTarget(
-            name="stage1_balanced",
-            pass_rate=0.40,
-            deploy_symbols=1,
-            deploy_rules=2,
-            all_alpha=-3.0,
-            deploy_alpha=0.0,
-            stable_rounds=1,
-            cycles=2,
-            max_rounds=2,
-        ),
-        PhaseTarget(
-            name="stage2_institutional",
-            pass_rate=0.55,
-            deploy_symbols=1,
-            deploy_rules=3,
-            all_alpha=0.0,
-            deploy_alpha=0.0,
-            stable_rounds=1,
-            cycles=2,
-            max_rounds=2,
-        ),
-    ]
+    _run_ml_progress_report(repo_root=repo_root)
+
+    run_new_model = False
+    if args.profile == "deploy_recovery":
+        phases = [
+            PhaseTarget(
+                name="stage1_deploy_recovery",
+                validation_mode="recovery",
+                validation_strictness="recovery",
+                pass_rate=0.01,
+                deploy_symbols=1,
+                deploy_rules=1,
+                all_alpha=-8.0,
+                deploy_alpha=-1.0,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+            PhaseTarget(
+                name="stage2_deploy_lock",
+                validation_mode="recovery",
+                validation_strictness="recovery",
+                pass_rate=0.05,
+                deploy_symbols=1,
+                deploy_rules=2,
+                all_alpha=-8.0,
+                deploy_alpha=-0.5,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+        ]
+    elif args.profile == "nonlinear_grid_v1":
+        phases = [
+            PhaseTarget(
+                name="stage_institutional_ramp",
+                validation_mode="standard",
+                validation_strictness="balanced",
+                pass_rate=0.20,
+                deploy_symbols=1,
+                deploy_rules=2,
+                all_alpha=-2.0,
+                deploy_alpha=0.0,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+        ]
+        run_new_model = True
+    elif args.profile == "dual_track_train":
+        phases = [
+            PhaseTarget(
+                name="stage1_deploy_recovery",
+                validation_mode="recovery",
+                validation_strictness="recovery",
+                pass_rate=0.01,
+                deploy_symbols=1,
+                deploy_rules=1,
+                all_alpha=-8.0,
+                deploy_alpha=-1.0,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+            PhaseTarget(
+                name="stage2_deploy_lock",
+                validation_mode="recovery",
+                validation_strictness="recovery",
+                pass_rate=0.05,
+                deploy_symbols=1,
+                deploy_rules=2,
+                all_alpha=-8.0,
+                deploy_alpha=-0.5,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+            PhaseTarget(
+                name="stage_institutional_ramp",
+                validation_mode="standard",
+                validation_strictness="balanced",
+                pass_rate=0.20,
+                deploy_symbols=1,
+                deploy_rules=2,
+                all_alpha=-2.0,
+                deploy_alpha=0.0,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+        ]
+        run_new_model = True
+    else:
+        phases = [
+            PhaseTarget(
+                name="stage_institutional_ramp",
+                validation_mode="standard",
+                validation_strictness="balanced",
+                pass_rate=0.20,
+                deploy_symbols=1,
+                deploy_rules=2,
+                all_alpha=-2.0,
+                deploy_alpha=0.0,
+                stable_rounds=1,
+                cycles=2,
+                max_rounds=2,
+            ),
+        ]
 
     for phase in phases:
         summary_path = _latest_summary_path(artifact_root=artifact_root)
         if summary_path is None:
             raise RuntimeError("No summary.json found under engine/artifacts/optimization/single.")
 
-        _ensure_validate_sync(repo_root=repo_root, summary_path=summary_path)
+        _ensure_validate_sync(
+            repo_root=repo_root,
+            summary_path=summary_path,
+            strictness=phase.validation_strictness,
+        )
         base = summary_path.parent
         summary = _load_json(base / "summary.json")
         validation = _load_json(base / "validation_report.json")
@@ -244,7 +365,11 @@ def main() -> int:
         summary_path = _latest_summary_path(artifact_root=artifact_root)
         if summary_path is None:
             raise RuntimeError(f"Phase {phase.name} finished but no summary.json found.")
-        _ensure_validate_sync(repo_root=repo_root, summary_path=summary_path)
+        _ensure_validate_sync(
+            repo_root=repo_root,
+            summary_path=summary_path,
+            strictness=phase.validation_strictness,
+        )
 
         base = summary_path.parent
         summary = _load_json(base / "summary.json")
@@ -252,6 +377,9 @@ def main() -> int:
         deploy = _load_json(base / "deploy_pool.json")
         metrics = _collect_metrics(summary=summary, validation=validation, deploy=deploy)
         _print_metrics(prefix=f"after {phase.name}", metrics=metrics)
+
+    if run_new_model:
+        _run_nonlinear_grid_backtest(repo_root=repo_root)
 
     print("[done] BTC phase runner completed all stages.")
     return 0

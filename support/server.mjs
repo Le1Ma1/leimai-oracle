@@ -514,7 +514,6 @@ function buildStaticSitemapPaths() {
     "/analysis/",
     "/vault",
     "/forge",
-    "/game",
     "/en/",
     "/zh-tw/",
     "/es/",
@@ -531,10 +530,6 @@ function buildStaticSitemapPaths() {
     "/zh-tw/forge",
     "/es/forge",
     "/ja/forge",
-    "/en/game",
-    "/zh-tw/game",
-    "/es/game",
-    "/ja/game",
   ];
 }
 
@@ -2652,16 +2647,6 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     textResponse(res, 200, js, "application/javascript; charset=utf-8");
     return true;
   }
-  if (routePath === "/assets/game.css") {
-    const css = await fs.readFile(path.join(__dirname, "web", "game.css"), "utf-8");
-    textResponse(res, 200, css, "text/css; charset=utf-8");
-    return true;
-  }
-  if (routePath === "/assets/game.js") {
-    const js = await fs.readFile(path.join(__dirname, "web", "game.js"), "utf-8");
-    textResponse(res, 200, js, "application/javascript; charset=utf-8");
-    return true;
-  }
   if (routePath === "/assets/social-card.svg") {
     textResponse(res, 200, buildSocialCardSvg(), "image/svg+xml; charset=utf-8");
     return true;
@@ -2772,7 +2757,12 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     return true;
   }
   if (routePath === "/game") {
-    textResponse(res, 200, renderWorldGamePage(locale), "text/html; charset=utf-8");
+    const localePrefix = localeByPath ? `/${localeByPath}` : "";
+    res.writeHead(301, {
+      Location: `${localePrefix}/analysis/`,
+      "Cache-Control": "public, max-age=86400",
+    });
+    res.end();
     return true;
   }
 
@@ -3470,134 +3460,17 @@ export async function handleRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, ...status.invoice });
     }
 
-    if ((method === "GET" || method === "POST") && pathname === "/api/genesis") {
-      if (!checkRateLimit(req, "worldforge_genesis", CONFIG.rateLimitPerMinute * 3)) {
-        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
-      }
-      let latRaw = searchParams.get("lat");
-      let lngRaw = searchParams.get("lng");
-      if (method === "POST") {
-        const body = await parseJsonBody(req).catch(() => ({}));
-        latRaw = body?.lat ?? latRaw;
-        lngRaw = body?.lng ?? lngRaw;
-      }
-      const normalized = normalizeCoordinatePair(latRaw, lngRaw);
-      if (!normalized.ok) {
-        return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
-      }
-      const payload = await buildGenesisPayload({ lat: normalized.lat, lng: normalized.lng });
-      if (!payload?.ok) {
-        return jsonResponse(res, 500, { ok: false, error: "genesis_failed" });
-      }
-      return jsonResponse(res, 200, payload);
-    }
-
-    if (method === "GET" && pathname === "/api/space") {
-      if (!checkRateLimit(req, "worldforge_space", CONFIG.rateLimitPerMinute * 3)) {
-        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
-      }
-      const normalized = normalizeCoordinatePair(searchParams.get("lat"), searchParams.get("lng"));
-      if (!normalized.ok) {
-        return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
-      }
-      const zoom = Number(searchParams.get("zoom") || 0);
-      const payload = await buildSpacePayload({
-        lat: normalized.lat,
-        lng: normalized.lng,
-        zoom: Number.isFinite(zoom) ? zoom : 0,
-      });
-      return jsonResponse(res, 200, payload);
-    }
-
-    if (method === "POST" && pathname === "/api/canonize/create") {
-      if (!checkRateLimit(req, "worldforge_canon_create", CONFIG.rateLimitPerMinute)) {
-        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
-      }
-      const body = await parseJsonBody(req).catch(() => ({}));
-      const seedHashInput = String(body?.seed_hash || "").trim().toLowerCase();
-      let seedHash = seedHashInput;
-      let normalized = null;
-      if (body?.lat != null && body?.lng != null) {
-        normalized = normalizeCoordinatePair(body.lat, body.lng);
-        if (!normalized.ok) {
-          return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
-        }
-      }
-      if (!seedHash && normalized?.ok) {
-        seedHash = seedHashFromCell(
-          normalized.lat,
-          normalized.lng,
-          CONFIG.worldCellDecimals,
-          CONFIG.sessionSecret || "worldforge-v1",
-        ).seedHash;
-      }
-      if (!seedHash) {
-        return jsonResponse(res, 400, { ok: false, error: "seed_hash_required" });
-      }
-
-      const exists = await fetchWorldEntityBySeed(seedHash);
-      if ((!exists.ok || !exists.row) && normalized?.ok) {
-        await buildGenesisPayload({ lat: normalized.lat, lng: normalized.lng });
-      }
-
-      const invoice = buildCanonizationInvoiceRecord({
-        seedHash,
-        paymentRail: body?.payment_rail || CONFIG.canonizationRail,
-      });
-      const recorded = await recordPaymentInvoice(invoice);
-      if (!recorded.ok) {
-        return jsonResponse(res, 500, { ok: false, error: recorded.error || "canon_invoice_failed" });
-      }
-      return jsonResponse(res, 200, {
-        ok: true,
-        seed_hash: seedHash,
-        invoice_id: invoice.invoice_id,
-        status: invoice.status,
-        amount_usdt: invoice.amount_usdt,
-        pay_to_address: invoice.pay_to_address,
-        expires_at_utc: invoice.expires_at_utc,
-        payment_rail: String(invoice?.meta?.payment_rail || CONFIG.canonizationRail),
-      });
-    }
-
-    if (method === "GET" && pathname === "/api/canonize/confirm") {
-      if (!checkRateLimit(req, "worldforge_canon_confirm", CONFIG.rateLimitPerMinute * 4)) {
-        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
-      }
-      const invoiceId = String(searchParams.get("invoice_id") || "").trim();
-      if (!invoiceId) {
-        return jsonResponse(res, 400, { ok: false, error: "invoice_id_required" });
-      }
-      const invoiceRead = await fetchPaymentInvoiceLoose(invoiceId);
-      if (!invoiceRead.ok) {
-        return jsonResponse(res, 404, { ok: false, error: invoiceRead.error || "invoice_not_found" });
-      }
-      const invoice = invoiceRead.invoice || {};
-      const meta = invoice.meta && typeof invoice.meta === "object" ? invoice.meta : {};
-      const seedHash = String(searchParams.get("seed_hash") || meta.seed_hash || "").trim().toLowerCase();
-      if (!seedHash) {
-        return jsonResponse(res, 400, { ok: false, error: "seed_hash_required" });
-      }
-      if (String(invoice.status || "pending") !== "paid") {
-        return jsonResponse(res, 200, {
-          ok: true,
-          fixed: false,
-          status: String(invoice.status || "pending"),
-          seed_hash: seedHash,
-          invoice_id: invoiceId,
-        });
-      }
-      const fixed = await applyCanonizationFix(seedHash);
-      if (!fixed.ok) {
-        return jsonResponse(res, 500, { ok: false, error: fixed.error || "canonization_failed" });
-      }
-      return jsonResponse(res, 200, {
-        ok: true,
-        fixed: true,
-        status: "paid",
-        seed_hash: seedHash,
-        invoice_id: invoiceId,
-        fixed_until: fixed.fixed_until,
+    const retiredGameApi = new Set([
+      "/api/genesis",
+      "/api/space",
+      "/api/canonize/create",
+      "/api/canonize/confirm",
+    ]);
+    if (retiredGameApi.has(pathname)) {
+      return jsonResponse(res, 410, {
+        ok: false,
+        error: "endpoint_retired",
+        message: "Worldforge game APIs are retired.",
       });
     }
 
