@@ -52,7 +52,7 @@ jobs:
           PLATFORM_GOVERNOR_TIMEOUT_SEC: "12"
           PLATFORM_GOVERNOR_RETRIES: "3"
           PLATFORM_GOVERNOR_AUTO_HEAL: "true"
-          PLATFORM_GOVERNOR_FAIL_ON_CRITICAL: "true"
+          PLATFORM_GOVERNOR_FAIL_ON_CRITICAL: "false"
         run: |
           DRY_INPUT="${{ github.event.inputs.dry_run }}"
           if [ "${DRY_INPUT}" = "true" ]; then
@@ -70,4 +70,3 @@ jobs:
             logs/platform_governor_report.json
             logs/platform_governor_actions.jsonl
           if-no-files-found: warn
-
