@@ -68,6 +68,22 @@ STRUCTURAL_VERDICT_LABELS: dict[str, str] = {
     "rebalancing_watch": "Rebalancing Watch",
 }
 
+NARRATIVE_METRIC_NAMES: tuple[str, ...] = (
+    "volatility",
+    "open_interest",
+    "orderflow",
+    "structure_shift",
+    "rsi_momentum",
+)
+
+NARRATIVE_METRIC_LABELS: dict[str, str] = {
+    "volatility": "Volatility",
+    "open_interest": "Open Interest",
+    "orderflow": "Orderflow",
+    "structure_shift": "Structure Shift",
+    "rsi_momentum": "RSI Momentum",
+}
+
 
 @dataclass(frozen=True)
 class ReportsConfig:
@@ -269,6 +285,110 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, value)))
 
 
+def _normalize_metric_weights(scores: dict[str, float]) -> dict[str, float]:
+    cleaned = {k: max(0.0, float(v)) for k, v in scores.items()}
+    total = sum(cleaned.values())
+    if total <= 0:
+        uniform = round(1.0 / max(1, len(NARRATIVE_METRIC_NAMES)), 4)
+        return {name: uniform for name in NARRATIVE_METRIC_NAMES}
+    weights = {k: round(v / total, 4) for k, v in cleaned.items()}
+    drift = round(1.0 - sum(weights.values()), 4)
+    if abs(drift) > 0 and weights:
+        first_key = next(iter(weights))
+        weights[first_key] = round(weights[first_key] + drift, 4)
+    return weights
+
+
+def build_narrative_trends(v1: dict[str, Any], v2: dict[str, Any], verdict_pack: dict[str, Any]) -> dict[str, Any]:
+    vol_z = abs(float(v1.get("vol_z_score", 0.0)))
+    k_delta = abs(float(v1.get("k_line_delta", 0.0)))
+    oi_stress = abs(float(v1.get("open_interest_stress", 0.0)))
+    oi_drop = abs(float(v1.get("open_interest_drop_pct", 0.0)))
+    bias = float(v1.get("sovereign_bias_mapped", 50.0))
+    regime_pressure = float(v2.get("regime_pressure", 0.0))
+    orderflow_proxy = float(v2.get("orderflow_proxy", 0.0))
+    depth_imbalance = float(v2.get("depth_imbalance_proxy", 0.0))
+    confidence = float(verdict_pack.get("confidence_score", 0.0))
+
+    rsi_proxy = _clamp(50.0 + (k_delta * 5.4) - (vol_z * 2.1), 0.0, 100.0)
+    raw_scores = {
+        "volatility": (vol_z * 28.0) + (regime_pressure * 0.72) + (confidence * 0.18),
+        "open_interest": (oi_stress * 30.0) + (oi_drop * 2.1) + (regime_pressure * 0.42),
+        "orderflow": (orderflow_proxy * 0.62) + (depth_imbalance * 0.38),
+        "structure_shift": (k_delta * 30.0) + (abs(bias - 50.0) * 1.3) + (regime_pressure * 0.48),
+        "rsi_momentum": (abs(rsi_proxy - 50.0) * 1.36) + (k_delta * 16.0) + (confidence * 0.26),
+    }
+    for key in NARRATIVE_METRIC_NAMES:
+        raw_scores.setdefault(key, 0.0)
+    weights = _normalize_metric_weights(raw_scores)
+    sorted_metrics = sorted(weights.items(), key=lambda item: item[1], reverse=True)
+    leaders = [
+        {
+            "metric": metric,
+            "label": NARRATIVE_METRIC_LABELS.get(metric, metric.title()),
+            "weight": round(weight, 4),
+            "raw_score": round(float(raw_scores.get(metric, 0.0)), 2),
+        }
+        for metric, weight in sorted_metrics[:3]
+    ]
+    return {
+        "updated_at_utc": iso_utc(utc_now()),
+        "auto_weight_mode": "adaptive_crypto_narrative_v1",
+        "weights": weights,
+        "active_leaders": leaders,
+        "rsi_proxy": round(rsi_proxy, 2),
+    }
+
+
+def _score_grade(score: float) -> str:
+    if score >= 90:
+        return "A+"
+    if score >= 82:
+        return "A"
+    if score >= 74:
+        return "B"
+    if score >= 66:
+        return "C"
+    return "D"
+
+
+def build_sovereign_scorecard(v1: dict[str, Any], v2: dict[str, Any], verdict_pack: dict[str, Any], narrative: dict[str, Any]) -> dict[str, Any]:
+    vol_z = abs(float(v1.get("vol_z_score", 0.0)))
+    k_delta = abs(float(v1.get("k_line_delta", 0.0)))
+    oi_stress = abs(float(v1.get("open_interest_stress", 0.0)))
+    oi_drop = abs(float(v1.get("open_interest_drop_pct", 0.0)))
+    bias = float(v1.get("sovereign_bias_mapped", 50.0))
+    regime_pressure = float(v2.get("regime_pressure", 0.0))
+    orderflow_proxy = float(v2.get("orderflow_proxy", 0.0))
+    confidence = float(verdict_pack.get("confidence_score", 0.0))
+
+    top_weight = 0.0
+    top_leaders = narrative.get("active_leaders", []) if isinstance(narrative, dict) else []
+    if isinstance(top_leaders, list) and top_leaders:
+        top_weight = float(top_leaders[0].get("weight", 0.0))
+
+    criteria = {
+        "evidence_integrity": _clamp(58.0 + (vol_z * 6.1) + (k_delta * 4.8), 0.0, 100.0),
+        "regime_alignment": _clamp(52.0 + (regime_pressure * 0.52) + (abs(bias - 50.0) * 0.56), 0.0, 100.0),
+        "liquidity_stress": _clamp(46.0 + (oi_stress * 24.0) + (oi_drop * 0.9), 0.0, 100.0),
+        "orderflow_conviction": _clamp(45.0 + (orderflow_proxy * 0.55), 0.0, 100.0),
+        "seo_geo_density": _clamp(60.0 + (confidence * 0.22) + (top_weight * 100.0 * 0.24), 0.0, 100.0),
+    }
+    final_score = (
+        criteria["evidence_integrity"] * 0.24
+        + criteria["regime_alignment"] * 0.22
+        + criteria["liquidity_stress"] * 0.18
+        + criteria["orderflow_conviction"] * 0.16
+        + criteria["seo_geo_density"] * 0.20
+    )
+    return {
+        "version": "sovereign-scorecard-v1",
+        "final_score": round(final_score, 2),
+        "grade": _score_grade(final_score),
+        "criteria": {k: round(v, 2) for k, v in criteria.items()},
+    }
+
+
 def build_metric_context(event: dict[str, Any], unique_entity: str) -> tuple[dict[str, Any], dict[str, Any]]:
     payload = event.get("payload")
     event_type = str(event.get("event_type", ""))
@@ -324,6 +444,11 @@ def build_metric_context(event: dict[str, Any], unique_entity: str) -> tuple[dic
         "alpha_posture": alpha_posture,
         "restriction": "locked_for_unsigned_users",
     }
+    narrative_trends = build_narrative_trends(evidence_pack["v1"], evidence_pack["v2"], verdict_pack)
+    scorecard = build_sovereign_scorecard(evidence_pack["v1"], evidence_pack["v2"], verdict_pack, narrative_trends)
+    evidence_pack["narrative_trends"] = narrative_trends
+    evidence_pack["scoring_standard"] = scorecard
+    verdict_pack["sovereign_score"] = scorecard["final_score"]
     return evidence_pack, verdict_pack
 
 
@@ -407,6 +532,54 @@ def build_snapshot_svg(
     )
 
 
+def _top_narrative_metric(evidence_pack: dict[str, Any]) -> str:
+    narrative = evidence_pack.get("narrative_trends") if isinstance(evidence_pack, dict) else {}
+    if not isinstance(narrative, dict):
+        return "volatility"
+    leaders = narrative.get("active_leaders")
+    if isinstance(leaders, list) and leaders:
+        first = leaders[0]
+        if isinstance(first, dict):
+            metric = str(first.get("metric") or "").strip().lower()
+            if metric:
+                return metric
+    weights = narrative.get("weights")
+    if isinstance(weights, dict) and weights:
+        ranked = sorted(
+            ((str(k).strip().lower(), float(v)) for k, v in weights.items()),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if ranked:
+            return ranked[0][0]
+    return "volatility"
+
+
+def _long_tail_phrase(verdict_key: str, top_metric: str) -> str:
+    verdict = str(verdict_key or "").strip().lower()
+    metric = str(top_metric or "").strip().lower()
+    if verdict == "structural_stress_expansion":
+        return "Re-pricing Imminent: 1m Anomaly & 4h Resistance Clash"
+    if verdict == "liquidity_friction_persistent":
+        if metric == "open_interest":
+            return "Liquidity Compression: 1m OI Shock & 4h Supply Barrier"
+        if metric == "orderflow":
+            return "Orderflow Fracture: 1m Absorption Test vs 4h Ceiling"
+        return "Friction Persistence: 1m Instability & 4h Structural Hold"
+    if metric == "rsi_momentum":
+        return "Momentum Divergence: 1m Whipsaw vs 4h Boundary"
+    return "Rebalancing Window: 1m Impulse vs 4h Equilibrium Wall"
+
+
+def build_long_tail_title(asset: dict[str, str], verdict_pack: dict[str, Any], evidence_pack: dict[str, Any]) -> str:
+    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
+    vol_z = float(evidence_pack.get("v1", {}).get("vol_z_score", 0.0))
+    verdict_key = str(verdict_pack.get("structural_verdict", "rebalancing_watch"))
+    top_metric = _top_narrative_metric(evidence_pack)
+    phrase = _long_tail_phrase(verdict_key, top_metric)
+    return f"{display_name} {phrase} [Vol_Z: {vol_z:.2f}]"
+
+
 def build_prompt(
     event: dict[str, Any],
     locale: str,
@@ -418,8 +591,10 @@ def build_prompt(
     asset = evidence_pack.get("asset", {}) if isinstance(evidence_pack.get("asset"), dict) else {}
     asset_display = str(asset.get("display_name") or "Bitcoin (BTC)")
     asset_pair = str(asset.get("pair") or "BTC/USDT")
-    verdict_title = title_verdict_label(str(verdict_pack.get("structural_verdict", "")))
     vol_z = float(evidence_pack.get("v1", {}).get("vol_z_score", 0.0))
+    title_target = build_long_tail_title(asset, verdict_pack, evidence_pack)
+    narrative_payload = evidence_pack.get("narrative_trends", {}) if isinstance(evidence_pack.get("narrative_trends"), dict) else {}
+    scorecard_payload = evidence_pack.get("scoring_standard", {}) if isinstance(evidence_pack.get("scoring_standard"), dict) else {}
     context_macro = json.dumps(
         {
             "range_pct_4h": evidence_pack.get("v1", {}).get("range_pct_4h"),
@@ -439,6 +614,8 @@ def build_prompt(
         ensure_ascii=False,
         sort_keys=True,
     )
+    context_narrative = json.dumps(narrative_payload, ensure_ascii=False, sort_keys=True)
+    context_scorecard = json.dumps(scorecard_payload, ensure_ascii=False, sort_keys=True)
     context_verdict = json.dumps(verdict_pack, ensure_ascii=False, sort_keys=True)
     event_label = humanize_event_type(str(event.get("event_type", "")), locale)
     if locale == "zh-tw":
@@ -465,15 +642,20 @@ def build_prompt(
         "NEVER output system meta text such as 'Conclusion Event is rated' or any access-policy sentence.\n"
         f"Mandatory entity phrase (exact match): {unique_entity}\n"
         f"Asset identity must appear in title and first paragraph: {asset_display} on pair {asset_pair}.\n"
-        "Title format MUST be exactly: {Asset Name} - {Structural Verdict} [Vol_Z: {Value}].\n"
-        f"Example title target: {asset_display} - {verdict_title} [Vol_Z: {vol_z:.2f}]\n"
+        "Title format MUST be exactly: {Asset Name} {Long-tail phrase} [Vol_Z: {Value}].\n"
+        "Long-tail phrase MUST include 1m and 4h framing language.\n"
+        f"Example title target: {title_target}\n"
+        f"Vol_Z guidance value: {vol_z:.2f}\n"
         "The first paragraph MUST explicitly include the full asset name with ticker and pair.\n"
+        "Prioritize the top two narrative metrics by weight and reflect them in wording.\n"
         "Return strict JSON only with keys: title, body_md, jsonld.\n"
         f"event_class={event_label}\n"
         f"severity={event.get('severity')}\n"
         f"event_ts_utc={event.get('ts_utc')}\n"
         f"context_macro_4h={context_macro}\n"
         f"context_micro_1m={context_micro}\n"
+        f"context_narrative_weights={context_narrative}\n"
+        f"context_internal_scorecard={context_scorecard}\n"
         f"context_verdict={context_verdict}\n"
         f"payload={payload_text}\n"
     )
@@ -579,11 +761,41 @@ def build_jsonld(
     body_md: str,
     unique_entity: str,
     snapshot_url: str,
+    evidence_pack: dict[str, Any] | None = None,
+    verdict_pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     event_id = str(event.get("event_id", ""))
     summary = body_md.replace("\n", " ").strip()[:460]
     canonical = f"https://leimai.io/analysis/{build_slug(event_id, locale)}"
     image_url = f"https://leimai.io{snapshot_url}" if snapshot_url.startswith("/") else canonical
+    evidence = evidence_pack if isinstance(evidence_pack, dict) else {}
+    verdict = verdict_pack if isinstance(verdict_pack, dict) else {}
+    asset = evidence.get("asset", {}) if isinstance(evidence.get("asset"), dict) else {}
+    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
+    narrative = evidence.get("narrative_trends", {}) if isinstance(evidence.get("narrative_trends"), dict) else {}
+    scorecard = evidence.get("scoring_standard", {}) if isinstance(evidence.get("scoring_standard"), dict) else {}
+    leaders = narrative.get("active_leaders", []) if isinstance(narrative.get("active_leaders"), list) else []
+    top_metrics = [str(item.get("metric") or "").strip() for item in leaders if isinstance(item, dict)]
+    top_metrics = [metric for metric in top_metrics if metric]
+    if not top_metrics:
+        top_metrics = ["volatility", "structure_shift"]
+    weights = narrative.get("weights", {}) if isinstance(narrative.get("weights"), dict) else {}
+    properties = [
+        {
+            "@type": "PropertyValue",
+            "name": f"narrative_weight_{metric}",
+            "value": str(round(float(weight), 4)),
+        }
+        for metric, weight in weights.items()
+    ]
+    score_value = float(scorecard.get("final_score", verdict.get("sovereign_score", 0.0)))
+    properties.append(
+        {
+            "@type": "PropertyValue",
+            "name": "sovereign_score",
+            "value": str(round(score_value, 2)),
+        }
+    )
     return {
         "@context": "https://schema.org",
         "@graph": [
@@ -596,7 +808,13 @@ def build_jsonld(
                 "mainEntityOfPage": canonical,
                 "image": image_url,
                 "author": {"@type": "Organization", "name": "LeiMai Oracle"},
-                "about": {"@type": "Thing", "name": unique_entity, "sameAs": "https://leimai.io/"},
+                "about": [
+                    {"@type": "Thing", "name": unique_entity, "sameAs": "https://leimai.io/"},
+                    {"@type": "Thing", "name": display_name},
+                    {"@type": "Thing", "name": ", ".join(top_metrics[:2])},
+                ],
+                "keywords": ", ".join([display_name, *top_metrics[:3], unique_entity]),
+                "additionalProperty": properties,
                 "isAccessibleForFree": False,
                 "hasPart": [
                     {
@@ -613,6 +831,8 @@ def build_jsonld(
                 "creator": {"@type": "Organization", "name": "LeiMai Oracle"},
                 "url": canonical,
                 "image": image_url,
+                "variableMeasured": [NARRATIVE_METRIC_LABELS.get(metric, metric.title()) for metric in top_metrics[:4]],
+                "measurementTechnique": "adaptive_crypto_narrative_weighting",
                 "isAccessibleForFree": False,
             },
             {
@@ -626,10 +846,7 @@ def build_jsonld(
 
 
 def format_structured_title(asset: dict[str, str], verdict_pack: dict[str, Any], evidence_pack: dict[str, Any]) -> str:
-    display_name = str(asset.get("display_name") or "Bitcoin (BTC)")
-    verdict_label = title_verdict_label(str(verdict_pack.get("structural_verdict", "")))
-    vol_z = float(evidence_pack.get("v1", {}).get("vol_z_score", 0.0))
-    return f"{display_name} - {verdict_label} [Vol_Z: {vol_z:.2f}]"
+    return build_long_tail_title(asset=asset, verdict_pack=verdict_pack, evidence_pack=evidence_pack)
 
 
 def first_paragraph_contains_asset(body_md: str, display_name: str, pair: str) -> bool:
@@ -724,6 +941,8 @@ def build_mock_report(
         body_md=body_md,
         unique_entity=unique_entity,
         snapshot_url=snapshot_url,
+        evidence_pack=evidence_pack,
+        verdict_pack=verdict_pack,
     )
     return {"title": title, "body_md": body_md, "jsonld": jsonld}
 
@@ -768,6 +987,8 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
                 body_md=generated["body_md"],
                 unique_entity=cfg.unique_entity,
                 snapshot_url=snapshot_url,
+                evidence_pack=evidence_pack,
+                verdict_pack=verdict_pack,
             )
             break
     if not generated:
@@ -808,6 +1029,23 @@ def generate_report_for_locale(event: dict[str, Any], locale: str, cfg: ReportsC
         body_md=body_md,
         unique_entity=cfg.unique_entity,
         snapshot_url=snapshot_url,
+        evidence_pack=evidence_pack,
+        verdict_pack=verdict_pack,
+    )
+
+    narrative = evidence_pack.get("narrative_trends", {}) if isinstance(evidence_pack.get("narrative_trends"), dict) else {}
+    leaders = narrative.get("active_leaders", []) if isinstance(narrative.get("active_leaders"), list) else []
+    top_metric = ""
+    top_weight = 0.0
+    if leaders and isinstance(leaders[0], dict):
+        top_metric = str(leaders[0].get("metric") or "")
+        top_weight = float(leaders[0].get("weight", 0.0))
+    log_event(
+        "REPORT_NARRATIVE_TRENDS",
+        event_id=str(event.get("event_id", "")),
+        locale=locale,
+        top_metric=top_metric or "volatility",
+        top_weight=round(top_weight, 4),
     )
 
     return {

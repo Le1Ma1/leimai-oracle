@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +15,6 @@ from typing import Any
 
 import requests
 from PIL import Image
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page
-from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +25,14 @@ DETAIL_FOLD_IMAGE = LOGS_DIR / ".detail_fold_vibe_tmp.png"
 MERGED_IMAGE = LOGS_DIR / "current_vibe.png"
 STATE_FILE = LOGS_DIR / "visual_state.json"
 SNAPSHOT_DIR = ROOT / "support" / "web" / "generated" / "snapshots"
+REPORT_DIAGNOSTICS_FILE = LOGS_DIR / "report_snapshot_diagnostics.json"
+
+
+class ReportSnapshotError(RuntimeError):
+    def __init__(self, code: str, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,20 @@ def utc_now_iso() -> str:
 
 def log_event(event: str, **kwargs: Any) -> None:
     print(json.dumps({"ts_utc": utc_now_iso(), "event": event, **kwargs}, ensure_ascii=False))
+
+
+def ensure_playwright():
+    try:
+        from playwright.sync_api import Error as playwright_error
+        from playwright.sync_api import sync_playwright as playwright_runner
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("playwright_dependency_missing") from exc
+    return playwright_error, playwright_runner
+
+
+def write_report_diagnostics(payload: dict[str, Any]) -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_DIAGNOSTICS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def normalize_base_url(raw: str) -> str:
@@ -236,12 +256,11 @@ def supabase_headers(cfg: ReportConfig) -> dict[str, str]:
 
 def fetch_reports_for_snapshots(cfg: ReportConfig) -> list[dict[str, Any]]:
     if not cfg.supabase_url or not cfg.supabase_service_role_key:
-        log_event(
-            "REPORT_SNAPSHOT_CONFIG_MISSING",
-            has_url=bool(cfg.supabase_url),
-            has_service_role_key=bool(cfg.supabase_service_role_key),
+        raise ReportSnapshotError(
+            "report_config_missing",
+            "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.",
+            transient=False,
         )
-        return []
 
     params: dict[str, str] = {
         "select": "report_id,event_id,slug,title,locale,evidence_pack,verdict_pack,snapshot_url,updated_at,created_at",
@@ -260,14 +279,27 @@ def fetch_reports_for_snapshots(cfg: ReportConfig) -> list[dict[str, Any]]:
             params=params,
             timeout=(5.0, cfg.timeout_sec),
         )
-        resp.raise_for_status()
+        status = int(resp.status_code)
+        if status < 200 or status >= 300:
+            transient = status == 429 or status >= 500
+            code = "report_fetch_failed_transient" if transient else "report_fetch_failed"
+            raise ReportSnapshotError(
+                code,
+                f"oracle_reports fetch failed with status={status}",
+                transient=transient,
+            )
         payload = resp.json()
         if not isinstance(payload, list):
-            return []
+            raise ReportSnapshotError("report_payload_invalid", "oracle_reports payload is not a list.", transient=False)
         return [row for row in payload if isinstance(row, dict) and str(row.get("slug") or "").strip()]
+    except ReportSnapshotError:
+        raise
+    except requests.Timeout as exc:
+        raise ReportSnapshotError("report_fetch_timeout_transient", str(exc), transient=True) from exc
+    except requests.RequestException as exc:
+        raise ReportSnapshotError("report_fetch_failed_transient", str(exc), transient=True) from exc
     except Exception as exc:  # noqa: BLE001
-        log_event("REPORT_SNAPSHOT_FETCH_FAILED", error=str(exc))
-        return []
+        raise ReportSnapshotError("report_fetch_failed", str(exc), transient=False) from exc
 
 
 def update_snapshot_url(cfg: ReportConfig, report_id: Any, snapshot_url: str) -> bool:
@@ -314,11 +346,11 @@ def apply_axis_style(ax: Any, grid_color: str) -> None:
         spine.set_linewidth(0.9)
 
 
-def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool, str]:
+def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool, str, str]:
     plt, GridSpec, Rectangle = ensure_matplotlib()
     slug = str(row.get("slug") or "").strip().lower()
     if not slug:
-        return False, ""
+        return False, "", "missing_slug"
 
     evidence = row.get("evidence_pack") if isinstance(row.get("evidence_pack"), dict) else {}
     verdict = row.get("verdict_pack") if isinstance(row.get("verdict_pack"), dict) else {}
@@ -335,7 +367,7 @@ def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool
     micro = fetch_binance_klines(cfg=cfg, symbol=symbol, interval="1m", limit=80, seed_source=f"{event_hash}:{slug}:1m")
     macro = fetch_binance_klines(cfg=cfg, symbol=symbol, interval="4h", limit=80, seed_source=f"{event_hash}:{slug}:4h")
     if not micro or not macro:
-        return False, slug
+        return False, slug, "empty_klines"
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     output_path = cfg.output_dir / f"{slug}.png"
@@ -364,6 +396,7 @@ def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool
     ax_left.text(0.98, 0.96, "MICRO_VIEW : 1M", transform=ax_left.transAxes, ha="right", va="top", color="#D4AF37", fontsize=11, family="monospace")
     ax_left.text(0.98, 0.91, f"{symbol}_PERP", transform=ax_left.transAxes, ha="right", va="top", color="#D4AF37", fontsize=9, family="monospace")
     ax_left.text(0.02, 0.04, "ANOMALY DETECTED // T-MINUS 0:00", transform=ax_left.transAxes, ha="left", va="bottom", color="#FF4500", fontsize=8.5, family="monospace")
+    ax_left.set_xlabel("T-MINUS", color="#D4AF37", fontsize=8.5, family="monospace", labelpad=8)
 
     # Right panel: macro 4h
     apply_axis_style(ax_right, grid_color="#101010")
@@ -399,12 +432,13 @@ def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool
     ax_center.plot([0.10, 0.90], [0.09, 0.09], transform=ax_center.transAxes, color="#D4AF37", linewidth=1.4, alpha=0.9)
     ax_center.text(0.5, 0.83, "CONFIDENCE METRIC", transform=ax_center.transAxes, ha="center", va="center", color="#666666", fontsize=9, family="monospace")
     ax_center.text(0.5, 0.57, f"{confidence:.0f}%", transform=ax_center.transAxes, ha="center", va="center", color="#D4AF37", fontsize=46, family="monospace", fontweight="bold")
+    ax_center.text(0.5, 0.402, f"STRUCTURAL BIAS: {verdict_raw}", transform=ax_center.transAxes, ha="center", va="center", color="#FF4500", alpha=0.32, fontsize=13, family="monospace")
     ax_center.text(0.5, 0.40, f"STRUCTURAL BIAS: {verdict_raw}", transform=ax_center.transAxes, ha="center", va="center", color="#FF4500", fontsize=10, family="monospace")
     ax_center.text(0.5, 0.26, f"{asset_name} | {symbol}", transform=ax_center.transAxes, ha="center", va="center", color="#C0C0C0", fontsize=8.8, family="monospace")
     ax_center.text(0.5, 0.13, "> SYSTEM PROTOCOL EXECUTED...\n> DEPLOY CAPITAL.", transform=ax_center.transAxes, ha="center", va="center", color="#555555", fontsize=8, family="monospace")
 
     # Global watermark
-    fig.text(0.03, 0.96, "LEIMAI ORACLE", color="#E0E0E0", fontsize=16, family="serif", ha="left", va="top")
+    fig.text(0.03, 0.96, "LEIMAI ORACLE", color="#E0E0E0", fontsize=16, family="monospace", ha="left", va="top")
     fig.text(0.03, 0.925, "OMNISCIENT QUANTITATIVE ENGINE", color="#666666", fontsize=9, family="monospace", ha="left", va="top")
     fig.text(0.97, 0.06, "DIGITAL SIGNATURE STAMP", color="#666666", fontsize=8.5, family="monospace", ha="right", va="bottom")
     fig.text(0.97, 0.035, event_hash[-32:] if event_hash else slug, color="#444444", fontsize=8, family="monospace", ha="right", va="bottom")
@@ -419,10 +453,20 @@ def render_report_snapshot(cfg: ReportConfig, row: dict[str, Any]) -> tuple[bool
             img.save(output_path, format="PNG")
     except Exception as exc:  # noqa: BLE001
         log_event("REPORT_SNAPSHOT_POSTPROCESS_WARN", slug=slug, error=str(exc))
-    return True, slug
+    return True, slug, "ok"
 
 
 def run_report_snapshot_mode(cfg: ReportConfig) -> int:
+    diagnostics: dict[str, Any] = {
+        "ts_utc": utc_now_iso(),
+        "mode": "report",
+        "status": "running",
+        "limit": cfg.limit,
+        "locale": cfg.locale or "all",
+        "slug_filter": cfg.slug or "",
+        "output_dir": str(cfg.output_dir.relative_to(ROOT)).replace("\\", "/"),
+    }
+    write_report_diagnostics(diagnostics)
     log_event(
         "REPORT_SNAPSHOT_MODE_START",
         limit=cfg.limit,
@@ -430,18 +474,56 @@ def run_report_snapshot_mode(cfg: ReportConfig) -> int:
         slug=cfg.slug or "",
         output_dir=str(cfg.output_dir.relative_to(ROOT)).replace("\\", "/"),
     )
-    reports = fetch_reports_for_snapshots(cfg)
+    try:
+        reports = fetch_reports_for_snapshots(cfg)
+    except ReportSnapshotError as exc:
+        diagnostics.update(
+            {
+                "status": "failed",
+                "fatal_reason_code": exc.code,
+                "fatal_error": str(exc),
+                "transient": bool(exc.transient),
+            }
+        )
+        write_report_diagnostics(diagnostics)
+        log_event(
+            "REPORT_SNAPSHOT_MODE_FAILED",
+            reason_code=exc.code,
+            transient=bool(exc.transient),
+            error=str(exc),
+            diagnostics=str(REPORT_DIAGNOSTICS_FILE.relative_to(ROOT)).replace("\\", "/"),
+        )
+        return 2 if exc.transient else 1
+
     if not reports:
+        diagnostics.update({"status": "ok", "total": 0, "generated": 0, "failed": 0, "db_updated": 0, "failure_reason_breakdown": {}})
+        write_report_diagnostics(diagnostics)
         log_event("REPORT_SNAPSHOT_NO_REPORTS")
         return 0
 
     generated = 0
     failed = 0
     db_updated = 0
+    failure_reason_breakdown: Counter[str] = Counter()
+    failed_rows: list[dict[str, Any]] = []
     for row in reports:
-        ok, slug = render_report_snapshot(cfg, row)
+        ok, slug, reason_code = render_report_snapshot(cfg, row)
         if not ok or not slug:
             failed += 1
+            failure_reason_breakdown[reason_code or "render_failed"] += 1
+            failed_rows.append(
+                {
+                    "report_id": row.get("report_id"),
+                    "slug": slug or str(row.get("slug") or ""),
+                    "reason_code": reason_code or "render_failed",
+                }
+            )
+            log_event(
+                "REPORT_SNAPSHOT_ROW_FAILED",
+                report_id=row.get("report_id"),
+                slug=slug or row.get("slug"),
+                reason_code=reason_code or "render_failed",
+            )
             continue
         generated += 1
         snapshot_url = f"/generated/snapshots/{slug}.png"
@@ -449,17 +531,31 @@ def run_report_snapshot_mode(cfg: ReportConfig) -> int:
             db_updated += 1
         log_event("REPORT_SNAPSHOT_WRITTEN", report_id=row.get("report_id"), slug=slug, snapshot_url=snapshot_url)
 
+    diagnostics.update(
+        {
+            "status": "ok" if failed == 0 else "partial",
+            "total": len(reports),
+            "generated": generated,
+            "failed": failed,
+            "db_updated": db_updated,
+            "failure_reason_breakdown": dict(failure_reason_breakdown),
+            "failed_rows_sample": failed_rows[:30],
+        }
+    )
+    write_report_diagnostics(diagnostics)
     log_event(
         "REPORT_SNAPSHOT_MODE_DONE",
         total=len(reports),
         generated=generated,
         failed=failed,
         db_updated=db_updated,
+        failure_reason_breakdown=dict(failure_reason_breakdown),
+        diagnostics=str(REPORT_DIAGNOSTICS_FILE.relative_to(ROOT)).replace("\\", "/"),
     )
     return 0
 
 
-def collect_page_checks(page: Page) -> dict[str, Any]:
+def collect_page_checks(page: Any) -> dict[str, Any]:
     return page.evaluate(
         r"""
         () => {
@@ -679,13 +775,14 @@ def aggregate_checks(page_checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def capture_images(cfg: UiQaConfig) -> tuple[dict[str, str], dict[str, Any]]:
+    playwright_error, playwright_runner = ensure_playwright()
     timeout_ms = int(cfg.timeout_sec * 1000)
     home_url = f"{cfg.base_url}/"
     index_url = f"{cfg.base_url}/analysis/"
     detail_url = f"{cfg.base_url}/analysis/non-existent"
     page_checks: dict[str, dict[str, Any]] = {}
 
-    with sync_playwright() as p:
+    with playwright_runner() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1536, "height": 960})
 
@@ -708,7 +805,7 @@ def capture_images(cfg: UiQaConfig) -> tuple[dict[str, str], dict[str, Any]]:
             )
             if isinstance(href, str) and href.strip():
                 detail_url = f"{cfg.base_url}{href.strip()}"
-        except PlaywrightError:
+        except playwright_error:
             detail_url = f"{cfg.base_url}/analysis/non-existent"
 
         page.goto(detail_url, wait_until="networkidle", timeout=timeout_ms)

@@ -36,6 +36,21 @@
       walletGuideInstall: "Install MetaMask",
       walletGuideLearn: "Learn More",
       walletGuideClose: "Continue in Preview",
+      guidedGatewayTitle: "Obsidian Guided Modal",
+      guidedGatewayBody:
+        "Connect your hardware-backed wallet, then route settlement to the Oracle Vault over ERC20 or Arbitrum.",
+      guidedConnect: "[ CONNECT METAMASK ]",
+      guidedGenerate: "[ GENERATE SETTLEMENT REQUEST ]",
+      guidedCopyErc20: "[ COPY ERC20 ADDRESS ]",
+      guidedCopyArbitrum: "[ COPY ARBITRUM ADDRESS ]",
+      guidedSendTx: "[ WEB3 SENDTRANSACTION ]",
+      guidedClose: "[ CLOSE ]",
+      guidedCopied: "Vault address copied.",
+      guidedNoWallet: "Wallet unavailable. Install MetaMask first.",
+      guidedNeedSignature: "Please sign the sovereign session before requesting settlement.",
+      guidedTxSubmitted: "Transaction submitted",
+      guidedTxFailed: "Transaction prompt failed. Use manual transfer.",
+      guidedPreparing: "Preparing guided settlement...",
     },
     "zh-tw": {
       negotiating: "安全飛地協商中...",
@@ -65,12 +80,72 @@
       walletGuideInstall: "安裝 MetaMask",
       walletGuideLearn: "了解流程",
       walletGuideClose: "先維持預覽",
+      guidedGatewayTitle: "Obsidian 主權引導",
+      guidedGatewayBody: "請先連接硬體錢包，再透過 ERC20 或 Arbitrum 對 Oracle Vault 完成結算。",
+      guidedConnect: "[ 連接 METAMASK ]",
+      guidedGenerate: "[ 建立結算請求 ]",
+      guidedCopyErc20: "[ 複製 ERC20 地址 ]",
+      guidedCopyArbitrum: "[ 複製 ARBITRUM 地址 ]",
+      guidedSendTx: "[ WEB3 SENDTRANSACTION ]",
+      guidedClose: "[ 關閉 ]",
+      guidedCopied: "已複製金庫地址。",
+      guidedNoWallet: "尚未偵測到錢包，請先安裝 MetaMask。",
+      guidedNeedSignature: "請先完成主權簽署，再建立結算請求。",
+      guidedTxSubmitted: "交易已送出",
+      guidedTxFailed: "交易提示失敗，請改用手動轉帳。",
+      guidedPreparing: "正在準備主權結算流程...",
     },
   };
 
   function getLocaleCopy() {
     const locale = String(document.body?.getAttribute("data-locale") || "en").toLowerCase();
     return COPY[locale] || COPY.en;
+  }
+
+  const ERC20_TOKEN_CONTRACT = {
+    eth_l1_erc20: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606EB48",
+    l2_usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+  };
+
+  const CHAIN_ID_BY_RAIL = {
+    eth_l1_erc20: "0x1",
+    l2_usdc: "0xa4b1",
+  };
+
+  function normalizePaymentRail(raw) {
+    const value = String(raw || "l2_usdc").trim().toLowerCase();
+    if (value === "eth_l1_erc20" || value === "l2_usdc") return value;
+    return "l2_usdc";
+  }
+
+  function leftPad64(hex) {
+    return String(hex || "").replace(/^0x/i, "").padStart(64, "0");
+  }
+
+  function encodeErc20TransferData(toAddress, amountUnits) {
+    const selector = "a9059cbb";
+    const toField = leftPad64(String(toAddress || "").replace(/^0x/i, "").toLowerCase());
+    const valueField = leftPad64(BigInt(amountUnits).toString(16));
+    return `0x${selector}${toField}${valueField}`;
+  }
+
+  function parseUsdcToUnits(amountRaw) {
+    const amount = Number.parseFloat(String(amountRaw || "0"));
+    if (!Number.isFinite(amount) || amount <= 0) return 0n;
+    return BigInt(Math.round(amount * 1_000_000));
+  }
+
+  async function ensureWalletChain(ethereum, rail) {
+    const target = CHAIN_ID_BY_RAIL[normalizePaymentRail(rail)];
+    if (!target) return;
+    try {
+      await ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: target }],
+      });
+    } catch {
+      // keep current chain and let wallet handle rejection downstream
+    }
   }
 
   function hexToRgb01(hex) {
@@ -248,6 +323,245 @@
   function openWeb3GuideModal() {
     const modal = ensureWeb3GuideModal();
     if (!modal) return;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  let guidedGateContext = null;
+
+  function closeObsidianGuidedModal() {
+    const modal = document.getElementById("obsidianGuidedModal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function setGuidedResult(text, isOk = true) {
+    const node = document.getElementById("guidedInlineResult");
+    if (!node) return;
+    node.textContent = String(text || "");
+    node.style.color = isOk ? "#d8e2ea" : "#ffb3b3";
+  }
+
+  function buildGateConfigFromButton(button) {
+    const safe = button || document.body;
+    const plan = String(safe?.getAttribute?.("data-plan") || "sovereign").trim().toLowerCase();
+    const paymentRail = normalizePaymentRail(safe?.getAttribute?.("data-payment-rail") || "l2_usdc");
+    const slug = String(safe?.getAttribute?.("data-slug") || "vault").trim().toLowerCase();
+    const amountUsdc = Number.parseFloat(String(safe?.getAttribute?.("data-amount-usdc") || "199"));
+    const erc20Address = String(safe?.getAttribute?.("data-erc20-address") || "").trim();
+    const arbitrumAddress = String(safe?.getAttribute?.("data-arbitrum-address") || "").trim();
+    const l2Network = String(safe?.getAttribute?.("data-l2-network") || "arbitrum").trim().toLowerCase();
+    return {
+      plan,
+      paymentRail,
+      slug,
+      amountUsdc: Number.isFinite(amountUsdc) && amountUsdc > 0 ? amountUsdc : 199,
+      erc20Address,
+      arbitrumAddress,
+      l2Network,
+    };
+  }
+
+  function ensureObsidianGuidedModal() {
+    let modal = document.getElementById("obsidianGuidedModal");
+    if (modal) return modal;
+    const copy = getLocaleCopy();
+    modal = document.createElement("div");
+    modal.id = "obsidianGuidedModal";
+    modal.className = "obsidian-guided-modal";
+    modal.setAttribute("aria-hidden", "true");
+    modal.innerHTML = `
+      <div class="obsidian-guided-card glass-panel cyber-border">
+        <button id="guidedCloseBtn" class="payment-close-btn guided-close-btn" type="button">${copy.guidedClose}</button>
+        <h3 class="neon-text">${copy.guidedGatewayTitle}</h3>
+        <p class="web3-guide-body">${copy.guidedGatewayBody}</p>
+        <div class="guided-step-grid">
+          <div class="guided-step">
+            <span>STEP 1</span>
+            <strong id="guidedWalletState">MetaMask / Hardware Mode</strong>
+          </div>
+          <div class="guided-step">
+            <span>ERC20 (ETHEREUM)</span>
+            <strong id="guidedErc20Address" class="mono-value">-</strong>
+          </div>
+          <div class="guided-step">
+            <span id="guidedL2Label">ARBITRUM (USDC)</span>
+            <strong id="guidedArbitrumAddress" class="mono-value">-</strong>
+          </div>
+        </div>
+        <div id="guidedTransferCopy" class="guided-cta-copy">-</div>
+        <div class="guided-actions">
+          <button id="guidedConnectBtn" class="unlock-btn sign-btn pulse-glow" type="button">${copy.guidedConnect}</button>
+          <button id="guidedCopyErc20Btn" class="btn" type="button">${copy.guidedCopyErc20}</button>
+          <button id="guidedCopyArbitrumBtn" class="btn" type="button">${copy.guidedCopyArbitrum}</button>
+          <button id="guidedSendTxBtn" class="btn btn-main" type="button">${copy.guidedSendTx}</button>
+          <button id="guidedGenerateBtn" class="sovereign-gate-btn pulse-glow" type="button">${copy.guidedGenerate}</button>
+        </div>
+        <div id="guidedInlineResult" class="guided-inline-result"></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const closeBtn = modal.querySelector("#guidedCloseBtn");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        closeObsidianGuidedModal();
+      });
+    }
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) {
+        closeObsidianGuidedModal();
+      }
+    });
+
+    const connectBtn = modal.querySelector("#guidedConnectBtn");
+    if (connectBtn) {
+      connectBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        if (!guidedGateContext) return;
+        const copyNow = getLocaleCopy();
+        setGuidedResult(copyNow.guidedPreparing, true);
+        await connectWalletAndUnlock(guidedGateContext.slug || "vault");
+      });
+    }
+
+    const copyErc20Btn = modal.querySelector("#guidedCopyErc20Btn");
+    if (copyErc20Btn) {
+      copyErc20Btn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const copyNow = getLocaleCopy();
+        const value = String(guidedGateContext?.erc20Address || "").trim();
+        if (!value) return;
+        try {
+          await navigator.clipboard.writeText(value);
+          setGuidedResult(copyNow.guidedCopied, true);
+        } catch {
+          setGuidedResult(copyNow.guidedTxFailed, false);
+        }
+      });
+    }
+
+    const copyL2Btn = modal.querySelector("#guidedCopyArbitrumBtn");
+    if (copyL2Btn) {
+      copyL2Btn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const copyNow = getLocaleCopy();
+        const value = String(guidedGateContext?.arbitrumAddress || "").trim();
+        if (!value) return;
+        try {
+          await navigator.clipboard.writeText(value);
+          setGuidedResult(copyNow.guidedCopied, true);
+        } catch {
+          setGuidedResult(copyNow.guidedTxFailed, false);
+        }
+      });
+    }
+
+    const sendBtn = modal.querySelector("#guidedSendTxBtn");
+    if (sendBtn) {
+      sendBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const copyNow = getLocaleCopy();
+        const ethereum = window.ethereum;
+        if (!ethereum || typeof ethereum.request !== "function") {
+          setGuidedResult(copyNow.guidedNoWallet, false);
+          openWeb3GuideModal();
+          return;
+        }
+        try {
+          if (!guidedGateContext) return;
+          const rail = normalizePaymentRail(guidedGateContext.paymentRail);
+          const toAddress = rail === "eth_l1_erc20"
+            ? guidedGateContext.erc20Address
+            : guidedGateContext.arbitrumAddress;
+          const tokenContract = ERC20_TOKEN_CONTRACT[rail];
+          if (!toAddress || !tokenContract) {
+            throw new Error("guided_target_missing");
+          }
+          await ensureWalletChain(ethereum, rail);
+          const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+          const from = Array.isArray(accounts) ? String(accounts[0] || "") : "";
+          if (!from) throw new Error("wallet_address_missing");
+          const units = parseUsdcToUnits(guidedGateContext.amountUsdc);
+          const txHash = await ethereum.request({
+            method: "eth_sendTransaction",
+            params: [
+              {
+                from,
+                to: tokenContract,
+                data: encodeErc20TransferData(toAddress, units),
+                value: "0x0",
+              },
+            ],
+          });
+          setGuidedResult(`${copyNow.guidedTxSubmitted}: ${String(txHash || "")}`, true);
+        } catch {
+          setGuidedResult(copyNow.guidedTxFailed, false);
+        }
+      });
+    }
+
+    const generateBtn = modal.querySelector("#guidedGenerateBtn");
+    if (generateBtn) {
+      generateBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const copyNow = getLocaleCopy();
+        if (!guidedGateContext) return;
+        const walletAddress = getVaultUnlockedAddress();
+        generateBtn.disabled = true;
+        setGuidedResult(copyNow.creatingInvoice, true);
+        try {
+          const invoice = await fetchJson("/api/v1/payment/create", {
+            plan_code: guidedGateContext.plan || "sovereign",
+            payment_rail: guidedGateContext.paymentRail || "l2_usdc",
+            wallet_address: walletAddress,
+            slug: guidedGateContext.slug || "vault",
+          });
+          setGuidedResult(copyNow.invoiceReady, true);
+          closeObsidianGuidedModal();
+          openPaymentModal(invoice);
+        } catch (err) {
+          const message = String(err?.message || "").toLowerCase();
+          if (message.includes("unlock_required")) {
+            setGuidedResult(copyNow.guidedNeedSignature, false);
+          } else {
+            setGuidedResult(mapPaymentError(err), false);
+          }
+        } finally {
+          generateBtn.disabled = false;
+        }
+      });
+    }
+    return modal;
+  }
+
+  function openObsidianGuidedModal(config) {
+    const modal = ensureObsidianGuidedModal();
+    if (!modal) return;
+    const copy = getLocaleCopy();
+    guidedGateContext = {
+      ...config,
+      paymentRail: normalizePaymentRail(config?.paymentRail || "l2_usdc"),
+    };
+    const l2Label = String(guidedGateContext?.l2Network || "arbitrum").toUpperCase();
+    const erc20Node = modal.querySelector("#guidedErc20Address");
+    const l2Node = modal.querySelector("#guidedArbitrumAddress");
+    const l2LabelNode = modal.querySelector("#guidedL2Label");
+    const transferNode = modal.querySelector("#guidedTransferCopy");
+    const walletNode = modal.querySelector("#guidedWalletState");
+    if (erc20Node) erc20Node.textContent = String(guidedGateContext?.erc20Address || "-");
+    if (l2Node) l2Node.textContent = String(guidedGateContext?.arbitrumAddress || "-");
+    if (l2LabelNode) l2LabelNode.textContent = `${l2Label} (USDC)`;
+    if (walletNode) {
+      const unlocked = Boolean(getVaultUnlockedAddress());
+      walletNode.textContent = unlocked ? "Session Signed / Wallet Verified" : "MetaMask / Hardware Mode";
+    }
+    if (transferNode) {
+      transferNode.textContent = `Transfer ${guidedGateContext.amountUsdc} USDC to the Oracle Vault to decrypt the true Alpha.`;
+    }
+    setGuidedResult(copy.guidedPreparing, true);
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
   }
@@ -482,31 +796,13 @@
   }
 
   function bindUpgradeButton() {
-    const buttons = Array.from(document.querySelectorAll(".upgrade-btn"));
+    const buttons = Array.from(document.querySelectorAll(".upgrade-btn, .sovereign-gate-btn"));
     if (buttons.length === 0) return;
     for (const button of buttons) {
-      button.addEventListener("click", async (event) => {
-        const copy = getLocaleCopy();
+      button.addEventListener("click", (event) => {
         event.preventDefault();
-        const plan = String(button.getAttribute("data-plan") || "sovereign").trim().toLowerCase();
-        const paymentRail = String(button.getAttribute("data-payment-rail") || "trc20_usdt").trim().toLowerCase();
-        const walletAddress = getVaultUnlockedAddress();
-        button.disabled = true;
-        setPaymentResult(copy.creatingInvoice, true);
-        try {
-          const invoice = await fetchJson("/api/v1/payment/create", {
-            plan_code: plan,
-            payment_rail: paymentRail,
-            wallet_address: walletAddress,
-            slug: "vault",
-          });
-          setPaymentResult(copy.invoiceReady, true);
-          openPaymentModal(invoice);
-        } catch (err) {
-          setPaymentResult(mapPaymentError(err), false);
-        } finally {
-          button.disabled = false;
-        }
+        const config = buildGateConfigFromButton(button);
+        openObsidianGuidedModal(config);
       });
     }
   }
@@ -530,6 +826,147 @@
     }
 
     window.setTimeout(openVault, 800);
+  }
+
+  function initForgeCanvas() {
+    const canvas = document.getElementById("forgeMatrixCanvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const epochNode = document.getElementById("forgeEpoch");
+    const convNode = document.getElementById("forgeConvergence");
+    const statusNode = document.getElementById("forgeStatus");
+
+    const totalEpoch = 5000;
+    const startEpoch = 4592;
+    const startConvergence = 94.2;
+    const points = Array.from({ length: 96 }, (_, i) => {
+      const t = i / 95;
+      const baseline = 0.78 - (t * 0.56);
+      const wobble = Math.sin((t * 11.2) + 1.3) * 0.028;
+      return baseline + wobble;
+    });
+    const matrixNodes = Array.from({ length: 46 }, (_, i) => ({
+      x: ((i * 37) % 320) / 320,
+      y: ((i * 53) % 190) / 190,
+      r: 0.8 + (i % 3) * 0.4,
+    }));
+
+    let rafId = 0;
+    let tick = 0;
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(600, Math.floor(rect.width * (window.devicePixelRatio || 1)));
+      canvas.height = Math.max(220, Math.floor(rect.height * (window.devicePixelRatio || 1)));
+    }
+
+    function drawGrid() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.strokeStyle = "rgba(192,192,192,0.08)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= 12; x += 1) {
+        const px = (x / 12) * w;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= 8; y += 1) {
+        const py = (y / 8) * h;
+        ctx.beginPath();
+        ctx.moveTo(0, py);
+        ctx.lineTo(w, py);
+        ctx.stroke();
+      }
+    }
+
+    function drawNeuralMatrix(timeSec) {
+      const w = canvas.width;
+      const h = canvas.height;
+      for (const node of matrixNodes) {
+        const pulse = 0.4 + (Math.sin((timeSec * 1.7) + (node.x * 9.3) + (node.y * 4.1)) * 0.3);
+        const x = node.x * w;
+        const y = node.y * h;
+        ctx.fillStyle = `rgba(212,175,55,${Math.max(0.08, pulse)})`;
+        ctx.beginPath();
+        ctx.arc(x, y, node.r * (window.devicePixelRatio || 1), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.strokeStyle = "rgba(212,175,55,0.16)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < matrixNodes.length; i += 2) {
+        const a = matrixNodes[i - 1];
+        const b = matrixNodes[i];
+        ctx.beginPath();
+        ctx.moveTo(a.x * w, a.y * h);
+        ctx.lineTo(b.x * w, b.y * h);
+        ctx.stroke();
+      }
+    }
+
+    function drawLossCurve(timeSec) {
+      const w = canvas.width;
+      const h = canvas.height;
+      const leftPad = w * 0.04;
+      const rightPad = w * 0.04;
+      const topPad = h * 0.10;
+      const botPad = h * 0.14;
+      const innerW = Math.max(1, w - leftPad - rightPad);
+      const innerH = Math.max(1, h - topPad - botPad);
+
+      ctx.strokeStyle = "rgba(255,69,0,0.75)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      points.forEach((value, idx) => {
+        const x = leftPad + (idx / Math.max(1, points.length - 1)) * innerW;
+        const micro = Math.sin((idx * 0.6) + (timeSec * 1.5)) * 0.007;
+        const y = topPad + Math.max(0.04, Math.min(0.98, value + micro)) * innerH;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      const nowProgress = ((tick % 420) / 420);
+      const pulseIndex = Math.floor(nowProgress * (points.length - 1));
+      const px = leftPad + (pulseIndex / Math.max(1, points.length - 1)) * innerW;
+      const py = topPad + points[pulseIndex] * innerH;
+      ctx.fillStyle = "rgba(255,69,0,0.82)";
+      ctx.beginPath();
+      ctx.arc(px, py, 5 * (window.devicePixelRatio || 1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function frame(now) {
+      const t = now * 0.001;
+      tick += 1;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid();
+      drawNeuralMatrix(t);
+      drawLossCurve(t);
+
+      if (epochNode) {
+        const epoch = Math.min(totalEpoch, startEpoch + Math.floor((tick % 420) / 9));
+        epochNode.textContent = `${epoch}/${totalEpoch}`;
+      }
+      if (convNode) {
+        const convergence = Math.min(99.7, startConvergence + ((tick % 420) / 420) * 3.4);
+        convNode.textContent = `${convergence.toFixed(1)}%`;
+      }
+      if (statusNode) {
+        statusNode.textContent = "UNAUTHORIZED TO DEPLOY (TRAINING)";
+      }
+      rafId = window.requestAnimationFrame(frame);
+    }
+
+    resize();
+    frame(0);
+    window.addEventListener("resize", resize, { passive: true });
+    window.addEventListener("beforeunload", () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", resize);
+    });
   }
 
   window.addEventListener("beforeunload", stopPaymentPolling);
@@ -742,6 +1179,7 @@
     bindUpgradeButton();
     bindPaymentModalClose();
     initVaultSequence();
+    initForgeCanvas();
     initObsidianBackground(config);
   });
 })();

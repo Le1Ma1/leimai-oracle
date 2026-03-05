@@ -24,7 +24,14 @@ import {
   uniqueStrings,
   writeJsonAtomic,
 } from "./lib/storage.mjs";
-import { buildLlmsTxt, buildPageSeo, buildRobots, buildSitemap } from "./lib/seo.mjs";
+import {
+  buildLlmsTxt,
+  buildPageSeo,
+  buildRobots,
+  buildSitemap,
+  buildSitemapDocument,
+  buildSitemapIndex,
+} from "./lib/seo.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +51,10 @@ const PAYWALL_SELECTOR = ".paywall-locked-content";
 const UNLOCK_COOKIE_NAME = "leimai_unlock";
 const PAYMENT_PLAN_CODES = new Set(["sovereign", "elite"]);
 const PAYMENT_RAIL_CODES = new Set(["trc20_usdt", "eth_l1_erc20", "l2_usdc"]);
+const REPO_ROOT = path.resolve(__dirname, "..");
+const GROWTH_SCOREBOARD_PATH = path.join(REPO_ROOT, "logs", "growth_scoreboard.json");
+const GROWTH_ACTIONS_PATH = path.join(REPO_ROOT, "logs", "agent_actions.jsonl");
+const GROWTH_OVERRIDES_PATH = path.join(__dirname, "web", "generated", "growth_overrides.json");
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -339,9 +350,163 @@ function shortRef(value, head = 10, tail = 8) {
   return `${text.slice(0, head)}...${text.slice(-tail)}`;
 }
 
+async function readJsonFileSafe(filePath, fallback = {}) {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function readJsonLinesSafe(filePath, limit = 50) {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const rows = String(raw)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter((row) => row && typeof row === "object");
+    return rows.slice(-Math.max(1, Number(limit) || 50)).reverse();
+  } catch {
+    return [];
+  }
+}
+
+function normalizeCopyOverrides(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const payload = raw.copy_overrides;
+  if (!payload || typeof payload !== "object") return {};
+  const out = {};
+  for (const [locale, value] of Object.entries(payload)) {
+    if (!value || typeof value !== "object") continue;
+    out[normalizeOuroborosLocale(locale)] = value;
+  }
+  return out;
+}
+
+function resolveOuroborosCopy(locale, overrides = {}) {
+  const safeLocale = normalizeOuroborosLocale(locale);
+  const base = getOuroborosCopy(safeLocale) || getOuroborosCopy("en");
+  const patch = overrides[safeLocale] && typeof overrides[safeLocale] === "object" ? overrides[safeLocale] : {};
+  return { ...base, ...patch };
+}
+
+async function readGrowthOverrides() {
+  const payload = await readJsonFileSafe(GROWTH_OVERRIDES_PATH, {});
+  return normalizeCopyOverrides(payload);
+}
+
+function buildSnippet(text, targetWords) {
+  const words = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  if (!words.length) return "";
+  return words.slice(0, Math.max(1, targetWords)).join(" ");
+}
+
+function extractEvidenceBoundary(bodyMd, locale = "en") {
+  const text = String(bodyMd || "");
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
+  const evidencePattern = isZh
+    ? /(?:^|\n)#{1,6}\s*證據\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i
+    : /(?:^|\n)#{1,6}\s*Evidence\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i;
+  const riskPattern = isZh
+    ? /(?:^|\n)#{1,6}\s*風險邊界\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i
+    : /(?:^|\n)#{1,6}\s*Risk Boundary\s*\n([\s\S]*?)(?=\n#{1,6}\s|\s*$)/i;
+  const evidence = (text.match(evidencePattern)?.[1] || "").replace(/\s+/g, " ").trim();
+  const boundary = (text.match(riskPattern)?.[1] || "").replace(/\s+/g, " ").trim();
+  return {
+    evidence: evidence || buildSummary(text, 180),
+    risk_boundary: boundary || extractBoundaryText(text, locale, ""),
+  };
+}
+
+function buildAiCitationItem(report) {
+  const canonical = `${ROOT_CANONICAL_URL}analysis/${encodeURIComponent(report.slug)}`;
+  const summary = buildSummary(report.body_md, 360);
+  const { evidence, risk_boundary } = extractEvidenceBoundary(report.body_md, report.locale);
+  const uniqueEntity = String(report.unique_entity || "LeiMai Liquidity Friction");
+  return {
+    slug: report.slug,
+    locale: normalizeOuroborosLocale(report.locale),
+    title: String(report.title || ""),
+    canonical_url: canonical,
+    updated_at: report.updated_at || report.created_at || nowIso(),
+    unique_entity: uniqueEntity,
+    snippets: {
+      words_40: buildSnippet(summary, 40),
+      words_80: buildSnippet(summary, 80),
+      words_160: buildSnippet(summary, 160),
+    },
+    evidence,
+    risk_boundary,
+    citation_policy:
+      "Cite canonical_url, include unique_entity, and preserve risk_boundary statement when summarizing.",
+  };
+}
+
+function buildAiCitationFeedPayload(baseUrl, reports = []) {
+  const root = String(baseUrl || ROOT_CANONICAL_URL).replace(/\/+$/, "");
+  const rows = (Array.isArray(reports) ? reports : []).filter((row) => row && row.slug);
+  const locales = [...new Set(rows.map((row) => normalizeOuroborosLocale(row.locale)).filter(Boolean))];
+  return {
+    version: "1.0",
+    generated_at_utc: nowIso(),
+    site: root || ROOT_CANONICAL_URL.replace(/\/+$/, ""),
+    canonical_url: ROOT_CANONICAL_URL,
+    locales_supported: locales.length ? locales : ["en", "zh-tw", "es", "ja"],
+    citation_guidelines: [
+      "Prefer canonical_url over mirrored paths.",
+      "Retain unique_entity verbatim: LeiMai Liquidity Friction.",
+      "Include risk boundary language in generated summaries.",
+    ],
+    items: rows.slice(0, 60).map(buildAiCitationItem),
+  };
+}
+
+function buildStaticSitemapPaths() {
+  return [
+    "/",
+    "/analysis/",
+    "/vault",
+    "/forge",
+    "/en/",
+    "/zh-tw/",
+    "/es/",
+    "/ja/",
+    "/en/analysis/",
+    "/zh-tw/analysis/",
+    "/es/analysis/",
+    "/ja/analysis/",
+    "/en/vault",
+    "/zh-tw/vault",
+    "/es/vault",
+    "/ja/vault",
+    "/en/forge",
+    "/zh-tw/forge",
+    "/es/forge",
+    "/ja/forge",
+  ];
+}
+
 function toLocaleTag(locale) {
   const raw = String(locale || "").trim().toLowerCase();
-  return raw === "zh-tw" ? "ZH-TW" : "EN";
+  if (raw === "zh-tw") return "ZH-TW";
+  if (raw === "es") return "ES";
+  if (raw === "ja") return "JA";
+  return "EN";
 }
 
 function buildSocialCardSvg() {
@@ -1130,6 +1295,23 @@ async function fetchReportsForIndex(limit = 200, locale = DEFAULT_REPORT_LOCALE)
   return data.map(normalizeReportRow);
 }
 
+async function fetchReportsAcrossLocales(limitPerLocale = 30) {
+  const locales = ["en", "zh-tw", "es", "ja"];
+  const merged = [];
+  const seen = new Set();
+  for (const locale of locales) {
+    const rows = await fetchReportsForIndex(limitPerLocale, locale);
+    for (const row of rows) {
+      const slug = String(row?.slug || "");
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      merged.push(row);
+    }
+  }
+  merged.sort((a, b) => Date.parse(String(b?.updated_at || b?.created_at || "")) - Date.parse(String(a?.updated_at || a?.created_at || "")));
+  return merged.slice(0, Math.max(1, limitPerLocale * locales.length));
+}
+
 async function fetchReportBySlug(slug) {
   const client = getSupabaseClient();
   if (!client) return null;
@@ -1194,6 +1376,22 @@ function renderOuroborosDocument({
 }) {
   const ldPayload = serializeJsonLd(jsonLd || {});
   const ogUrl = String(canonicalUrl || ROOT_CANONICAL_URL);
+  const canonicalRoot = ROOT_CANONICAL_URL.replace(/\/+$/, "");
+  const canonicalPathRaw = ogUrl.startsWith(canonicalRoot)
+    ? ogUrl.slice(canonicalRoot.length)
+    : "/";
+  const canonicalPath = canonicalPathRaw && canonicalPathRaw.startsWith("/") ? canonicalPathRaw : `/${canonicalPathRaw || ""}`;
+  const pathForAlt = canonicalPath === "/" ? "" : canonicalPath;
+  const hreflangLinks = [
+    { hreflang: "x-default", href: `${canonicalRoot}${pathForAlt || "/"}` },
+    { hreflang: "en", href: `${canonicalRoot}${pathForAlt || "/"}` },
+    { hreflang: "zh-Hant", href: `${canonicalRoot}/zh-tw${pathForAlt || "/"}` },
+    { hreflang: "es", href: `${canonicalRoot}/es${pathForAlt || "/"}` },
+    { hreflang: "ja", href: `${canonicalRoot}/ja${pathForAlt || "/"}` },
+  ]
+    .map((row) => `<link rel="alternate" hreflang="${escapeHtml(row.hreflang)}" href="${escapeHtml(row.href)}">`)
+    .join("\n  ");
+  const ogLocale = locale === "zh-tw" ? "zh_TW" : locale === "es" ? "es_ES" : locale === "ja" ? "ja_JP" : "en_US";
   return `<!doctype html>
 <html lang="${escapeHtml(locale)}">
 <head>
@@ -1204,6 +1402,7 @@ function renderOuroborosDocument({
   <meta name="keywords" content="${escapeHtml(keywords)}">
   <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
   <meta property="og:type" content="website">
+  <meta property="og:locale" content="${escapeHtml(ogLocale)}">
   <meta property="og:title" content="${escapeHtml(title)}">
   <meta property="og:description" content="${escapeHtml(description)}">
   <meta property="og:url" content="${escapeHtml(ogUrl)}">
@@ -1213,6 +1412,7 @@ function renderOuroborosDocument({
   <meta property="twitter:description" content="${escapeHtml(description)}">
   <meta property="twitter:image" content="${escapeHtml(ROOT_CANONICAL_URL)}assets/social-card.svg">
   <link rel="canonical" href="${escapeHtml(ogUrl)}">
+  ${hreflangLinks}
   <script type="application/ld+json">${ldPayload}</script>
   <link rel="stylesheet" href="/assets/ouroboros.css">
 </head>
@@ -1242,8 +1442,54 @@ function buildReportCard(report, copy) {
   </a>`;
 }
 
-function renderRootLandingPage(locale, reports) {
-  const copy = getOuroborosCopy(locale);
+function buildSovereignGateConfig(planCode = "sovereign") {
+  const plan = normalizePlanCode(planCode);
+  return {
+    planCode: plan,
+    amountUsdt: resolvePlanAmountUsdt(plan),
+    erc20Address: resolvePaymentRecipient("eth_l1_erc20"),
+    arbitrumAddress: resolvePaymentRecipient("l2_usdc"),
+    l2Network: String(CONFIG.supportL2Network || "arbitrum").toLowerCase(),
+  };
+}
+
+function renderSovereignGateButton({
+  label,
+  slug = "vault",
+  planCode = "sovereign",
+  paymentRail = "l2_usdc",
+  className = "sovereign-gate-btn pulse-glow",
+}) {
+  const gate = buildSovereignGateConfig(planCode);
+  return `<button class="${escapeHtml(className)}" type="button"
+    data-plan="${escapeHtml(gate.planCode)}"
+    data-payment-rail="${escapeHtml(normalizePaymentRail(paymentRail))}"
+    data-slug="${escapeHtml(slug)}"
+    data-amount-usdc="${escapeHtml(String(gate.amountUsdt))}"
+    data-erc20-address="${escapeHtml(gate.erc20Address)}"
+    data-arbitrum-address="${escapeHtml(gate.arbitrumAddress)}"
+    data-l2-network="${escapeHtml(gate.l2Network)}">${escapeHtml(label)}</button>`;
+}
+
+function renderPaymentModal(title = "Sovereign Invoice") {
+  return `<div id="paymentModal" class="payment-modal" aria-hidden="true">
+      <div class="payment-modal-card glass-panel cyber-border">
+        <button id="paymentModalCloseBtn" class="payment-close-btn" type="button">[ CLOSE ]</button>
+        <h2 class="neon-text">${escapeHtml(title)}</h2>
+        <div class="invoice-grid terminal-font">
+          <div><span>INVOICE</span><strong id="invoiceIdField">-</strong></div>
+          <div><span>PLAN</span><strong id="invoicePlanField">-</strong></div>
+          <div><span>AMOUNT</span><strong id="invoiceAmountField">-</strong></div>
+          <div><span>ADDRESS</span><strong id="invoiceAddressField">-</strong></div>
+          <div><span>NONCE</span><strong id="invoiceNonceField">-</strong></div>
+          <div><span>EXPIRES</span><strong id="invoiceExpiryField">-</strong></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderRootLandingPage(locale, reports, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   const rows = Array.isArray(reports) ? reports.slice(0, 5) : [];
   const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
   const hasRows = rows.length > 0;
@@ -1268,6 +1514,7 @@ function renderRootLandingPage(locale, reports) {
       </div>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.homeOpenIndex)}</a>
+        <a class="btn" href="/forge">[ ORACLE FORGE ]</a>
         <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">${escapeHtml(copy.homeMainDomain)}</a>
       </div>
     </header>
@@ -1277,6 +1524,22 @@ function renderRootLandingPage(locale, reports) {
       <p class="muted">${escapeHtml(copy.homeLatestLead)}</p>
       ${hasRows ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : `<div class="empty-box">${escapeHtml(copy.homeEmpty)}</div>`}
     </section>
+
+    <section class="panel glass-panel cyber-border forge-shell">
+      <h2>[ORACLE FORGE: BTC CORE]</h2>
+      <p class="muted">Live sovereign model convergence stream. Locked outputs are released only through the cold wallet gateway.</p>
+      <div class="forge-cta-row">
+        <a class="btn" href="/forge">Open Forge Interface</a>
+        ${renderSovereignGateButton({
+          label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
+          slug: "vault",
+          planCode: "sovereign",
+          paymentRail: "l2_usdc",
+        })}
+      </div>
+      <div id="paymentResult" class="payment-result muted"></div>
+    </section>
+    ${renderPaymentModal("Sovereign Gateway Invoice")}
   </main>`;
 
   const jsonLd = {
@@ -1294,6 +1557,12 @@ function renderRootLandingPage(locale, reports) {
         url: `${ROOT_CANONICAL_URL}analysis/`,
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
       },
+      {
+        "@type": "WebPage",
+        name: "Oracle Forge BTC Core",
+        url: `${ROOT_CANONICAL_URL}forge`,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+      },
     ],
   };
 
@@ -1309,8 +1578,8 @@ function renderRootLandingPage(locale, reports) {
   });
 }
 
-function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}) {
-  const copy = getOuroborosCopy(locale);
+function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   const gateText = signed
     ? copy.gateSigned
     : copy.gateUnsigned;
@@ -1318,7 +1587,13 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
     ? `<div class="vault-sync-state terminal-font">${escapeHtml(
         unlockedAddress ? `${copy.sessionVerified}: ${unlockedAddress}` : copy.sessionVerified,
       )}</div>
-      <button class="upgrade-btn pulse-glow" type="button" data-plan="sovereign" data-payment-rail="trc20_usdt">${escapeHtml(copy.upgradeBtn)}</button>
+      ${renderSovereignGateButton({
+        label: copy.upgradeBtn,
+        slug: "vault",
+        planCode: "sovereign",
+        paymentRail: "l2_usdc",
+        className: "upgrade-btn pulse-glow",
+      })}
       <div id="paymentResult" class="payment-result muted"></div>`
     : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
 
@@ -1330,6 +1605,7 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
       <div class="hero-cta-row">
         <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
         <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
+        <a class="btn" href="/forge">[ ORACLE FORGE ]</a>
       </div>
     </header>
 
@@ -1341,20 +1617,7 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
       </div>
     </section>
 
-    <div id="paymentModal" class="payment-modal" aria-hidden="true">
-      <div class="payment-modal-card glass-panel cyber-border">
-        <button id="paymentModalCloseBtn" class="payment-close-btn" type="button">[ CLOSE ]</button>
-        <h2 class="neon-text">Sovereign Invoice</h2>
-        <div class="invoice-grid terminal-font">
-          <div><span>INVOICE</span><strong id="invoiceIdField">-</strong></div>
-          <div><span>PLAN</span><strong id="invoicePlanField">-</strong></div>
-          <div><span>AMOUNT</span><strong id="invoiceAmountField">-</strong></div>
-          <div><span>ADDRESS</span><strong id="invoiceAddressField">-</strong></div>
-          <div><span>NONCE</span><strong id="invoiceNonceField">-</strong></div>
-          <div><span>EXPIRES</span><strong id="invoiceExpiryField">-</strong></div>
-        </div>
-      </div>
-    </div>
+    ${renderPaymentModal("Sovereign Gateway Invoice")}
   </main>`;
 
   const jsonLd = {
@@ -1401,8 +1664,109 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
   });
 }
 
-function renderAnalysisIndexPage(locale, reports) {
-  const copy = getOuroborosCopy(locale);
+function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
+  const gate = buildSovereignGateConfig("sovereign");
+  const lockText = signed
+    ? (isZh
+        ? "簽署完成，主權模型維持訓練狀態。可直接進入冷錢包結算。"
+        : "Signature verified. Model remains in training mode. Cold-wallet settlement is enabled.")
+    : copy.paywallNotice;
+  const transferLine = isZh
+    ? `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`
+    : `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`;
+  const forgeCta = signed
+    ? renderSovereignGateButton({
+        label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
+        slug: "vault",
+        planCode: "sovereign",
+        paymentRail: "l2_usdc",
+      })
+    : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
+  const paywallShellClass = signed ? "paywall-shell is-unlocked" : "paywall-shell";
+  const bodyHtml = `<main class="site-wrap">
+    <header class="hero hero-compact glass-panel cyber-border">
+      <div class="hero-kicker terminal-font">MODEL FORGE</div>
+      <h1 class="neon-text">[ORACLE FORGE: BTC CORE]</h1>
+      <p>${escapeHtml(isZh
+        ? "模型仍在收斂，輸出尚未授權部署。只有主權冷錢包流程可預先鎖定存取。"
+        : "The BTC model is still converging and remains unauthorized for deployment. Pre-order access is only available through the sovereign cold-wallet flow.")}</p>
+      <div class="hero-cta-row">
+        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
+      </div>
+    </header>
+
+    <section class="panel glass-panel cyber-border forge-shell">
+      <h2>[ORACLE FORGE: BTC CORE]</h2>
+      <div class="forge-grid">
+        <div class="forge-canvas-wrap">
+          <canvas id="forgeMatrixCanvas" width="960" height="320" aria-label="Loss curve convergence"></canvas>
+        </div>
+        <aside class="forge-metrics">
+          <div class="forge-metric"><span>EPOCH</span><strong id="forgeEpoch">4592/5000</strong></div>
+          <div class="forge-metric"><span>ALPHA_CONVERGENCE</span><strong id="forgeConvergence">94.2%</strong></div>
+          <div class="forge-metric"><span>STATUS</span><strong id="forgeStatus" class="forge-status">UNAUTHORIZED TO DEPLOY (TRAINING)</strong></div>
+          <div class="forge-metric"><span>ERC20 (ETHEREUM)</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(String(gate.l2Network || "arbitrum").toUpperCase())} (USDC)</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
+        </aside>
+      </div>
+      <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
+      <div class="forge-cta-row">
+        ${forgeCta}
+      </div>
+      <div class="lock-message">${escapeHtml(lockText)}</div>
+      <div id="paymentResult" class="payment-result muted"></div>
+      <div class="${paywallShellClass}" style="display:none" data-unlocked="${signed ? "1" : "0"}" data-slug="vault" data-unlocked-address="${escapeHtml(unlockedAddress || "")}"></div>
+    </section>
+    ${renderPaymentModal("Sovereign Gateway Invoice")}
+  </main>`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebPage",
+        name: "[ORACLE FORGE: BTC CORE]",
+        url: `${ROOT_CANONICAL_URL}forge`,
+        description: lockText,
+        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "Dataset",
+        name: "BTC Core Model Forge Stream",
+        description: "Live model-convergence telemetry for sovereign BTC model training.",
+        creator: { "@type": "Organization", name: "LeiMai Oracle" },
+        url: `${ROOT_CANONICAL_URL}forge`,
+        isAccessibleForFree: false,
+        hasPart: paywallHasPart(),
+      },
+      {
+        "@type": "Service",
+        name: "Sovereign Cold Wallet Gateway",
+        provider: { "@type": "Organization", name: "LeiMai Oracle" },
+        serviceType: "Cold wallet settlement for model subscriptions",
+      },
+    ],
+  };
+
+  return renderOuroborosDocument({
+    title: "LeiMai Oracle | ORACLE FORGE BTC CORE",
+    description: lockText,
+    bodyHtml,
+    jsonLd,
+    canonicalUrl: `${ROOT_CANONICAL_URL}forge`,
+    locale,
+    keywords: copy.keywords,
+    pageType: "forge",
+  });
+}
+
+function renderAnalysisIndexPage(locale, reports, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   const rows = Array.isArray(reports) ? reports : [];
   const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
 
@@ -1588,8 +1952,8 @@ function buildMandalaSvg() {
   </svg>`;
 }
 
-function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAddress = null } = {}) {
-  const copy = getOuroborosCopy(locale);
+function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAddress = null } = {}, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   const reportBody = String(report.body_md || "");
   const visibleSource = unlocked ? reportBody : stripLockedVerdictSections(reportBody, locale);
   const previewMarkdown = unlocked ? visibleSource : buildPreviewMarkdown(visibleSource, REPORT_PREVIEW_RATIO);
@@ -1713,8 +2077,8 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
   });
 }
 
-function renderAnalysisNotFoundPage(locale, slug) {
-  const copy = getOuroborosCopy(locale);
+function renderAnalysisNotFoundPage(locale, slug, copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   return renderOuroborosDocument({
     title: "Not Found | Analysis",
     description: "Requested analysis page does not exist.",
@@ -1733,8 +2097,8 @@ function renderAnalysisNotFoundPage(locale, slug) {
   });
 }
 
-function goneResponse(res, pathname, locale = "en") {
-  const copy = getOuroborosCopy(locale);
+function goneResponse(res, pathname, locale = "en", copyOverrides = {}) {
+  const copy = resolveOuroborosCopy(locale, copyOverrides);
   const html = renderOuroborosDocument({
     title: "410 Gone | LeiMai Oracle",
     description: "This legacy route has been permanently removed.",
@@ -1772,28 +2136,36 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (String(pathname || "").startsWith("/api/")) {
     return false;
   }
-  const locale = resolveOuroborosLocale(req);
+  let routePath = String(pathname || "");
+  let localeByPath = "";
+  const localePathMatch = routePath.match(/^\/(en|zh-tw|es|ja)(\/.*)?$/i);
+  if (localePathMatch) {
+    localeByPath = normalizeOuroborosLocale(localePathMatch[1]);
+    routePath = localePathMatch[2] ? String(localePathMatch[2]) : "/";
+  }
+  const locale = localeByPath || resolveOuroborosLocale(req);
+  const copyOverrides = await readGrowthOverrides();
 
   if (method !== "GET") {
-    goneResponse(res, pathname, locale);
+    goneResponse(res, pathname, locale, copyOverrides);
     return true;
   }
 
-  if (pathname === "/assets/ouroboros.css") {
+  if (routePath === "/assets/ouroboros.css") {
     const css = await fs.readFile(path.join(__dirname, "web", "ouroboros.css"), "utf-8");
     textResponse(res, 200, css, "text/css; charset=utf-8");
     return true;
   }
-  if (pathname === "/assets/ouroboros.js") {
+  if (routePath === "/assets/ouroboros.js") {
     const js = await fs.readFile(path.join(__dirname, "web", "ouroboros.js"), "utf-8");
     textResponse(res, 200, js, "application/javascript; charset=utf-8");
     return true;
   }
-  if (pathname === "/assets/social-card.svg") {
+  if (routePath === "/assets/social-card.svg") {
     textResponse(res, 200, buildSocialCardSvg(), "image/svg+xml; charset=utf-8");
     return true;
   }
-  const generatedSnapshotMatch = String(pathname || "").match(/^\/generated\/snapshots\/([a-z0-9_-]+)\.png$/i);
+  const generatedSnapshotMatch = String(routePath || "").match(/^\/generated\/snapshots\/([a-z0-9_-]+)\.png$/i);
   if (generatedSnapshotMatch) {
     const slug = String(generatedSnapshotMatch[1] || "").trim().toLowerCase();
     const pngPath = path.join(__dirname, "web", "generated", "snapshots", `${slug}.png`);
@@ -1816,25 +2188,57 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
       return true;
     }
   }
-  if (pathname === "/robots.txt") {
+  if (routePath === "/robots.txt") {
     textResponse(res, 200, buildRobots(CONFIG.siteUrl));
     return true;
   }
-  if (pathname === "/sitemap.xml") {
-    const analysisPaths = await fetchAnalysisPaths(5000);
-    textResponse(res, 200, buildSitemap(ROOT_CANONICAL_URL.replace(/\/+$/, ""), ["/vault", ...analysisPaths]), "application/xml; charset=utf-8");
+  if (routePath === "/sitemap-index.xml") {
+    const indexXml = buildSitemapIndex(ROOT_CANONICAL_URL.replace(/\/+$/, ""), [
+      "/sitemap-static.xml",
+      "/sitemap-analysis.xml",
+    ]);
+    textResponse(res, 200, indexXml, "application/xml; charset=utf-8");
     return true;
   }
-  if (pathname === "/llms.txt") {
+  if (routePath === "/sitemap-static.xml") {
+    const staticXml = buildSitemapDocument(ROOT_CANONICAL_URL.replace(/\/+$/, ""), buildStaticSitemapPaths(), {
+      changefreq: "daily",
+    });
+    textResponse(res, 200, staticXml, "application/xml; charset=utf-8");
+    return true;
+  }
+  if (routePath === "/sitemap-analysis.xml") {
+    const analysisPaths = await fetchAnalysisPaths(5000);
+    const analysisXml = buildSitemapDocument(ROOT_CANONICAL_URL.replace(/\/+$/, ""), analysisPaths, {
+      changefreq: "hourly",
+    });
+    textResponse(res, 200, analysisXml, "application/xml; charset=utf-8");
+    return true;
+  }
+  if (routePath === "/sitemap.xml") {
+    const indexXml = buildSitemapIndex(ROOT_CANONICAL_URL.replace(/\/+$/, ""), [
+      "/sitemap-static.xml",
+      "/sitemap-analysis.xml",
+    ]);
+    textResponse(res, 200, indexXml, "application/xml; charset=utf-8");
+    return true;
+  }
+  if (routePath === "/llms.txt") {
     textResponse(res, 200, buildLlmsTxt(CONFIG.siteUrl, CONFIG.mainSiteUrl));
     return true;
   }
-  if (pathname === "/") {
-    const reports = await fetchLatestReports(5, locale);
-    textResponse(res, 200, renderRootLandingPage(locale, reports), "text/html; charset=utf-8");
+  if (routePath === "/.well-known/ai-citation-feed.json") {
+    const reports = await fetchReportsAcrossLocales(20);
+    const payload = buildAiCitationFeedPayload(CONFIG.siteUrl, reports);
+    jsonResponse(res, 200, { ok: true, ...payload });
     return true;
   }
-  if (pathname === "/vault") {
+  if (routePath === "/") {
+    const reports = await fetchLatestReports(5, locale);
+    textResponse(res, 200, renderRootLandingPage(locale, reports, copyOverrides), "text/html; charset=utf-8");
+    return true;
+  }
+  if (routePath === "/vault") {
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
       res.setHeader("Set-Cookie", clearUnlockCookie());
@@ -1845,13 +2249,29 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
       renderVaultPage(locale, {
         signed: Boolean(unlockSession),
         unlockedAddress: unlockSession?.addr || null,
-      }),
+      }, copyOverrides),
+      "text/html; charset=utf-8",
+    );
+    return true;
+  }
+  if (routePath === "/forge") {
+    const unlockSession = getUnlockSessionFromReq(req);
+    if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
+      res.setHeader("Set-Cookie", clearUnlockCookie());
+    }
+    textResponse(
+      res,
+      200,
+      renderForgePage(locale, {
+        signed: Boolean(unlockSession),
+        unlockedAddress: unlockSession?.addr || null,
+      }, copyOverrides),
       "text/html; charset=utf-8",
     );
     return true;
   }
 
-  const normalized = normalizeAnalysisPath(pathname);
+  const normalized = normalizeAnalysisPath(routePath);
   const snapshotMatch = normalized.match(/^\/analysis\/([a-z0-9_-]+)\/snapshot\.svg$/i);
   if (snapshotMatch) {
     const slug = String(snapshotMatch[1] || "").trim().toLowerCase();
@@ -1870,20 +2290,21 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   if (normalized === "/analysis") {
     const reports = await fetchReportsForIndex(500, locale);
-    textResponse(res, 200, renderAnalysisIndexPage(locale, reports), "text/html; charset=utf-8");
+    textResponse(res, 200, renderAnalysisIndexPage(locale, reports, copyOverrides), "text/html; charset=utf-8");
     return true;
   }
   if (normalized.startsWith("/analysis/")) {
     const slug = normalized.slice("/analysis/".length).trim().toLowerCase();
     const entry = await fetchReportBySlug(slug);
     if (!entry) {
-      textResponse(res, 404, renderAnalysisNotFoundPage(locale, slug), "text/html; charset=utf-8");
+      textResponse(res, 404, renderAnalysisNotFoundPage(locale, slug, copyOverrides), "text/html; charset=utf-8");
       return true;
     }
+    const localePrefix = localeByPath ? `/${localeByPath}` : "";
     if (normalizeOuroborosLocale(entry.locale) !== locale) {
       const localized = await fetchReportByEventAndLocale(entry.event_id, locale);
       if (localized?.slug && localized.slug !== entry.slug) {
-        res.writeHead(302, { Location: `/analysis/${localized.slug}` });
+        res.writeHead(302, { Location: `${localePrefix}/analysis/${localized.slug}` });
         res.end();
         return true;
       }
@@ -1898,13 +2319,13 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
       renderAnalysisDetailPage(locale, entry, {
         unlocked: Boolean(unlockSession),
         unlockedAddress: unlockSession?.addr || null,
-      }),
+      }, copyOverrides),
       "text/html; charset=utf-8",
     );
     return true;
   }
 
-  goneResponse(res, pathname, locale);
+  goneResponse(res, pathname, locale, copyOverrides);
   return true;
 }
 
@@ -2415,6 +2836,26 @@ export async function handleRequest(req, res) {
       return jsonResponse(res, 200, {
         ok: true,
         payload: buildKnowledgePayload(locale, board.rows, board.king, ads),
+      });
+    }
+
+    if (method === "GET" && pathname === "/api/v1/growth/scoreboard") {
+      const payload = await readJsonFileSafe(GROWTH_SCOREBOARD_PATH, {});
+      const overrides = await readJsonFileSafe(GROWTH_OVERRIDES_PATH, {});
+      return jsonResponse(res, 200, {
+        ok: true,
+        scoreboard: payload,
+        active_variant_id: String(overrides?.variant_id || "control"),
+      });
+    }
+
+    if (method === "GET" && pathname === "/api/v1/growth/actions") {
+      const limit = Math.min(Math.max(1, Number(searchParams.get("limit") || 50)), 200);
+      const actions = await readJsonLinesSafe(GROWTH_ACTIONS_PATH, limit);
+      return jsonResponse(res, 200, {
+        ok: true,
+        count: actions.length,
+        actions,
       });
     }
 

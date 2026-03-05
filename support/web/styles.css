@@ -618,6 +618,60 @@ tbody tr:nth-child(even) {
   padding: 12px;
 }
 
+.forge-shell {
+  margin-top: 12px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(170deg, rgba(7, 15, 9, 0.94), rgba(3, 7, 4, 0.96));
+  padding: 12px;
+}
+
+.forge-shell h3 {
+  margin: 0 0 10px;
+  font-family: "JetBrains Mono", monospace;
+  color: #fff;
+  letter-spacing: 0.08em;
+}
+
+.forge-shell .forge-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr);
+  gap: 10px;
+}
+
+.forge-shell canvas {
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  background: rgba(3, 8, 4, 0.75);
+  display: block;
+}
+
+.forge-metric {
+  border: 1px solid var(--line);
+  background: rgba(8, 18, 10, 0.8);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.forge-metric span {
+  display: block;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.forge-metric strong {
+  color: #fff;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.forge-metric .warn {
+  color: #ff9a9a;
+}
+
 @media (max-width: 1120px) {
   .hero-grid {
     grid-template-columns: 1fr;
@@ -626,6 +680,10 @@ tbody tr:nth-child(even) {
   .king-panel,
   .pay-panel {
     grid-column: span 12;
+  }
+
+  .forge-shell .forge-grid {
+    grid-template-columns: 1fr;
   }
 }
 
