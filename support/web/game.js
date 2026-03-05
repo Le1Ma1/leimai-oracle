@@ -46,6 +46,12 @@
   const spaceZoomGate = Number(config.spaceZoomGate || 3);
   const earthStyle = String(config.earthStyle || "mapbox://styles/mapbox/satellite-v9");
   const starStyle = String(config.starStyle || "mapbox://styles/mapbox/dark-v11");
+  const i18n = config.i18n && typeof config.i18n === "object" ? config.i18n : {};
+
+  function t(key, fallback) {
+    const value = i18n[key];
+    return value == null ? String(fallback || "") : String(value);
+  }
 
   function setStatus(message, tone = "normal") {
     if (!refs.statusLine) return;
@@ -84,7 +90,7 @@
     if (!refs.lawList) return;
     const list = Array.isArray(laws) ? laws.filter(Boolean).slice(0, 4) : [];
     if (!list.length) {
-      refs.lawList.innerHTML = '<li class="law-card rounded-md p-3 text-sm text-zinc-300">No law generated yet.</li>';
+      refs.lawList.innerHTML = `<li class="law-card rounded-md p-3 text-sm text-zinc-300">${escapeHtml(t("no_law", "No law generated yet."))}</li>`;
       return;
     }
     refs.lawList.innerHTML = list
@@ -145,13 +151,13 @@
     placeObelisk(lat, lng, Boolean(payload?.is_fixed));
 
     if (payload?.is_fixed) {
-      setStatus(`Zone is canonized until ${payload?.fixed_until || "unknown"}`, "ok");
+      setStatus(`${t("status_fixed_until", "Zone is canonized until")} ${payload?.fixed_until || t("unknown", "unknown")}`, "ok");
     } else if (entropy >= entropyMutate) {
-      setStatus("Zone reached mutation threshold. Rules are unstable.", "warn");
+      setStatus(t("status_mutation_threshold", "Zone reached mutation threshold. Rules are unstable."), "warn");
     } else if (entropy >= entropyWarn) {
-      setStatus("Reality collapse warning. Canonization recommended.", "warn");
+      setStatus(t("status_collapse_warning", "Reality collapse warning. Canonization recommended."), "warn");
     } else {
-      setStatus("Zone synchronized.", "ok");
+      setStatus(t("status_zone_synced", "Zone synchronized."), "ok");
     }
   }
 
@@ -166,7 +172,7 @@
   }
 
   async function loadGenesis(lat, lng) {
-    setStatus("Forging local law...", "warn");
+    setStatus(t("status_forging", "Forging local law..."), "warn");
     const query = `lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`;
     const payload = await fetchJson(`/api/genesis?${query}`, { method: "GET", cache: "no-store" });
     renderGenesis(payload);
@@ -188,13 +194,13 @@
     world.canonInvoiceId = String(payload?.invoice_id || "");
     if (refs.canonInvoice) {
       refs.canonInvoice.innerHTML = [
-        `Invoice: <b>${escapeHtml(world.canonInvoiceId)}</b>`,
-        `Transfer: <b>${Number(payload?.amount_usdt || 0).toFixed(2)} USDT</b>`,
-        `To: <code>${escapeHtml(payload?.pay_to_address || "-")}</code>`,
+        `${escapeHtml(t("invoice_label", "Invoice"))}: <b>${escapeHtml(world.canonInvoiceId)}</b>`,
+        `${escapeHtml(t("transfer_label", "Transfer"))}: <b>${Number(payload?.amount_usdt || 0).toFixed(2)} USDT</b>`,
+        `${escapeHtml(t("to_label", "To"))}: <code>${escapeHtml(payload?.pay_to_address || "-")}</code>`,
       ].join("<br>");
     }
     setCanonModalVisible(true);
-    setStatus("Invoice created. Waiting on-chain confirmation...", "warn");
+    setStatus(t("status_invoice_created", "Invoice created. Waiting on-chain confirmation..."), "warn");
     startCanonPolling();
   }
 
@@ -205,7 +211,7 @@
     if (payload?.fixed) {
       stopCanonPolling();
       setCanonModalVisible(false);
-      setStatus("Canonization complete. Mutation locked for 24h.", "ok");
+      setStatus(t("status_canon_complete", "Canonization complete. Mutation locked for 24h."), "ok");
       await loadGenesis(world.current.lat, world.current.lng);
     }
   }
@@ -214,7 +220,7 @@
     stopCanonPolling();
     world.canonPollTimer = window.setInterval(() => {
       void checkCanonStatus().catch((error) => {
-        setStatus(`Canonization polling failed: ${String(error?.message || error)}`, "err");
+        setStatus(`${t("status_canon_poll_failed", "Canonization polling failed")}: ${String(error?.message || error)}`, "err");
       });
     }, 6000);
   }
@@ -267,8 +273,8 @@
     if (refs.orbitBanner) refs.orbitBanner.classList.toggle("hidden", !payload?.unlocked);
     if (refs.orbitText) {
       refs.orbitText.textContent = payload?.unlocked
-        ? `Semantic orbit opened: ${String(payload.target || "unknown").toUpperCase()} | Global dev: ${Number(payload.global_developments || 0)}`
-        : `Space locked. Need ${Number(payload.required || 0)} global developments (current ${Number(payload.global_developments || 0)}).`;
+        ? `${t("orbit_opened", "Semantic orbit opened")}: ${String(payload.target || t("unknown", "unknown")).toUpperCase()} | ${t("global_dev", "Global dev")}: ${Number(payload.global_developments || 0)}`
+        : `${t("space_locked_need", "Space locked. Need")} ${Number(payload.required || 0)} ${t("global_dev_count", "global developments")} (${t("current", "current")} ${Number(payload.global_developments || 0)}).`;
     }
     if (payload?.unlocked && zoom < spaceZoomGate && !world.starsMode) {
       world.starsMode = true;
@@ -307,7 +313,7 @@
   async function initMap() {
     const token = String(config.mapboxToken || "");
     if (!token || !window.mapboxgl) {
-      setStatus("Mapbox token is missing. Set MAPBOX_PUBLIC_TOKEN.", "err");
+      setStatus(t("status_missing_mapbox", "Mapbox token is missing. Set MAPBOX_PUBLIC_TOKEN."), "err");
       return;
     }
     mapboxgl.accessToken = token;
@@ -334,7 +340,7 @@
 
     world.map.on("click", (event) => {
       void loadGenesis(event.lngLat.lat, event.lngLat.lng).catch((error) => {
-        setStatus(`Genesis failed: ${String(error?.message || error)}`, "err");
+        setStatus(`${t("status_genesis_failed", "Genesis failed")}: ${String(error?.message || error)}`, "err");
       });
     });
 
@@ -349,13 +355,13 @@
 
   refs.canonBtn?.addEventListener("click", () => {
     void createCanonInvoice().catch((error) => {
-      setStatus(`Canonization invoice failed: ${String(error?.message || error)}`, "err");
+      setStatus(`${t("status_canon_invoice_failed", "Canonization invoice failed")}: ${String(error?.message || error)}`, "err");
     });
   });
 
   refs.canonCheck?.addEventListener("click", () => {
     void checkCanonStatus().catch((error) => {
-      setStatus(`Status check failed: ${String(error?.message || error)}`, "err");
+      setStatus(`${t("status_check_failed", "Status check failed")}: ${String(error?.message || error)}`, "err");
     });
   });
 
@@ -366,7 +372,6 @@
   });
 
   void initMap().catch((error) => {
-    setStatus(`Map init failed: ${String(error?.message || error)}`, "err");
+    setStatus(`${t("status_map_init_failed", "Map init failed")}: ${String(error?.message || error)}`, "err");
   });
 })();
-

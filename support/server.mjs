@@ -2763,7 +2763,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     return true;
   }
   if (routePath === "/game") {
-    textResponse(res, 200, renderWorldGamePage(), "text/html; charset=utf-8");
+    textResponse(res, 200, renderWorldGamePage(locale), "text/html; charset=utf-8");
     return true;
   }
 
@@ -3056,7 +3056,98 @@ function renderPage({ locale, section, content, leaderboard, king, ads, sourceSt
 </html>`;
 }
 
-function renderWorldGamePage() {
+function renderWorldGamePage(locale = "en") {
+  const lc = normalizeOuroborosLocale(locale);
+  const isZhTw = lc === "zh-tw";
+  const title = isZhTw ? "世界鍛造 | LeiMai Oracle" : "Worldforge | LeiMai Oracle";
+  const description = isZhTw
+    ? "以地圖座標驅動熵值演化與天道法則，進行語義創世與區域鎮定。"
+    : "Semantic map game with entropy-driven world mutation and canonization protocol.";
+  const ogDescription = isZhTw
+    ? "點擊地圖座標，演化區域法則，解鎖月球與火星語義軌道。"
+    : "Click map zones, evolve local laws, and unlock semantic orbit to Moon or Mars.";
+  const localePrefix = isZhTw ? "/zh-tw" : "";
+  const canonicalPath = `${localePrefix}/game`;
+  const analysisHref = `${localePrefix}/analysis/`;
+
+  const copy = isZhTw
+    ? {
+        hud_kicker: "WORLDFORGE / 即時區域",
+        coordinates: "座標",
+        entropy: "熵值",
+        seed: "種子",
+        status_init: "初始化地圖鍛造中...",
+        back_oracle: "返回 Oracle",
+        genesis_feed: "創世訊號",
+        sovereign_cell: "主權區域",
+        visual_theme: "視覺主題",
+        narrative: "環境敘事",
+        physical_rule: "物理規則",
+        dev_task: "開發任務",
+        heavenly_laws: "天道法則",
+        collapse_warning: "現實崩塌警告",
+        collapse_desc: "區域熵值已越過危險門檻，建議啟用定海神針鎖定 24 小時。",
+        activate_canon: "啟用定海神針",
+        orbit_standby: "語義軌道待命中。",
+        canon_gateway: "定海神針閘門",
+        close: "關閉",
+        canon_desc: "請依指示轉帳 USDT，完成後將鎖定此區域 24 小時。",
+        no_invoice: "尚未建立帳單。",
+        check_canon: "檢查鎮定狀態",
+      }
+    : {
+        hud_kicker: "WORLDFORGE / LIVE CELL",
+        coordinates: "Coordinates",
+        entropy: "Entropy",
+        seed: "Seed",
+        status_init: "Initializing map forge...",
+        back_oracle: "Back to Oracle",
+        genesis_feed: "GENESIS FEED",
+        sovereign_cell: "The Sovereign Cell",
+        visual_theme: "Visual Theme",
+        narrative: "Environmental Narrative",
+        physical_rule: "Physical Rule",
+        dev_task: "Dev Task",
+        heavenly_laws: "Heavenly Laws",
+        collapse_warning: "Reality Collapse Warning",
+        collapse_desc: "Entropy crossed danger threshold. Canonize this zone to lock mutation for 24h.",
+        activate_canon: "Activate Canonization",
+        orbit_standby: "Semantic orbit standby.",
+        canon_gateway: "Canonization Gateway",
+        close: "CLOSE",
+        canon_desc: "Transfer the requested USDT amount to lock this zone for 24h.",
+        no_invoice: "No invoice created.",
+        check_canon: "Check Canonization Status",
+      };
+
+  const runtimeI18n = isZhTw
+    ? {
+        no_law: "尚未生成法則。",
+        unknown: "未知",
+        status_fixed_until: "此區域已鎮定，鎖定至",
+        status_mutation_threshold: "區域已達質劣變門檻，法則正在失穩。",
+        status_collapse_warning: "現實崩塌警告，建議立即定海神針。",
+        status_zone_synced: "區域同步完成。",
+        status_forging: "正在鍛造區域法則...",
+        invoice_label: "帳單",
+        transfer_label: "轉帳",
+        to_label: "收款地址",
+        status_invoice_created: "帳單建立完成，等待鏈上確認...",
+        status_canon_complete: "定海神針完成，24 小時內不再突變。",
+        status_canon_poll_failed: "鎮定輪詢失敗",
+        orbit_opened: "語義軌道已開啟",
+        global_dev: "全球開發數",
+        space_locked_need: "太空尚未解鎖，仍需",
+        global_dev_count: "次全球開發",
+        current: "目前",
+        status_missing_mapbox: "缺少 Mapbox Token，請設定 MAPBOX_PUBLIC_TOKEN。",
+        status_genesis_failed: "創世失敗",
+        status_canon_invoice_failed: "定海神針帳單建立失敗",
+        status_check_failed: "狀態檢查失敗",
+        status_map_init_failed: "地圖初始化失敗",
+      }
+    : {};
+
   const payload = {
     mapboxToken: CONFIG.mapboxPublicToken,
     entropyWarn: CONFIG.worldEntropyWarn,
@@ -3067,22 +3158,23 @@ function renderWorldGamePage() {
     defaultZoom: 11.8,
     earthStyle: WORLDFORGE_EARTH_STYLE,
     starStyle: WORLDFORGE_STARS_STYLE,
+    i18n: runtimeI18n,
   };
   const bootstrap = escapeHtml(JSON.stringify(payload));
   return `<!doctype html>
-<html lang="en">
+<html lang="${escapeHtml(isZhTw ? "zh-Hant" : "en")}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Worldforge | LeiMai Oracle</title>
-  <meta name="description" content="Semantic map game with entropy-driven world mutation and canonization protocol.">
+  <title>${escapeHtml(title)}</title>
+  <meta name="description" content="${escapeHtml(description)}">
   <meta name="theme-color" content="#090909">
   <meta name="robots" content="index,follow">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Worldforge | LeiMai Oracle">
-  <meta property="og:description" content="Click map zones, evolve local laws, and unlock semantic orbit to Moon or Mars.">
-  <meta property="og:url" content="${escapeHtml(ROOT_CANONICAL_URL)}game">
-  <link rel="canonical" href="${escapeHtml(ROOT_CANONICAL_URL)}game">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(ogDescription)}">
+  <meta property="og:url" content="${escapeHtml(ROOT_CANONICAL_URL)}${escapeHtml(canonicalPath.replace(/^\/+/, ""))}">
+  <link rel="canonical" href="${escapeHtml(ROOT_CANONICAL_URL)}${escapeHtml(canonicalPath.replace(/^\/+/, ""))}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
   <link rel="stylesheet" href="/assets/game.css">
@@ -3092,72 +3184,72 @@ function renderWorldGamePage() {
     <div id="worldMap" aria-label="Worldforge Map"></div>
 
     <aside class="hud-panel absolute left-4 top-4 z-20 w-[320px] rounded-xl p-4">
-      <div class="text-xs tracking-[0.25em] text-zinc-400">WORLDFORGE / LIVE CELL</div>
-      <div class="mt-2 text-lg font-semibold text-amber-200">Coordinates</div>
+      <div class="text-xs tracking-[0.25em] text-zinc-400">${escapeHtml(copy.hud_kicker)}</div>
+      <div class="mt-2 text-lg font-semibold text-amber-200">${escapeHtml(copy.coordinates)}</div>
       <div id="coordLabel" class="text-sm text-zinc-100">0.000000, 0.000000</div>
       <div class="mt-3 grid grid-cols-2 gap-2">
         <div class="rounded-md border border-zinc-700/60 bg-zinc-900/50 p-2">
-          <div class="text-[11px] uppercase text-zinc-400">Entropy</div>
+          <div class="text-[11px] uppercase text-zinc-400">${escapeHtml(copy.entropy)}</div>
           <div id="entropyLabel" class="text-xl font-semibold entropy-low">0.000</div>
         </div>
         <div class="rounded-md border border-zinc-700/60 bg-zinc-900/50 p-2">
-          <div class="text-[11px] uppercase text-zinc-400">Seed</div>
+          <div class="text-[11px] uppercase text-zinc-400">${escapeHtml(copy.seed)}</div>
           <div id="zoneSeed" class="truncate text-sm text-zinc-200">-</div>
         </div>
       </div>
-      <div id="statusLine" class="mt-3 text-sm text-amber-300">Initializing map forge...</div>
-      <a class="mt-4 inline-block text-xs text-zinc-400 underline hover:text-zinc-200" href="/analysis/">Back to Oracle</a>
+      <div id="statusLine" class="mt-3 text-sm text-amber-300">${escapeHtml(copy.status_init)}</div>
+      <a class="mt-4 inline-block text-xs text-zinc-400 underline hover:text-zinc-200" href="${escapeHtml(analysisHref)}">${escapeHtml(copy.back_oracle)}</a>
     </aside>
 
     <aside class="hud-panel absolute right-4 top-4 z-20 flex h-[calc(100%-2rem)] w-[min(420px,92vw)] flex-col rounded-xl p-4">
-      <div class="text-xs tracking-[0.25em] text-violet-300">GENESIS FEED</div>
-      <h1 class="mt-2 text-2xl font-semibold text-amber-100">The Sovereign Cell</h1>
+      <div class="text-xs tracking-[0.25em] text-violet-300">${escapeHtml(copy.genesis_feed)}</div>
+      <h1 class="mt-2 text-2xl font-semibold text-amber-100">${escapeHtml(copy.sovereign_cell)}</h1>
       <div class="mt-4 space-y-3 overflow-y-auto pr-1">
         <section class="rounded-md border border-amber-400/30 bg-black/30 p-3">
-          <div class="text-xs uppercase text-amber-300">Visual Theme</div>
+          <div class="text-xs uppercase text-amber-300">${escapeHtml(copy.visual_theme)}</div>
           <div id="visualTheme" class="mt-1 text-sm text-zinc-100">-</div>
         </section>
         <section class="rounded-md border border-violet-400/35 bg-black/30 p-3">
-          <div class="text-xs uppercase text-violet-300">Environmental Narrative</div>
+          <div class="text-xs uppercase text-violet-300">${escapeHtml(copy.narrative)}</div>
           <div id="narrativeText" class="mt-1 text-sm text-zinc-100">-</div>
         </section>
         <section class="rounded-md border border-zinc-600/70 bg-black/30 p-3">
-          <div class="text-xs uppercase text-zinc-300">Physical Rule</div>
+          <div class="text-xs uppercase text-zinc-300">${escapeHtml(copy.physical_rule)}</div>
           <div id="physicalRule" class="mt-1 text-sm text-zinc-100">-</div>
         </section>
         <section class="rounded-md border border-zinc-600/70 bg-black/30 p-3">
-          <div class="text-xs uppercase text-zinc-300">Dev Task</div>
+          <div class="text-xs uppercase text-zinc-300">${escapeHtml(copy.dev_task)}</div>
           <div id="devTask" class="mt-1 text-sm text-zinc-100">-</div>
         </section>
         <section>
-          <div class="mb-2 text-xs uppercase text-fuchsia-300">Heavenly Laws</div>
+          <div class="mb-2 text-xs uppercase text-fuchsia-300">${escapeHtml(copy.heavenly_laws)}</div>
           <ul id="lawList" class="space-y-2"></ul>
         </section>
       </div>
 
       <section id="canonZone" class="canon-pulse mt-4 hidden rounded-lg border border-rose-500/40 bg-rose-950/35 p-3">
-        <div class="text-sm font-semibold text-rose-200">Reality Collapse Warning</div>
-        <p class="mt-1 text-xs text-rose-100/85">Entropy crossed danger threshold. Canonize this zone to lock mutation for 24h.</p>
+        <div class="text-sm font-semibold text-rose-200">${escapeHtml(copy.collapse_warning)}</div>
+        <p class="mt-1 text-xs text-rose-100/85">${escapeHtml(copy.collapse_desc)}</p>
         <button id="canonBtn" class="mt-2 w-full rounded-md border border-rose-400/40 bg-rose-900/35 px-3 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-800/45">
-          Activate Canonization
+          ${escapeHtml(copy.activate_canon)}
         </button>
       </section>
 
       <section id="orbitBanner" class="orbit-banner mt-3 hidden rounded-md p-3 text-xs text-cyan-100">
-        <div id="orbitText">Semantic orbit standby.</div>
+        <div id="orbitText">${escapeHtml(copy.orbit_standby)}</div>
       </section>
     </aside>
 
     <div id="canonModal" class="canon-modal absolute inset-0 z-40 hidden items-center justify-center p-4">
       <div class="hud-panel w-full max-w-xl rounded-xl p-4">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-amber-100">Canonization Gateway</h2>
-          <button id="canonClose" class="rounded border border-zinc-600 px-2 py-1 text-xs text-zinc-300 hover:text-zinc-100">CLOSE</button>
+          <h2 class="text-lg font-semibold text-amber-100">${escapeHtml(copy.canon_gateway)}</h2>
+          <button id="canonClose" class="rounded border border-zinc-600 px-2 py-1 text-xs text-zinc-300 hover:text-zinc-100">${escapeHtml(copy.close)}</button>
         </div>
-        <p class="mt-2 text-sm text-zinc-300">Transfer the requested USDT amount to lock this zone for 24h.</p>
-        <div id="canonInvoice" class="mt-3 rounded-md border border-zinc-700 bg-zinc-900/45 p-3 text-xs text-zinc-200">No invoice created.</div>
+        <p class="mt-2 text-sm text-zinc-300">${escapeHtml(copy.canon_desc)}</p>
+        <div id="canonInvoice" class="mt-3 rounded-md border border-zinc-700 bg-zinc-900/45 p-3 text-xs text-zinc-200">${escapeHtml(copy.no_invoice)}</div>
         <button id="canonCheck" class="mt-3 w-full rounded-md border border-amber-500/40 bg-amber-700/20 px-3 py-2 text-sm text-amber-100 hover:bg-amber-700/30">
-          Check Canonization Status
+          ${escapeHtml(copy.check_canon)}
         </button>
       </div>
     </div>
