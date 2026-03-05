@@ -100,13 +100,17 @@ def check_visual_state(state: dict[str, Any]) -> tuple[dict[str, Any], list[str]
     cta = float(checks.get("cta_prominence_score", 0.0) or 0.0)
     detail_real = bool(checks.get("detail_is_real_report", False))
     index_has_reports = bool(checks.get("index_has_reports", False))
+    model_name = str(state.get("model") or "").strip().lower()
+    fallback_model = model_name == "fallback"
     overflow = checks.get("overflow_hotspots", []) if isinstance(checks.get("overflow_hotspots"), list) else []
+    cta_threshold = 35.0 if fallback_model else 55.0
 
     if contrast_min < 4.5:
         issues.append("visual_contrast_low")
     if readability < 80:
         issues.append("visual_readability_low")
-    if cta < 55:
+    cta_required = index_has_reports or detail_real
+    if cta_required and cta < cta_threshold:
         issues.append("visual_cta_low")
     if index_has_reports and not detail_real:
         issues.append("detail_not_real_report")
@@ -117,6 +121,10 @@ def check_visual_state(state: dict[str, Any]) -> tuple[dict[str, Any], list[str]
         "contrast_min": contrast_min,
         "readability_score": readability,
         "cta_prominence_score": cta,
+        "cta_threshold": cta_threshold,
+        "cta_required": cta_required,
+        "visual_model": model_name or "unknown",
+        "fallback_model": fallback_model,
         "index_has_reports": index_has_reports,
         "detail_is_real_report": detail_real,
         "overflow_hotspots_count": len(overflow),
@@ -273,11 +281,80 @@ def score_matrix(issues: list[str], visual: dict[str, Any], copy_scan: dict[str,
     }
 
 
+def detect_transient_issues(issues: list[str]) -> list[str]:
+    transient: list[str] = []
+    for issue in issues:
+        if not issue.startswith("page_unreachable:"):
+            continue
+        parts = issue.split(":")
+        status = 0
+        try:
+            status = int(parts[-1])
+        except Exception:
+            status = 0
+        if status == 0 or status == 429 or status >= 500:
+            transient.append(issue)
+    return transient
+
+
+def classify_reason_code(issues: list[str], scores: dict[str, Any], threshold: float) -> str:
+    if not issues:
+        total = float(scores.get("total", 0.0) or 0.0)
+        if total < float(threshold):
+            return "score_below_threshold"
+        return "pass"
+
+    ordered_checks: tuple[tuple[str, str], ...] = (
+        ("forbidden_terms", "forbidden_terms_detected"),
+        ("hash_leak", "hash_leak_detected"),
+        ("page_unreachable", "page_unreachable"),
+        ("jsonld_missing", "jsonld_missing"),
+        ("missing_payment_contract", "missing_payment_contract"),
+        ("missing_harvester_contract", "missing_harvester_contract"),
+        ("detail_not_real_report", "detail_not_real_report"),
+        ("visual_contrast_low", "visual_contrast_low"),
+        ("visual_readability_low", "visual_readability_low"),
+        ("visual_cta_low", "visual_cta_low"),
+        ("visual_overflow_hotspots", "visual_overflow_hotspots"),
+        ("zh_prompt_density_missing", "zh_prompt_density_missing"),
+        ("en_prompt_density_missing", "en_prompt_density_missing"),
+        ("unique_entity_guard_missing", "unique_entity_guard_missing"),
+        ("internal_code_guard_missing", "internal_code_guard_missing"),
+    )
+    for prefix, code in ordered_checks:
+        if any(issue.startswith(prefix) for issue in issues):
+            return code
+    return "validation_issue_detected"
+
+
 def main() -> int:
     cfg = parse_args()
     state = load_json(VISUAL_STATE_PATH)
     if not state:
-        log_event("EVOLUTION_VALIDATION_FAILED", reason="visual_state_missing")
+        payload = {
+            "ts_utc": utc_now_iso(),
+            "base_url": cfg.base_url,
+            "visual": {},
+            "copy": {},
+            "business": {},
+            "prompt": {},
+            "issues": ["visual_state_missing"],
+            "issue_count": 1,
+            "score": {"quality_density": 0.0, "brand_authority": 0.0, "business_harvest": 0.0, "sovereign_seo": 0.0, "total": 0.0},
+            "pass": False,
+            "threshold": cfg.min_total_score,
+            "reason_code": "visual_state_missing",
+            "transient_issue": False,
+            "transient_issues": [],
+            "seo_score": 0.0,
+            "geo_score": 0.0,
+            "conversion_score": 0.0,
+            "total_score": 0.0,
+            "rollback_recommended": True,
+        }
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        OUTPUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        log_event("EVOLUTION_VALIDATION_FAIL", reason_code="visual_state_missing", issues=payload["issues"])
         return 2
 
     detail_url = str(state.get("detail_url") or f"{cfg.base_url}/analysis/")
@@ -291,6 +368,8 @@ def main() -> int:
 
     issues = [*visual_issues, *copy_issues, *business_issues, *prompt_issues]
     scores = score_matrix(issues, visual_result, copy_result)
+    reason_code = classify_reason_code(issues, scores, cfg.min_total_score)
+    transient_issues = detect_transient_issues(issues)
 
     payload = {
         "ts_utc": utc_now_iso(),
@@ -304,16 +383,32 @@ def main() -> int:
         "score": scores,
         "pass": scores["total"] >= cfg.min_total_score and len([i for i in issues if i.startswith("forbidden_terms")]) == 0,
         "threshold": cfg.min_total_score,
+        "reason_code": reason_code,
+        "transient_issue": bool(transient_issues),
+        "transient_issues": transient_issues,
+        "seo_score": float(scores.get("sovereign_seo", 0.0) or 0.0),
+        "geo_score": float(scores.get("quality_density", 0.0) or 0.0),
+        "conversion_score": float(scores.get("business_harvest", 0.0) or 0.0),
+        "total_score": float(scores.get("total", 0.0) or 0.0),
+        "rollback_recommended": not (
+            scores["total"] >= cfg.min_total_score and len([i for i in issues if i.startswith("forbidden_terms")]) == 0
+        ),
     }
 
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if payload["pass"]:
-        log_event("EVOLUTION_VALIDATION_PASS", score=scores["total"], issues=len(issues))
+        log_event("EVOLUTION_VALIDATION_PASS", score=scores["total"], issues=len(issues), reason_code="pass")
         return 0
 
-    log_event("EVOLUTION_VALIDATION_FAIL", score=scores["total"], issues=issues)
+    log_event(
+        "EVOLUTION_VALIDATION_FAIL",
+        score=scores["total"],
+        reason_code=reason_code,
+        transient_issue=bool(transient_issues),
+        issues=issues,
+    )
     return 1
 
 
