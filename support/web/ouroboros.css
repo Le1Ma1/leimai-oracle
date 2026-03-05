@@ -2,19 +2,19 @@
 
 :root {
   --bg: #050506;
-  --panel: rgba(8, 10, 12, 0.76);
-  --line: rgba(255, 255, 255, 0.18);
-  --line-strong: rgba(255, 255, 255, 0.28);
+  --panel: rgba(8, 10, 12, 0.80);
+  --line: rgba(255, 255, 255, 0.25);
+  --line-strong: rgba(255, 255, 255, 0.36);
   --text: #f2f5f7;
   --muted: rgba(232, 238, 243, 0.66);
   --accent: #c0c0c0;
   --accent-rgb: 192, 192, 192;
   --accent-shadow: rgba(192, 192, 192, 0.22);
-  --glass-blur-px: 10;
-  --neon-near-alpha: 0.42;
-  --neon-far-alpha: 0.18;
-  --lock-bg-alpha: 0.45;
-  --lock-blur-px: 15;
+  --glass-blur-px: 11;
+  --neon-near-alpha: 0.52;
+  --neon-far-alpha: 0.26;
+  --lock-bg-alpha: 0.56;
+  --lock-blur-px: 16;
   --gold-glow: rgba(212, 175, 55, 0.05);
 }
 * {
