@@ -1695,6 +1695,15 @@ function serializeJsonLd(raw) {
   return JSON.stringify(normalizeJsonLd(raw)).replace(/</g, "\\u003c");
 }
 
+function serializeJsonForScriptTag(raw) {
+  return JSON.stringify(raw || {})
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 function paywallHasPart() {
   return [
     {
@@ -2857,7 +2866,7 @@ function renderPage({ locale, section, content, leaderboard, king, ads, sourceSt
     ads: ads.rows,
     sourceStatus,
   };
-  const initialScriptJson = escapeHtml(JSON.stringify(initialState));
+  const initialScriptJson = serializeJsonForScriptTag(initialState);
 
   const navLocales = LOCALES.map((lc) => {
     const active = lc === locale ? "active" : "";
@@ -3171,7 +3180,7 @@ function renderWorldGamePage(locale = "en") {
     starStyle: WORLDFORGE_STARS_STYLE,
     i18n: runtimeI18n,
   };
-  const bootstrap = escapeHtml(JSON.stringify(payload));
+  const bootstrap = serializeJsonForScriptTag(payload);
   return `<!doctype html>
 <html lang="${escapeHtml(isZhTw ? "zh-Hant" : "en")}">
 <head>
