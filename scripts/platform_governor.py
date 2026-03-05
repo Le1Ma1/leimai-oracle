@@ -577,19 +577,57 @@ def check_crypto_surface(
         return check, issues, actions, used
 
     source_status = data.get("source_status") if isinstance(data.get("source_status"), dict) else {}
-    tronscan_ok = bool((source_status.get("tronscan") or {}).get("ok", False)) if isinstance(source_status.get("tronscan"), dict) else False
-    trongrid_ok = bool((source_status.get("trongrid") or {}).get("ok", False)) if isinstance(source_status.get("trongrid"), dict) else False
+    tronscan_state = source_status.get("tronscan") if isinstance(source_status.get("tronscan"), dict) else {}
+    trongrid_state = source_status.get("trongrid") if isinstance(source_status.get("trongrid"), dict) else {}
+    tronscan_ok = bool(tronscan_state.get("ok", False))
+    trongrid_ok = bool(trongrid_state.get("ok", False))
 
     counts = data.get("counts") if isinstance(data.get("counts"), dict) else {}
+
+    def is_source_coldstart(source: dict[str, Any]) -> bool:
+        if not isinstance(source, dict):
+            return False
+        return (
+            not str(source.get("last_success_utc") or "").strip()
+            and not str(source.get("last_error_utc") or "").strip()
+            and not str(source.get("last_error") or "").strip()
+            and int(source.get("last_count") or 0) == 0
+        )
+
+    coldstart = (
+        is_source_coldstart(tronscan_state)
+        and is_source_coldstart(trongrid_state)
+        and int(counts.get("tx_total") or 0) == 0
+    )
+
     check = {
         "ok": True,
         "status_code": status,
         "tronscan_ok": tronscan_ok,
         "trongrid_ok": trongrid_ok,
+        "coldstart": coldstart,
+        "tronscan_last_success_utc": str(tronscan_state.get("last_success_utc") or ""),
+        "trongrid_last_success_utc": str(trongrid_state.get("last_success_utc") or ""),
         "counts": counts,
     }
     if not tronscan_ok or not trongrid_ok:
-        issues.append(build_issue("crypto_source_degraded", "critical", "One or more chain sources are degraded", tronscan_ok=tronscan_ok, trongrid_ok=trongrid_ok))
+        severity = "minor" if coldstart else "critical"
+        code = "crypto_source_coldstart" if coldstart else "crypto_source_degraded"
+        message = (
+            "Crypto sources are in cold-start state (no successful harvest yet)."
+            if coldstart
+            else "One or more chain sources are degraded"
+        )
+        issues.append(
+            build_issue(
+                code,
+                severity,
+                message,
+                tronscan_ok=tronscan_ok,
+                trongrid_ok=trongrid_ok,
+                coldstart=coldstart,
+            )
+        )
         can_heal = cfg.auto_heal and used < action_budget
         if can_heal:
             ok_dispatch, detail = gh_dispatch_workflow(
