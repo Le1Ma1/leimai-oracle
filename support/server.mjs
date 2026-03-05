@@ -32,6 +32,18 @@ import {
   buildSitemapDocument,
   buildSitemapIndex,
 } from "./lib/seo.mjs";
+import {
+  baseEntropyFromSeed,
+  buildFallbackGenesis,
+  buildRulesSummary,
+  buildSemanticOrbit,
+  clamp,
+  clamp01,
+  deriveSpaceStage,
+  normalizeCoordinatePair,
+  seedHashFromCell,
+  toVectorLiteral,
+} from "./lib/worldforge.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,7 +138,27 @@ const CONFIG = {
   supportL2UsdcRecipient: process.env.L2_USDC_RECIPIENT || "0x1E90d2675915F4510eEEb6Bb9eecEECC2E320179",
   cookieSecure: boolEnv("SUPPORT_COOKIE_SECURE", IS_VERCEL_RUNTIME),
   exposeDebug: boolEnv("SUPPORT_EXPOSE_DEBUG", false),
+  mapboxPublicToken: process.env.MAPBOX_PUBLIC_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "",
+  openaiApiKey: process.env.OPENAI_API_KEY || "",
+  openaiModel: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+  openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
+  worldCellDecimals: Math.max(1, Math.min(5, numberEnv("WORLD_CELL_DECIMALS", 3))),
+  worldDecayHours: Math.max(1, numberEnv("WORLD_DECAY_HOURS", 24)),
+  worldCanonizeHours: Math.max(1, numberEnv("WORLD_CANONIZE_HOURS", 24)),
+  worldEntropyWarn: clamp(numberEnv("WORLD_ENTROPY_WARN", 0.8), 0.1, 1),
+  worldEntropyMutate: clamp(numberEnv("WORLD_ENTROPY_MUTATE", 0.9), 0.1, 1),
+  spaceUnlockMoon: Math.max(1, numberEnv("SPACE_UNLOCK_MOON", 500)),
+  spaceUnlockMars: Math.max(2, numberEnv("SPACE_UNLOCK_MARS", 2000)),
+  spaceZoomGate: clamp(numberEnv("SPACE_ZOOM_GATE", 3), 1.5, 10),
+  canonizationPriceUsdt: Math.max(1, numberEnv("WORLD_CANON_PRICE_USDT", 49)),
+  canonizationRail: normalizePaymentRail(process.env.WORLD_CANON_PAYMENT_RAIL || "l2_usdc"),
 };
+
+const WORLD_ENTITY_TABLE = "world_entities";
+const WORLD_META_TABLE = "world_meta";
+const WORLD_META_KEY_GLOBAL_DEV = "global_development_count";
+const WORLDFORGE_EARTH_STYLE = "mapbox://styles/mapbox/satellite-streets-v12";
+const WORLDFORGE_STARS_STYLE = "mapbox://styles/mapbox/dark-v11";
 
 const runtimeDir = process.env.SUPPORT_RUNTIME_DIR || (IS_VERCEL_RUNTIME ? "/tmp/support-runtime" : path.join(__dirname, "runtime"));
 const chainStatePath = process.env.SUPPORT_CHAIN_STATE_PATH || path.join(runtimeDir, "chain-state.json");
@@ -482,6 +514,7 @@ function buildStaticSitemapPaths() {
     "/analysis/",
     "/vault",
     "/forge",
+    "/game",
     "/en/",
     "/zh-tw/",
     "/es/",
@@ -498,6 +531,10 @@ function buildStaticSitemapPaths() {
     "/zh-tw/forge",
     "/es/forge",
     "/ja/forge",
+    "/en/game",
+    "/zh-tw/game",
+    "/es/game",
+    "/ja/game",
   ];
 }
 
@@ -967,6 +1004,451 @@ async function fetchPaymentInvoiceStatus({ invoiceId, sessionAddress }) {
       payment_rail: String(meta.payment_rail || "trc20_usdt"),
       l2_network: String(meta.l2_network || ""),
     },
+  };
+}
+
+function normalizeGenesisRules(candidate, fallback) {
+  const base = fallback && typeof fallback === "object" ? fallback : {};
+  const src = candidate && typeof candidate === "object" ? candidate : {};
+  const visualTheme = String(src.visual_theme || base.visual_theme || "").trim();
+  const narrative = String(src.narrative || base.narrative || "").trim();
+  const physicalRule = String(src.physical_rule || base.physical_rule || "").trim();
+  const devTask = String(src.dev_task || base.dev_task || "").trim();
+  const heavenlyLawsRaw = Array.isArray(src.heavenly_laws) ? src.heavenly_laws : base.heavenly_laws;
+  const heavenlyLaws = (Array.isArray(heavenlyLawsRaw) ? heavenlyLawsRaw : [])
+    .map((row) => String(row || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return {
+    visual_theme: visualTheme || String(base.visual_theme || "").trim(),
+    narrative: narrative || String(base.narrative || "").trim(),
+    physical_rule: physicalRule || String(base.physical_rule || "").trim(),
+    dev_task: devTask || String(base.dev_task || "").trim(),
+    heavenly_laws: heavenlyLaws.length ? heavenlyLaws : (Array.isArray(base.heavenly_laws) ? base.heavenly_laws : []),
+    summary: String(src.summary || base.summary || "").trim(),
+  };
+}
+
+async function callOpenAiJson({ systemPrompt, userPrompt, temperature = 0.7, maxTokens = 700 }) {
+  if (!CONFIG.openaiApiKey) return null;
+  const payload = {
+    model: CONFIG.openaiModel,
+    response_format: { type: "json_object" },
+    temperature: clamp(temperature, 0, 1.2),
+    max_tokens: Math.max(120, Math.floor(maxTokens)),
+    messages: [
+      { role: "system", content: String(systemPrompt || "") },
+      { role: "user", content: String(userPrompt || "") },
+    ],
+  };
+  try {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.openaiApiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) return null;
+    const parsed = JSON.parse(String(content || "{}"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function callOpenAiEmbedding(text) {
+  const content = String(text || "").trim();
+  if (!content || !CONFIG.openaiApiKey) return null;
+  try {
+    const resp = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.openaiApiKey}`,
+      },
+      body: JSON.stringify({
+        model: CONFIG.openaiEmbeddingModel,
+        input: content.slice(0, 6000),
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    const vector = data?.data?.[0]?.embedding;
+    return Array.isArray(vector) ? vector : null;
+  } catch {
+    return null;
+  }
+}
+
+async function summarizeRulesForLod(rules) {
+  const fallback = buildRulesSummary(rules).slice(0, 600);
+  if (!CONFIG.openaiApiKey) return fallback;
+  const prompt = [
+    "Summarize the world rules in <= 320 chars.",
+    "Keep only stable semantics, no markdown.",
+    `Rules JSON: ${JSON.stringify(rules || {})}`,
+  ].join("\n");
+  const parsed = await callOpenAiJson({
+    systemPrompt: "You compress simulation rules for storage-efficient semantic LOD.",
+    userPrompt: `${prompt}\nOutput JSON: {"summary":"..."}`
+  });
+  const summary = String(parsed?.summary || "").trim();
+  return summary || fallback;
+}
+
+async function generateGenesisRules({ lat, lng, seedHash, entropy, previousRules, summary, mode }) {
+  const fallback = buildFallbackGenesis({
+    seedHash,
+    lat,
+    lng,
+    entropy,
+    previousRule: previousRules?.physical_rule || "",
+  });
+  if (!CONFIG.openaiApiKey) {
+    return normalizeGenesisRules(fallback, fallback);
+  }
+
+  const userPrompt = [
+    `Mode: ${String(mode || "initial")}`,
+    `Coordinates: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`,
+    `Seed hash: ${seedHash}`,
+    `Current entropy: ${Number(entropy || 0).toFixed(4)}`,
+    `Previous rules: ${JSON.stringify(previousRules || {})}`,
+    `Semantic summary: ${String(summary || "")}`,
+    "Output strict JSON with keys:",
+    `{"visual_theme":"","narrative":"","physical_rule":"","dev_task":"","heavenly_laws":["","",""],"summary":""}`,
+    "Requirements:",
+    "- physical_rule must be unique and non-generic.",
+    "- Keep sci-fi atmosphere with black/gold/neon-violet tone.",
+    "- If mode is iterate or regrowth, evolve instead of overwrite.",
+  ].join("\n");
+
+  const parsed = await callOpenAiJson({
+    systemPrompt: "You are the Genesis Semantic Engine for a geo-fantasy simulation.",
+    userPrompt,
+    temperature: mode === "initial" ? 0.9 : 0.72,
+    maxTokens: 900,
+  });
+  return normalizeGenesisRules(parsed, fallback);
+}
+
+async function fetchWorldEntityBySeed(seedHash) {
+  const client = getSupabaseServiceClient();
+  if (!client) return { ok: false, row: null, error: "world_storage_unavailable" };
+  const { data, error } = await client
+    .from(WORLD_ENTITY_TABLE)
+    .select("*")
+    .eq("seed_hash", seedHash)
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ok: false, row: null, error: error.message || error.code || "world_read_failed" };
+  return { ok: true, row: data && typeof data === "object" ? data : null };
+}
+
+async function upsertWorldEntity(row) {
+  const client = getSupabaseServiceClient();
+  if (!client) return { ok: false, row: null, error: "world_storage_unavailable" };
+  const { data, error } = await client
+    .from(WORLD_ENTITY_TABLE)
+    .upsert(row, { onConflict: "seed_hash" })
+    .select("*")
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ok: false, row: null, error: error.message || error.code || "world_upsert_failed" };
+  return { ok: true, row: data && typeof data === "object" ? data : null };
+}
+
+async function getGlobalDevelopments(client) {
+  const { data, error } = await client
+    .from(WORLD_META_TABLE)
+    .select("value_num")
+    .eq("meta_key", WORLD_META_KEY_GLOBAL_DEV)
+    .limit(1)
+    .maybeSingle();
+  if (error) return 0;
+  const n = Number(data?.value_num || 0);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+async function bumpGlobalDevelopments(delta = 1) {
+  const client = getSupabaseServiceClient();
+  if (!client) return 0;
+  const current = await getGlobalDevelopments(client);
+  const next = Math.max(0, current + Math.max(0, Number(delta) || 0));
+  const payload = {
+    meta_key: WORLD_META_KEY_GLOBAL_DEV,
+    value_num: next,
+    meta: { source: "genesis" },
+    updated_at: nowIso(),
+  };
+  await client.from(WORLD_META_TABLE).upsert(payload, { onConflict: "meta_key" });
+  return next;
+}
+
+function isFixedLocked(row) {
+  if (!row || !row.is_fixed) return false;
+  const fixedUntil = Date.parse(String(row.fixed_until || ""));
+  if (!Number.isFinite(fixedUntil)) return false;
+  return fixedUntil > nowMs();
+}
+
+async function buildGenesisPayload({ lat, lng }) {
+  const seed = seedHashFromCell(lat, lng, CONFIG.worldCellDecimals, CONFIG.sessionSecret || "worldforge-v1");
+  const fallbackEntropy = baseEntropyFromSeed(seed.seedHash);
+
+  const worldRead = await fetchWorldEntityBySeed(seed.seedHash);
+  const existing = worldRead.ok ? worldRead.row : null;
+  const locked = isFixedLocked(existing);
+  const staleHours = existing?.last_observed
+    ? Math.max(0, (nowMs() - Date.parse(String(existing.last_observed))) / 3_600_000)
+    : 0;
+
+  let entropy = existing ? clamp01(Number(existing.entropy || fallbackEntropy)) : fallbackEntropy;
+  let rules = existing?.rules && typeof existing.rules === "object" ? existing.rules : null;
+  let summary = String(existing?.rules_summary || "").trim();
+  let decayApplied = false;
+  let regrown = false;
+  let iterated = false;
+
+  if (existing && !locked && staleHours > CONFIG.worldDecayHours) {
+    summary = await summarizeRulesForLod(rules || {});
+    entropy = clamp01(entropy + 0.08 + Math.min(0.16, (staleHours - CONFIG.worldDecayHours) / 240));
+    decayApplied = true;
+    if (entropy > CONFIG.worldEntropyMutate) {
+      rules = await generateGenesisRules({
+        lat: seed.lat,
+        lng: seed.lng,
+        seedHash: seed.seedHash,
+        entropy,
+        previousRules: rules || {},
+        summary,
+        mode: "regrowth",
+      });
+      summary = String(rules.summary || buildRulesSummary(rules)).slice(0, 600);
+      entropy = clamp01(0.55 + (Math.random() * 0.18));
+      regrown = true;
+    }
+  }
+
+  if (!rules) {
+    rules = await generateGenesisRules({
+      lat: seed.lat,
+      lng: seed.lng,
+      seedHash: seed.seedHash,
+      entropy,
+      previousRules: {},
+      summary: "",
+      mode: "initial",
+    });
+  } else if (existing && !locked && !regrown) {
+    rules = await generateGenesisRules({
+      lat: seed.lat,
+      lng: seed.lng,
+      seedHash: seed.seedHash,
+      entropy,
+      previousRules: rules,
+      summary,
+      mode: "iterate",
+    });
+    iterated = true;
+  }
+
+  if (existing && !locked) {
+    entropy = clamp01(entropy * 0.92 + 0.03 + (Math.random() * 0.06));
+  }
+  if (locked) {
+    entropy = clamp01(Math.min(entropy, 0.45));
+  }
+
+  summary = String(summary || rules.summary || buildRulesSummary(rules)).slice(0, 600);
+  const embeddingText = `${summary}\n${String(rules?.physical_rule || "")}`;
+  const embedding = await callOpenAiEmbedding(embeddingText);
+  const embeddingLiteral = toVectorLiteral(embedding);
+
+  let persisted = existing;
+  if (getSupabaseServiceClient()) {
+    const mergedRow = {
+      seed_hash: seed.seedHash,
+      lat: seed.lat,
+      lng: seed.lng,
+      entropy,
+      rules,
+      rules_summary: summary,
+      last_observed: nowIso(),
+      is_fixed: Boolean(existing?.is_fixed || false),
+      fixed_until: existing?.fixed_until || null,
+      development_count: Number(existing?.development_count || 0) + 1,
+      mutation_count: Number(existing?.mutation_count || 0) + (iterated || regrown ? 1 : 0),
+    };
+    if (embeddingLiteral) {
+      mergedRow.embedding = embeddingLiteral;
+    }
+    const upserted = await upsertWorldEntity(mergedRow);
+    if (upserted.ok && upserted.row) {
+      persisted = upserted.row;
+    }
+  }
+
+  const globalDevelopments = await bumpGlobalDevelopments(1);
+  const spaceStage = deriveSpaceStage(globalDevelopments, CONFIG.spaceUnlockMoon, CONFIG.spaceUnlockMars);
+
+  return {
+    ok: true,
+    lat: seed.lat,
+    lng: seed.lng,
+    seed_hash: seed.seedHash,
+    cell: seed.cell,
+    entropy: clamp01(Number(persisted?.entropy ?? entropy)),
+    rules,
+    rules_summary: summary,
+    is_fixed: Boolean(persisted?.is_fixed || false),
+    fixed_until: persisted?.fixed_until || null,
+    locked,
+    stale_hours: Number(staleHours.toFixed(3)),
+    decay_applied: decayApplied,
+    regrown,
+    iterated,
+    global_developments: globalDevelopments,
+    space_stage: spaceStage.stage,
+    space_unlocked: Boolean(spaceStage.unlocked),
+    entropy_warn_threshold: CONFIG.worldEntropyWarn,
+    entropy_mutate_threshold: CONFIG.worldEntropyMutate,
+  };
+}
+
+function buildCanonizationInvoiceRecord({ seedHash, paymentRail }) {
+  const normalizedRail = normalizePaymentRail(paymentRail || CONFIG.canonizationRail);
+  const ttlSec = Math.max(300, Math.floor(CONFIG.paymentInvoiceTtlSec || 1200));
+  const expiresAt = new Date(nowMs() + ttlSec * 1000).toISOString();
+  return {
+    invoice_id: generateInvoiceId(),
+    wallet_address: null,
+    slug: `canon_${String(seedHash || "").slice(0, 32)}`,
+    plan_code: "canonization",
+    amount_usdt: Number(CONFIG.canonizationPriceUsdt || 49),
+    pay_to_address: resolvePaymentRecipient(normalizedRail),
+    nonce: generatePaymentNonce(),
+    status: "pending",
+    expires_at_utc: expiresAt,
+    meta: {
+      source: "worldforge_canonization",
+      created_via: "/api/canonize/create",
+      payment_rail: normalizedRail,
+      seed_hash: String(seedHash || ""),
+      l2_network: String(CONFIG.supportL2Network || "arbitrum").toLowerCase(),
+    },
+  };
+}
+
+async function fetchPaymentInvoiceLoose(invoiceId) {
+  const client = getSupabaseServiceClient();
+  if (!client) return { ok: false, error: "payment_storage_unavailable" };
+  const { data, error } = await client
+    .from("payment_invoices")
+    .select("invoice_id,status,amount_usdt,pay_to_address,expires_at_utc,updated_at,meta")
+    .eq("invoice_id", String(invoiceId || "").trim())
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message || error.code || "invoice_read_failed" };
+  if (!data) return { ok: false, error: "invoice_not_found" };
+  return { ok: true, invoice: data };
+}
+
+async function applyCanonizationFix(seedHash) {
+  const found = await fetchWorldEntityBySeed(seedHash);
+  if (!found.ok || !found.row) return { ok: false, error: found.error || "zone_not_found" };
+  const fixedUntil = new Date(nowMs() + CONFIG.worldCanonizeHours * 3_600_000).toISOString();
+  const row = found.row;
+  const payload = {
+    seed_hash: seedHash,
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    entropy: clamp01(Math.min(Number(row.entropy || 0.32), 0.42)),
+    rules: row.rules || {},
+    rules_summary: String(row.rules_summary || ""),
+    last_observed: nowIso(),
+    is_fixed: true,
+    fixed_until: fixedUntil,
+    development_count: Number(row.development_count || 0),
+    mutation_count: Number(row.mutation_count || 0),
+  };
+  const upserted = await upsertWorldEntity(payload);
+  if (!upserted.ok) return { ok: false, error: upserted.error || "canonization_update_failed" };
+  return { ok: true, fixed_until: fixedUntil };
+}
+
+async function buildSpaceNarrative({ stage, earthRules, globalDevelopments }) {
+  const fallback = {
+    moon: "Moon corridor opened. Lunar law inherits local entropy but halves mutation speed.",
+    mars: "Mars corridor opened. Martian law amplifies narrative drift and doubles task rewards.",
+    earth: "Space locked. Continue developing Earth zones to unlock semantic orbits.",
+  };
+  if (!CONFIG.openaiApiKey || !stage || stage === "earth") {
+    return fallback[stage || "earth"];
+  }
+  const parsed = await callOpenAiJson({
+    systemPrompt: "You synthesize concise sci-fi world expansion rules.",
+    userPrompt: [
+      `Target: ${stage}`,
+      `Global developments: ${globalDevelopments}`,
+      `Earth rule genes: ${JSON.stringify(earthRules || {})}`,
+      'Output JSON: {"space_rule":"..."}',
+    ].join("\n"),
+    temperature: 0.86,
+    maxTokens: 260,
+  });
+  const text = String(parsed?.space_rule || "").trim();
+  return text || fallback[stage];
+}
+
+async function buildSpacePayload({ lat, lng, zoom }) {
+  const client = getSupabaseServiceClient();
+  let globalDevelopments = 0;
+  if (client) {
+    globalDevelopments = await getGlobalDevelopments(client);
+  }
+  const stage = deriveSpaceStage(globalDevelopments, CONFIG.spaceUnlockMoon, CONFIG.spaceUnlockMars);
+  if (!stage.unlocked) {
+    return {
+      ok: true,
+      unlocked: false,
+      target: "earth",
+      global_developments: globalDevelopments,
+      required: stage.required,
+      orbit_points: [],
+      switch_to_stars: false,
+      space_rule: "Space gate remains sealed.",
+    };
+  }
+
+  const seed = seedHashFromCell(lat, lng, CONFIG.worldCellDecimals, CONFIG.sessionSecret || "worldforge-v1");
+  const found = await fetchWorldEntityBySeed(seed.seedHash);
+  const earthRules = found.ok && found.row?.rules ? found.row.rules : {};
+  const orbitPoints = buildSemanticOrbit({
+    lat: seed.lat,
+    lng: seed.lng,
+    target: stage.stage,
+    points: stage.stage === "mars" ? 32 : 24,
+  });
+  const spaceRule = await buildSpaceNarrative({
+    stage: stage.stage,
+    earthRules,
+    globalDevelopments,
+  });
+  return {
+    ok: true,
+    unlocked: true,
+    target: stage.stage,
+    global_developments: globalDevelopments,
+    required: stage.required,
+    orbit_points: orbitPoints,
+    switch_to_stars: Number(zoom || 0) < CONFIG.spaceZoomGate,
+    space_rule: spaceRule,
   };
 }
 
@@ -2161,6 +2643,16 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     textResponse(res, 200, js, "application/javascript; charset=utf-8");
     return true;
   }
+  if (routePath === "/assets/game.css") {
+    const css = await fs.readFile(path.join(__dirname, "web", "game.css"), "utf-8");
+    textResponse(res, 200, css, "text/css; charset=utf-8");
+    return true;
+  }
+  if (routePath === "/assets/game.js") {
+    const js = await fs.readFile(path.join(__dirname, "web", "game.js"), "utf-8");
+    textResponse(res, 200, js, "application/javascript; charset=utf-8");
+    return true;
+  }
   if (routePath === "/assets/social-card.svg") {
     textResponse(res, 200, buildSocialCardSvg(), "image/svg+xml; charset=utf-8");
     return true;
@@ -2268,6 +2760,10 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
       }, copyOverrides),
       "text/html; charset=utf-8",
     );
+    return true;
+  }
+  if (routePath === "/game") {
+    textResponse(res, 200, renderWorldGamePage(), "text/html; charset=utf-8");
     return true;
   }
 
@@ -2560,6 +3056,119 @@ function renderPage({ locale, section, content, leaderboard, king, ads, sourceSt
 </html>`;
 }
 
+function renderWorldGamePage() {
+  const payload = {
+    mapboxToken: CONFIG.mapboxPublicToken,
+    entropyWarn: CONFIG.worldEntropyWarn,
+    entropyMutate: CONFIG.worldEntropyMutate,
+    spaceZoomGate: CONFIG.spaceZoomGate,
+    defaultLat: 25.033,
+    defaultLng: 121.5654,
+    defaultZoom: 11.8,
+    earthStyle: WORLDFORGE_EARTH_STYLE,
+    starStyle: WORLDFORGE_STARS_STYLE,
+  };
+  const bootstrap = escapeHtml(JSON.stringify(payload));
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worldforge | LeiMai Oracle</title>
+  <meta name="description" content="Semantic map game with entropy-driven world mutation and canonization protocol.">
+  <meta name="theme-color" content="#090909">
+  <meta name="robots" content="index,follow">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Worldforge | LeiMai Oracle">
+  <meta property="og:description" content="Click map zones, evolve local laws, and unlock semantic orbit to Moon or Mars.">
+  <meta property="og:url" content="${escapeHtml(ROOT_CANONICAL_URL)}game">
+  <link rel="canonical" href="${escapeHtml(ROOT_CANONICAL_URL)}game">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/game.css">
+</head>
+<body>
+  <div id="worldRoot">
+    <div id="worldMap" aria-label="Worldforge Map"></div>
+
+    <aside class="hud-panel absolute left-4 top-4 z-20 w-[320px] rounded-xl p-4">
+      <div class="text-xs tracking-[0.25em] text-zinc-400">WORLDFORGE / LIVE CELL</div>
+      <div class="mt-2 text-lg font-semibold text-amber-200">Coordinates</div>
+      <div id="coordLabel" class="text-sm text-zinc-100">0.000000, 0.000000</div>
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <div class="rounded-md border border-zinc-700/60 bg-zinc-900/50 p-2">
+          <div class="text-[11px] uppercase text-zinc-400">Entropy</div>
+          <div id="entropyLabel" class="text-xl font-semibold entropy-low">0.000</div>
+        </div>
+        <div class="rounded-md border border-zinc-700/60 bg-zinc-900/50 p-2">
+          <div class="text-[11px] uppercase text-zinc-400">Seed</div>
+          <div id="zoneSeed" class="truncate text-sm text-zinc-200">-</div>
+        </div>
+      </div>
+      <div id="statusLine" class="mt-3 text-sm text-amber-300">Initializing map forge...</div>
+      <a class="mt-4 inline-block text-xs text-zinc-400 underline hover:text-zinc-200" href="/analysis/">Back to Oracle</a>
+    </aside>
+
+    <aside class="hud-panel absolute right-4 top-4 z-20 flex h-[calc(100%-2rem)] w-[min(420px,92vw)] flex-col rounded-xl p-4">
+      <div class="text-xs tracking-[0.25em] text-violet-300">GENESIS FEED</div>
+      <h1 class="mt-2 text-2xl font-semibold text-amber-100">The Sovereign Cell</h1>
+      <div class="mt-4 space-y-3 overflow-y-auto pr-1">
+        <section class="rounded-md border border-amber-400/30 bg-black/30 p-3">
+          <div class="text-xs uppercase text-amber-300">Visual Theme</div>
+          <div id="visualTheme" class="mt-1 text-sm text-zinc-100">-</div>
+        </section>
+        <section class="rounded-md border border-violet-400/35 bg-black/30 p-3">
+          <div class="text-xs uppercase text-violet-300">Environmental Narrative</div>
+          <div id="narrativeText" class="mt-1 text-sm text-zinc-100">-</div>
+        </section>
+        <section class="rounded-md border border-zinc-600/70 bg-black/30 p-3">
+          <div class="text-xs uppercase text-zinc-300">Physical Rule</div>
+          <div id="physicalRule" class="mt-1 text-sm text-zinc-100">-</div>
+        </section>
+        <section class="rounded-md border border-zinc-600/70 bg-black/30 p-3">
+          <div class="text-xs uppercase text-zinc-300">Dev Task</div>
+          <div id="devTask" class="mt-1 text-sm text-zinc-100">-</div>
+        </section>
+        <section>
+          <div class="mb-2 text-xs uppercase text-fuchsia-300">Heavenly Laws</div>
+          <ul id="lawList" class="space-y-2"></ul>
+        </section>
+      </div>
+
+      <section id="canonZone" class="canon-pulse mt-4 hidden rounded-lg border border-rose-500/40 bg-rose-950/35 p-3">
+        <div class="text-sm font-semibold text-rose-200">Reality Collapse Warning</div>
+        <p class="mt-1 text-xs text-rose-100/85">Entropy crossed danger threshold. Canonize this zone to lock mutation for 24h.</p>
+        <button id="canonBtn" class="mt-2 w-full rounded-md border border-rose-400/40 bg-rose-900/35 px-3 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-800/45">
+          Activate Canonization
+        </button>
+      </section>
+
+      <section id="orbitBanner" class="orbit-banner mt-3 hidden rounded-md p-3 text-xs text-cyan-100">
+        <div id="orbitText">Semantic orbit standby.</div>
+      </section>
+    </aside>
+
+    <div id="canonModal" class="canon-modal absolute inset-0 z-40 hidden items-center justify-center p-4">
+      <div class="hud-panel w-full max-w-xl rounded-xl p-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold text-amber-100">Canonization Gateway</h2>
+          <button id="canonClose" class="rounded border border-zinc-600 px-2 py-1 text-xs text-zinc-300 hover:text-zinc-100">CLOSE</button>
+        </div>
+        <p class="mt-2 text-sm text-zinc-300">Transfer the requested USDT amount to lock this zone for 24h.</p>
+        <div id="canonInvoice" class="mt-3 rounded-md border border-zinc-700 bg-zinc-900/45 p-3 text-xs text-zinc-200">No invoice created.</div>
+        <button id="canonCheck" class="mt-3 w-full rounded-md border border-amber-500/40 bg-amber-700/20 px-3 py-2 text-sm text-amber-100 hover:bg-amber-700/30">
+          Check Canonization Status
+        </button>
+      </div>
+    </div>
+  </div>
+  <script id="worldforge-data" type="application/json">${bootstrap}</script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+  <script src="/assets/game.js"></script>
+</body>
+</html>`;
+}
+
 function declarationStatusPayload(content, status, note) {
   if (status === "approved") return { label: content.approvedText, note: note || "" };
   if (status === "rejected") return { label: content.rejectedText, note: note || "" };
@@ -2732,6 +3341,137 @@ export async function handleRequest(req, res) {
         return jsonResponse(res, 400, { ok: false, error: status.error || "payment_status_failed" });
       }
       return jsonResponse(res, 200, { ok: true, ...status.invoice });
+    }
+
+    if ((method === "GET" || method === "POST") && pathname === "/api/genesis") {
+      if (!checkRateLimit(req, "worldforge_genesis", CONFIG.rateLimitPerMinute * 3)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      let latRaw = searchParams.get("lat");
+      let lngRaw = searchParams.get("lng");
+      if (method === "POST") {
+        const body = await parseJsonBody(req).catch(() => ({}));
+        latRaw = body?.lat ?? latRaw;
+        lngRaw = body?.lng ?? lngRaw;
+      }
+      const normalized = normalizeCoordinatePair(latRaw, lngRaw);
+      if (!normalized.ok) {
+        return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
+      }
+      const payload = await buildGenesisPayload({ lat: normalized.lat, lng: normalized.lng });
+      if (!payload?.ok) {
+        return jsonResponse(res, 500, { ok: false, error: "genesis_failed" });
+      }
+      return jsonResponse(res, 200, payload);
+    }
+
+    if (method === "GET" && pathname === "/api/space") {
+      if (!checkRateLimit(req, "worldforge_space", CONFIG.rateLimitPerMinute * 3)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const normalized = normalizeCoordinatePair(searchParams.get("lat"), searchParams.get("lng"));
+      if (!normalized.ok) {
+        return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
+      }
+      const zoom = Number(searchParams.get("zoom") || 0);
+      const payload = await buildSpacePayload({
+        lat: normalized.lat,
+        lng: normalized.lng,
+        zoom: Number.isFinite(zoom) ? zoom : 0,
+      });
+      return jsonResponse(res, 200, payload);
+    }
+
+    if (method === "POST" && pathname === "/api/canonize/create") {
+      if (!checkRateLimit(req, "worldforge_canon_create", CONFIG.rateLimitPerMinute)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const seedHashInput = String(body?.seed_hash || "").trim().toLowerCase();
+      let seedHash = seedHashInput;
+      let normalized = null;
+      if (body?.lat != null && body?.lng != null) {
+        normalized = normalizeCoordinatePair(body.lat, body.lng);
+        if (!normalized.ok) {
+          return jsonResponse(res, 400, { ok: false, error: normalized.error || "invalid_coordinates" });
+        }
+      }
+      if (!seedHash && normalized?.ok) {
+        seedHash = seedHashFromCell(
+          normalized.lat,
+          normalized.lng,
+          CONFIG.worldCellDecimals,
+          CONFIG.sessionSecret || "worldforge-v1",
+        ).seedHash;
+      }
+      if (!seedHash) {
+        return jsonResponse(res, 400, { ok: false, error: "seed_hash_required" });
+      }
+
+      const exists = await fetchWorldEntityBySeed(seedHash);
+      if ((!exists.ok || !exists.row) && normalized?.ok) {
+        await buildGenesisPayload({ lat: normalized.lat, lng: normalized.lng });
+      }
+
+      const invoice = buildCanonizationInvoiceRecord({
+        seedHash,
+        paymentRail: body?.payment_rail || CONFIG.canonizationRail,
+      });
+      const recorded = await recordPaymentInvoice(invoice);
+      if (!recorded.ok) {
+        return jsonResponse(res, 500, { ok: false, error: recorded.error || "canon_invoice_failed" });
+      }
+      return jsonResponse(res, 200, {
+        ok: true,
+        seed_hash: seedHash,
+        invoice_id: invoice.invoice_id,
+        status: invoice.status,
+        amount_usdt: invoice.amount_usdt,
+        pay_to_address: invoice.pay_to_address,
+        expires_at_utc: invoice.expires_at_utc,
+        payment_rail: String(invoice?.meta?.payment_rail || CONFIG.canonizationRail),
+      });
+    }
+
+    if (method === "GET" && pathname === "/api/canonize/confirm") {
+      if (!checkRateLimit(req, "worldforge_canon_confirm", CONFIG.rateLimitPerMinute * 4)) {
+        return jsonResponse(res, 429, { ok: false, error: "rate_limited" });
+      }
+      const invoiceId = String(searchParams.get("invoice_id") || "").trim();
+      if (!invoiceId) {
+        return jsonResponse(res, 400, { ok: false, error: "invoice_id_required" });
+      }
+      const invoiceRead = await fetchPaymentInvoiceLoose(invoiceId);
+      if (!invoiceRead.ok) {
+        return jsonResponse(res, 404, { ok: false, error: invoiceRead.error || "invoice_not_found" });
+      }
+      const invoice = invoiceRead.invoice || {};
+      const meta = invoice.meta && typeof invoice.meta === "object" ? invoice.meta : {};
+      const seedHash = String(searchParams.get("seed_hash") || meta.seed_hash || "").trim().toLowerCase();
+      if (!seedHash) {
+        return jsonResponse(res, 400, { ok: false, error: "seed_hash_required" });
+      }
+      if (String(invoice.status || "pending") !== "paid") {
+        return jsonResponse(res, 200, {
+          ok: true,
+          fixed: false,
+          status: String(invoice.status || "pending"),
+          seed_hash: seedHash,
+          invoice_id: invoiceId,
+        });
+      }
+      const fixed = await applyCanonizationFix(seedHash);
+      if (!fixed.ok) {
+        return jsonResponse(res, 500, { ok: false, error: fixed.error || "canonization_failed" });
+      }
+      return jsonResponse(res, 200, {
+        ok: true,
+        fixed: true,
+        status: "paid",
+        seed_hash: seedHash,
+        invoice_id: invoiceId,
+        fixed_until: fixed.fixed_until,
+      });
     }
 
     if (method === "GET" && pathname === "/assets/styles.css") {
