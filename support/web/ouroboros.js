@@ -102,6 +102,33 @@
     return COPY[locale] || COPY.en;
   }
 
+  function getActiveLocale() {
+    const locale = String(document.body?.getAttribute("data-locale") || "en").toLowerCase();
+    return locale === "zh-tw" ? "zh-tw" : "en";
+  }
+
+  function setLocaleCookie(locale) {
+    const safe = String(locale || "en").toLowerCase() === "zh-tw" ? "zh-tw" : "en";
+    document.cookie = `ouroboros_locale=${encodeURIComponent(safe)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+  }
+
+  function bindLocaleSwitcher() {
+    const links = Array.from(document.querySelectorAll("[data-locale-switch]"));
+    if (links.length === 0) return;
+    for (const link of links) {
+      link.addEventListener("click", (event) => {
+        const targetLocale = String(link.getAttribute("data-locale-switch") || "").toLowerCase();
+        if (!targetLocale) return;
+        setLocaleCookie(targetLocale);
+        const href = String(link.getAttribute("href") || "").trim();
+        if (!href) return;
+        event.preventDefault();
+        const nextUrl = `${href}${window.location.search || ""}${window.location.hash || ""}`;
+        window.location.assign(nextUrl);
+      });
+    }
+  }
+
   const ERC20_TOKEN_CONTRACT = {
     eth_l1_erc20: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606EB48",
     l2_usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
@@ -833,6 +860,73 @@
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const activeLocale = getActiveLocale();
+    const isZh = activeLocale === "zh-tw";
+    const forgeText = isZh
+      ? {
+          noLiveData: "暫無即時資料。",
+          waitingHistory: "等待完整歷史資料...",
+          passLabel: "通過率（上）",
+          alphaLabel: "Alpha 相對現貨（下）",
+          reachProb: "達標機率",
+          etaRounds: "預估輪次",
+          etaUtc: "預估時間",
+          passNext: "下一輪通過率區間",
+          alphaNext: "下一輪 Alpha 區間",
+          deployNext: "下一輪部署區間",
+          shadowStatus: "狀態",
+          shadowReason: "原因",
+          reward: "獎勵代理值",
+          returnEst: "回報估計",
+          ddEst: "回撤估計",
+          tradesEst: "交易筆數估計",
+          topAction: "最高權重動作",
+          fullHistoryOk: "完整歷史通過",
+          fullHistoryGap: "完整歷史缺口",
+          observed: "觀測起點",
+          required: "要求起點",
+          deployOnlyLegacy: "僅舊模型可部署",
+          deployDual: "雙軌模式",
+          unknown: "未知",
+          leaderShadow: "影子領先",
+          leaderLegacy: "舊模型領先",
+          leaderParity: "平手",
+          phaseRecovery: "修復期",
+          phaseStabilize: "穩定期",
+          phaseCandidate: "候選期",
+        }
+      : {
+          noLiveData: "No live data.",
+          waitingHistory: "Waiting full history data...",
+          passLabel: "PASS RATE (top)",
+          alphaLabel: "ALPHA vs SPOT (bottom)",
+          reachProb: "REACH PROBABILITY",
+          etaRounds: "ETA ROUNDS",
+          etaUtc: "ETA UTC",
+          passNext: "PASS NEXT",
+          alphaNext: "ALPHA NEXT",
+          deployNext: "DEPLOY NEXT",
+          shadowStatus: "STATUS",
+          shadowReason: "REASON",
+          reward: "REWARD PROXY",
+          returnEst: "RETURN EST",
+          ddEst: "DD EST",
+          tradesEst: "TRADES EST",
+          topAction: "TOP ACTION",
+          fullHistoryOk: "FULL HISTORY OK",
+          fullHistoryGap: "FULL HISTORY GAP",
+          observed: "observed",
+          required: "required",
+          deployOnlyLegacy: "LEGACY-ONLY DEPLOY",
+          deployDual: "DUAL TRACK",
+          unknown: "unknown",
+          leaderShadow: "SHADOW LEADS",
+          leaderLegacy: "LEGACY LEADS",
+          leaderParity: "PARITY",
+          phaseRecovery: "recovery",
+          phaseStabilize: "stabilize",
+          phaseCandidate: "candidate",
+        };
     const epochNode = document.getElementById("forgeEpoch");
     const convNode = document.getElementById("forgeConvergence");
     const statusNode = document.getElementById("forgeStatus");
@@ -883,10 +977,10 @@
       epochCurrent: 4592,
       epochTotal: 5000,
       convergence: 94.2,
-      status: "UNAUTHORIZED TO DEPLOY (TRAINING)",
-      priority: "LEGACY PRIORITY ACTIVE (RECOVERY)",
-      legacy: "pass=0.0000 | alpha=-0.0000",
-      next: "shadow warming",
+      status: isZh ? "訓練中，尚未授權部署" : "UNAUTHORIZED TO DEPLOY (TRAINING)",
+      priority: isZh ? "舊模型優先（修復期）" : "LEGACY PRIORITY ACTIVE (RECOVERY)",
+      legacy: isZh ? "通過率=0.0000 | alpha=-0.0000" : "pass=0.0000 | alpha=-0.0000",
+      next: isZh ? "影子暖機中" : "shadow warming",
       updated: "-",
     };
 
@@ -899,7 +993,7 @@
       if (!node) return;
       const safeRows = Array.isArray(rows) ? rows.filter((v) => String(v || "").trim()) : [];
       if (safeRows.length === 0) {
-        node.innerHTML = "<li>No live data.</li>";
+        node.innerHTML = `<li>${forgeText.noLiveData}</li>`;
         return;
       }
       node.innerHTML = safeRows
@@ -940,7 +1034,7 @@
       if (rows.length < 2) {
         historyCtx.fillStyle = "rgba(219,229,235,0.72)";
         historyCtx.font = `${12 * ratio}px JetBrains Mono, monospace`;
-        historyCtx.fillText("Waiting full history data...", 14 * ratio, 22 * ratio);
+        historyCtx.fillText(forgeText.waitingHistory, 14 * ratio, 22 * ratio);
         return;
       }
 
@@ -1014,8 +1108,8 @@
 
       historyCtx.fillStyle = "rgba(219,229,235,0.82)";
       historyCtx.font = `${10 * ratio}px JetBrains Mono, monospace`;
-      historyCtx.fillText("PASS_RATE (top)", left, 10 * ratio);
-      historyCtx.fillText("ALPHA_vs_SPOT (bottom)", left, (midTop + 2 * ratio));
+      historyCtx.fillText(forgeText.passLabel, left, 10 * ratio);
+      historyCtx.fillText(forgeText.alphaLabel, left, (midTop + 2 * ratio));
     }
 
     function applyLivePayload(payload) {
@@ -1047,10 +1141,34 @@
       forgeState.convergence = Number.isFinite(Number(forge.alpha_convergence_pct))
         ? Math.max(0, Math.min(99.9, Number(forge.alpha_convergence_pct)))
         : forgeState.convergence;
-      forgeState.status = String(forge.status_text || forgeState.status);
-      forgeState.priority = String(payload.priority_mode || forgeState.priority).toUpperCase();
-      forgeState.legacy = `pass=${asFixed(legacy.validation_pass_rate, 4)} | alpha=${asFixed(legacy.all_window_alpha_vs_spot, 4)} | deploy=${String(legacy.deploy_symbols || 0)}/${String(legacy.deploy_rules || 0)}`;
-      forgeState.next = `status=${String(next.status || "unknown")} | return=${String(next.total_return_pct || "-")} | dd=${String(next.max_drawdown_pct || "-")}`;
+      const priorityRaw = String(payload.priority_mode || "").toLowerCase();
+      if (isZh) {
+        forgeState.priority = priorityRaw === "legacy_recovery"
+          ? "舊模型優先（修復期）"
+          : priorityRaw === "dual_train"
+            ? "雙軌訓練"
+            : "待命";
+        forgeState.status = priorityRaw === "legacy_recovery"
+          ? "訓練中，尚未授權部署"
+          : priorityRaw === "dual_train"
+            ? "訓練中，雙軌評估運行"
+            : "等待下一輪訓練";
+      } else {
+        forgeState.priority = String(payload.priority_mode || forgeState.priority).toUpperCase();
+        forgeState.status = String(forge.status_text || forgeState.status);
+      }
+      forgeState.legacy = isZh
+        ? `通過率=${asFixed(legacy.validation_pass_rate, 4)} | alpha=${asFixed(legacy.all_window_alpha_vs_spot, 4)} | 部署=${String(legacy.deploy_symbols || 0)}/${String(legacy.deploy_rules || 0)}`
+        : `pass=${asFixed(legacy.validation_pass_rate, 4)} | alpha=${asFixed(legacy.all_window_alpha_vs_spot, 4)} | deploy=${String(legacy.deploy_symbols || 0)}/${String(legacy.deploy_rules || 0)}`;
+      const nextStatusRaw = String(next.status || "unknown");
+      const nextStatusZh = nextStatusRaw === "shadow_blocked_by_legacy_priority"
+        ? "受舊模型優先策略限制"
+        : nextStatusRaw === "shadow_running"
+          ? "影子評估進行中"
+          : "未知";
+      forgeState.next = isZh
+        ? `狀態=${nextStatusZh} | 回報=${String(next.total_return_pct || "-")} | 回撤=${String(next.max_drawdown_pct || "-")}`
+        : `status=${String(next.status || "unknown")} | return=${String(next.total_return_pct || "-")} | dd=${String(next.max_drawdown_pct || "-")}`;
       forgeState.updated = String(payload.generated_at_utc || "-");
 
       if (priorityNode) priorityNode.textContent = forgeState.priority;
@@ -1064,11 +1182,11 @@
         reachProbNode.textContent = `${(Math.max(0, Math.min(1, reachProb)) * 100).toFixed(1)}%`;
       }
       if (etaNode) {
-        etaNode.textContent = String(progress.eta_utc || expectation.eta_utc || "unknown");
+        etaNode.textContent = String(progress.eta_utc || expectation.eta_utc || forgeText.unknown);
       }
       if (deployModeNode) {
         const legacyOnly = Boolean(progress.legacy_only_deploy ?? payload.legacy_only_deploy);
-        deployModeNode.textContent = legacyOnly ? "LEGACY-ONLY DEPLOY" : "DUAL TRACK";
+        deployModeNode.textContent = legacyOnly ? forgeText.deployOnlyLegacy : forgeText.deployDual;
       }
       const passGap = Number(compare.pass_gap_to_target ?? 0);
       const alphaGap = Number(compare.alpha_gap_to_target ?? 0);
@@ -1088,12 +1206,23 @@
         applyDeltaTone(compareDeployNode, deploySymbolsGap + deployRulesGap);
       }
       if (compareLeaderNode) {
-        const leader = String(compare.leader || "parity").toUpperCase();
-        compareLeaderNode.textContent = `${leader} (${signed(rewardGap, 4)})`;
+        const leaderRaw = String(compare.leader || "parity").toLowerCase();
+        const leaderText = leaderRaw === "shadow"
+          ? forgeText.leaderShadow
+          : leaderRaw === "legacy"
+            ? forgeText.leaderLegacy
+            : forgeText.leaderParity;
+        compareLeaderNode.textContent = `${leaderText} (${signed(rewardGap, 4)})`;
         applyDeltaTone(compareLeaderNode, rewardGap);
       }
 
-      const roleRows = Object.values(roles).map((value) => String(value || "").trim()).filter(Boolean);
+      const roleRows = isZh
+        ? [
+          `管線狀態：${String(roles.pipeline_state || "-")}`,
+          `優先模式：${forgeState.priority}`,
+          `部署策略：${deployModeNode ? String(deployModeNode.textContent || forgeText.deployOnlyLegacy) : forgeText.deployOnlyLegacy}`,
+        ]
+        : Object.values(roles).map((value) => String(value || "").trim()).filter(Boolean);
       setList(rolesNode, roleRows);
 
       const featureRows = [];
@@ -1113,37 +1242,46 @@
           const pass = asFixed(row?.validation_pass_rate, 3);
           const alpha = asFixed(row?.all_window_alpha_vs_spot, 3);
           const score = asFixed(row?.quality_score, 3);
-          const phase = String(row?.phase || "unknown");
+          const phaseRaw = String(row?.phase || "unknown");
+          const phase = phaseRaw === "recovery"
+            ? forgeText.phaseRecovery
+            : phaseRaw === "stabilize"
+              ? forgeText.phaseStabilize
+              : phaseRaw === "candidate"
+                ? forgeText.phaseCandidate
+                : phaseRaw;
           const tags = Array.isArray(row?.improvement_tags) ? row.improvement_tags.join(",") : "";
-          return `${ts} | ${phase} | pass ${pass} | alpha ${alpha} | score ${score}${tags ? ` | ${tags}` : ""}`;
+          return isZh
+            ? `${ts} | ${phase} | 通過率 ${pass} | alpha ${alpha} | 品質 ${score}${tags ? ` | ${tags}` : ""}`
+            : `${ts} | ${phase} | pass ${pass} | alpha ${alpha} | score ${score}${tags ? ` | ${tags}` : ""}`;
         });
       setList(historyNode, historyView);
 
       const expectationRows = [];
       const p = Number.parseFloat(String(expectation.reach_target_probability || "0"));
       const etaRounds = expectation.eta_rounds;
-      expectationRows.push(`REACH_PROB: ${Number.isFinite(p) ? (p * 100).toFixed(1) : "0.0"}%`);
-      expectationRows.push(`ETA_ROUNDS: ${etaRounds == null ? "unknown" : String(etaRounds)}`);
-      expectationRows.push(`ETA_UTC: ${String(expectation.eta_utc || "unknown")}`);
+      expectationRows.push(`${forgeText.reachProb}: ${Number.isFinite(p) ? (p * 100).toFixed(1) : "0.0"}%`);
+      expectationRows.push(`${forgeText.etaRounds}: ${etaRounds == null ? forgeText.unknown : String(etaRounds)}`);
+      expectationRows.push(`${forgeText.etaUtc}: ${String(expectation.eta_utc || forgeText.unknown)}`);
       const passRange = Array.isArray(expectation.pass_rate_next_range) ? expectation.pass_rate_next_range : [];
-      if (passRange.length === 2) expectationRows.push(`PASS_NEXT: ${asFixed(passRange[0], 4)} ~ ${asFixed(passRange[1], 4)}`);
+      if (passRange.length === 2) expectationRows.push(`${forgeText.passNext}: ${asFixed(passRange[0], 4)} ~ ${asFixed(passRange[1], 4)}`);
       const alphaRange = Array.isArray(expectation.alpha_next_range) ? expectation.alpha_next_range : [];
-      if (alphaRange.length === 2) expectationRows.push(`ALPHA_NEXT: ${asFixed(alphaRange[0], 4)} ~ ${asFixed(alphaRange[1], 4)}`);
+      if (alphaRange.length === 2) expectationRows.push(`${forgeText.alphaNext}: ${asFixed(alphaRange[0], 4)} ~ ${asFixed(alphaRange[1], 4)}`);
       const deployRange = Array.isArray(expectation.deploy_next_range) ? expectation.deploy_next_range : [];
-      if (deployRange.length === 2) expectationRows.push(`DEPLOY_NEXT: ${asFixed(deployRange[0], 2)} ~ ${asFixed(deployRange[1], 2)}`);
+      if (deployRange.length === 2) expectationRows.push(`${forgeText.deployNext}: ${asFixed(deployRange[0], 2)} ~ ${asFixed(deployRange[1], 2)}`);
       setList(expectationNode, expectationRows);
 
       const rlRows = [];
-      rlRows.push(`STATUS: ${String(rlShadow.status || "hold_shadow")}`);
-      rlRows.push(`REASON: ${String(rlShadow.reason || "-")}`);
-      rlRows.push(`REWARD_PROXY: ${asFixed(rlShadow.reward_proxy, 6)}`);
-      rlRows.push(`RETURN_EST: ${asFixed(rlShadow.friction_adjusted_return_est, 6)}`);
-      rlRows.push(`DD_EST: ${asFixed(rlShadow.max_drawdown_est, 6)}`);
-      rlRows.push(`TRADES_EST: ${asFixed(rlShadow.trades_est, 2)}`);
+      rlRows.push(`${forgeText.shadowStatus}: ${String(rlShadow.status || "hold_shadow")}`);
+      rlRows.push(`${forgeText.shadowReason}: ${String(rlShadow.reason || "-")}`);
+      rlRows.push(`${forgeText.reward}: ${asFixed(rlShadow.reward_proxy, 6)}`);
+      rlRows.push(`${forgeText.returnEst}: ${asFixed(rlShadow.friction_adjusted_return_est, 6)}`);
+      rlRows.push(`${forgeText.ddEst}: ${asFixed(rlShadow.max_drawdown_est, 6)}`);
+      rlRows.push(`${forgeText.tradesEst}: ${asFixed(rlShadow.trades_est, 2)}`);
       const topActions = Array.isArray(rlShadow.top_actions) ? rlShadow.top_actions : [];
       if (topActions.length > 0) {
         const top = topActions[0] || {};
-        rlRows.push(`TOP_ACTION: ${String(top.rule_key || "n/a")} @ ${String(top.core_id || "n/a")} (${asFixed(top.probability, 3)})`);
+        rlRows.push(`${forgeText.topAction}: ${String(top.rule_key || "n/a")} @ ${String(top.core_id || "n/a")} (${asFixed(top.probability, 3)})`);
       }
       setList(rlShadowNode, rlRows);
 
@@ -1151,7 +1289,7 @@
         const fullOk = Boolean(historyContract.full_history_ok);
         const observed = String(historyContract.observed_start_utc || "-");
         const required = String(historyContract.required_start_utc || "2020-01-01T00:00:00Z");
-        historyMetaNode.textContent = `${fullOk ? "FULL_HISTORY_OK" : "FULL_HISTORY_GAP"} | observed=${observed} | required=${required}`;
+        historyMetaNode.textContent = `${fullOk ? forgeText.fullHistoryOk : forgeText.fullHistoryGap} | ${forgeText.observed}=${observed} | ${forgeText.required}=${required}`;
       }
       drawHistoryChart();
     }
@@ -1487,6 +1625,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    bindLocaleSwitcher();
     const config = getLuxuryConfig();
     applyLuxuryTheme(config);
     formatUtcNodes();

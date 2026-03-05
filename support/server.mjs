@@ -51,6 +51,8 @@ const LOCALES = listLocales();
 const PREVIEW_DIR = path.join(__dirname, "preview");
 const IS_VERCEL_RUNTIME = String(process.env.VERCEL || "").toLowerCase() === "1";
 const ROOT_CANONICAL_URL = "https://leimai.io/";
+const OUROBOROS_LOCALE_COOKIE_NAME = "ouroboros_locale";
+const OUROBOROS_PRIMARY_LOCALES = new Set(["en", "zh-tw"]);
 const LEGACY_HOST_REDIRECT_MAP = new Map([
   ["leimaitech.com", "leimai.io"],
   ["www.leimaitech.com", "leimai.io"],
@@ -211,8 +213,59 @@ function parseCookies(req) {
   return out;
 }
 
+function normalizeBilingualLocale(raw, fallback = "en") {
+  const fallbackLocale = String(fallback || "").trim().toLowerCase() === "zh-tw" ? "zh-tw" : "en";
+  const value = String(raw || "").trim().toLowerCase();
+  if (!value) return fallbackLocale;
+  if (value === "zh" || value === "zh-tw" || value === "zh-hant" || value === "zh-cn" || value === "zh-hans" || value.startsWith("zh-")) {
+    return "zh-tw";
+  }
+  if (value === "en" || value.startsWith("en-")) return "en";
+  if (value === "es" || value.startsWith("es-") || value === "ja" || value.startsWith("ja-")) {
+    return fallbackLocale;
+  }
+  const normalized = normalizeOuroborosLocale(value);
+  return normalized === "zh-tw" ? "zh-tw" : fallbackLocale;
+}
+
+function buildLocalePreferenceCookie(locale) {
+  const resolved = normalizeBilingualLocale(locale, "en");
+  const attrs = [
+    `${OUROBOROS_LOCALE_COOKIE_NAME}=${encodeURIComponent(resolved)}`,
+    "Path=/",
+    "SameSite=Lax",
+    `Max-Age=${60 * 60 * 24 * 365}`,
+  ];
+  if (CONFIG.cookieSecure) attrs.push("Secure");
+  return attrs.join("; ");
+}
+
+function getLocalePreferenceFromReq(req) {
+  const cookies = parseCookies(req);
+  const raw = String(cookies[OUROBOROS_LOCALE_COOKIE_NAME] || "").trim();
+  if (!raw) return null;
+  return normalizeBilingualLocale(raw, "en");
+}
+
+function appendSetCookieHeader(res, cookieValue) {
+  const next = String(cookieValue || "").trim();
+  if (!next) return;
+  const previous = res.getHeader("Set-Cookie");
+  if (!previous) {
+    res.setHeader("Set-Cookie", [next]);
+    return;
+  }
+  if (Array.isArray(previous)) {
+    res.setHeader("Set-Cookie", [...previous, next]);
+    return;
+  }
+  res.setHeader("Set-Cookie", [String(previous), next]);
+}
+
 function resolveOuroborosLocale(req) {
-  return normalizeOuroborosLocale(resolvePreferredLocale(req));
+  const fromCookie = getLocalePreferenceFromReq(req);
+  if (fromCookie && OUROBOROS_PRIMARY_LOCALES.has(fromCookie)) return fromCookie;
+  return normalizeBilingualLocale(resolvePreferredLocale(req), "en");
 }
 
 function normalizeHostHeader(rawHost) {
@@ -883,7 +936,7 @@ function buildAiCitationFeedPayload(baseUrl, reports = []) {
     generated_at_utc: nowIso(),
     site: root || ROOT_CANONICAL_URL.replace(/\/+$/, ""),
     canonical_url: ROOT_CANONICAL_URL,
-    locales_supported: locales.length ? locales : ["en", "zh-tw", "es", "ja"],
+    locales_supported: locales.length ? locales.filter((lc) => lc === "en" || lc === "zh-tw") : ["en", "zh-tw"],
     citation_guidelines: [
       "Prefer canonical_url over mirrored paths.",
       "Retain unique_entity verbatim: LeiMai Liquidity Friction.",
@@ -901,28 +954,18 @@ function buildStaticSitemapPaths() {
     "/forge",
     "/en/",
     "/zh-tw/",
-    "/es/",
-    "/ja/",
     "/en/analysis/",
     "/zh-tw/analysis/",
-    "/es/analysis/",
-    "/ja/analysis/",
     "/en/vault",
     "/zh-tw/vault",
-    "/es/vault",
-    "/ja/vault",
     "/en/forge",
     "/zh-tw/forge",
-    "/es/forge",
-    "/ja/forge",
   ];
 }
 
 function toLocaleTag(locale) {
   const raw = String(locale || "").trim().toLowerCase();
   if (raw === "zh-tw") return "ZH-TW";
-  if (raw === "es") return "ES";
-  if (raw === "ja") return "JA";
   return "EN";
 }
 
@@ -2167,7 +2210,7 @@ async function fetchReportsForIndex(limit = 200, locale = DEFAULT_REPORT_LOCALE)
 }
 
 async function fetchReportsAcrossLocales(limitPerLocale = 30) {
-  const locales = ["en", "zh-tw", "es", "ja"];
+  const locales = ["en", "zh-tw"];
   const merged = [];
   const seen = new Set();
   for (const locale of locales) {
@@ -2235,6 +2278,18 @@ function normalizeAnalysisPath(pathname) {
   return String(pathname || "").replace(/\/+$/, "");
 }
 
+function localePrefix(locale) {
+  return normalizeBilingualLocale(locale, "en") === "zh-tw" ? "/zh-tw" : "/en";
+}
+
+function localizedPath(locale, route = "/") {
+  const prefix = localePrefix(locale);
+  const raw = String(route || "/").trim() || "/";
+  const normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  if (normalized === "/") return `${prefix}/`;
+  return `${prefix}${normalized}`;
+}
+
 function renderOuroborosDocument({
   title,
   description,
@@ -2242,6 +2297,7 @@ function renderOuroborosDocument({
   jsonLd,
   canonicalUrl = ROOT_CANONICAL_URL,
   robotsContent = "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
+  localeSwitchPath = null,
   locale = "en",
   keywords = "Sovereign AI Oracle, BTC Alpha Signals, Whale Intelligence, Institutional Crypto Analysis",
   pageType = "generic",
@@ -2254,18 +2310,24 @@ function renderOuroborosDocument({
     : "/";
   const canonicalPath = canonicalPathRaw && canonicalPathRaw.startsWith("/") ? canonicalPathRaw : `/${canonicalPathRaw || ""}`;
   const pathForAlt = canonicalPath === "/" ? "" : canonicalPath;
+  const safeLocale = normalizeBilingualLocale(locale, "en");
+  const switchPathRaw = String(localeSwitchPath || (pathForAlt || "/")).trim();
+  const switchPath = switchPathRaw.startsWith("/") ? switchPathRaw : `/${switchPathRaw}`;
+  const switchPathClean = switchPath === "/" ? "/" : switchPath.replace(/\/+$/, "");
   const hreflangLinks = [
-    { hreflang: "x-default", href: `${canonicalRoot}${pathForAlt || "/"}` },
-    { hreflang: "en", href: `${canonicalRoot}${pathForAlt || "/"}` },
+    { hreflang: "x-default", href: `${canonicalRoot}/en${pathForAlt || "/"}` },
+    { hreflang: "en", href: `${canonicalRoot}/en${pathForAlt || "/"}` },
     { hreflang: "zh-Hant", href: `${canonicalRoot}/zh-tw${pathForAlt || "/"}` },
-    { hreflang: "es", href: `${canonicalRoot}/es${pathForAlt || "/"}` },
-    { hreflang: "ja", href: `${canonicalRoot}/ja${pathForAlt || "/"}` },
   ]
     .map((row) => `<link rel="alternate" hreflang="${escapeHtml(row.hreflang)}" href="${escapeHtml(row.href)}">`)
     .join("\n  ");
-  const ogLocale = locale === "zh-tw" ? "zh_TW" : locale === "es" ? "es_ES" : locale === "ja" ? "ja_JP" : "en_US";
+  const ogLocale = safeLocale === "zh-tw" ? "zh_TW" : "en_US";
+  const localeSwitcherHtml = `<nav class="locale-switcher" aria-label="${escapeHtml(safeLocale === "zh-tw" ? "語言切換" : "Language switcher")}">
+    <a class="locale-chip ${safeLocale === "en" ? "active" : ""}" href="/en${escapeHtml(switchPathClean)}" data-locale-switch="en">EN</a>
+    <a class="locale-chip ${safeLocale === "zh-tw" ? "active" : ""}" href="/zh-tw${escapeHtml(switchPathClean)}" data-locale-switch="zh-tw">繁中</a>
+  </nav>`;
   return `<!doctype html>
-<html lang="${escapeHtml(locale)}">
+<html lang="${escapeHtml(safeLocale)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2288,22 +2350,23 @@ function renderOuroborosDocument({
   <script type="application/ld+json">${ldPayload}</script>
   <link rel="stylesheet" href="/assets/ouroboros.css">
 </head>
-<body data-page="${escapeHtml(pageType)}" data-locale="${escapeHtml(locale)}">
+<body data-page="${escapeHtml(pageType)}" data-locale="${escapeHtml(safeLocale)}">
   <canvas id="matrix-bg" aria-hidden="true"></canvas>
   <div class="page-noise" aria-hidden="true"></div>
+  ${localeSwitcherHtml}
   ${bodyHtml}
   <script src="/assets/ouroboros.js"></script>
 </body>
 </html>`;
 }
 
-function buildReportCard(report, copy) {
+function buildReportCard(report, copy, locale = "en") {
   const summary = buildSummary(report.body_md, 176);
   const updatedAt = report.updated_at || report.created_at || "";
   const localeTag = toLocaleTag(report.locale);
   const title = String(report.title || "");
   const entity = String(report.unique_entity || "LeiMai Liquidity Friction");
-  return `<a class="matrix-card glass-panel cyber-border report-card" href="/analysis/${escapeHtml(report.slug)}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
+  return `<a class="matrix-card glass-panel cyber-border report-card" href="${escapeHtml(localizedPath(locale, `/analysis/${report.slug}`))}" data-filter="${escapeHtml(`${report.locale} ${report.unique_entity} ${report.title}`)}">
     <div class="card-top terminal-font">
       <span>${escapeHtml(localeTag)}</span>
       <span class="report-time terminal-font" data-utc="${escapeHtml(updatedAt)}">${escapeHtml(updatedAt || "-")}</span>
@@ -2369,101 +2432,195 @@ function renderForgeCommandCenterPanel({
 }) {
   const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
   const gate = buildSovereignGateConfig("sovereign");
+  const t = isZh
+      ? {
+        panelTitle: "[主權模型指揮中樞：BTC 核心]",
+        panelLead: "單頁監控：舊模型部署狀態、新模型影子評估、完整迭代歷史與達標預期。",
+        mirrorNotice: "此頁為鏡像入口，SEO 權重已集中於首頁。",
+        transferLine: `轉帳 ${gate.amountUsdt} USDC 至主權金庫以解密完整阿爾法訊號。`,
+        cta: "[ 預購存取 / 訂閱 ]",
+        metrics: {
+          epoch: "訓練輪次",
+          convergence: "收斂度",
+          status: "狀態",
+          priority: "優先模式",
+          legacy: "舊模型軌道",
+          shadow: "新模型影子軌道",
+          updated: "更新時間",
+          erc20: "ERC20（以太坊）",
+          l2: `${String(gate.l2Network || "arbitrum").toUpperCase()}（USDC）`,
+        },
+        kpi: {
+          reach: "達標機率",
+          eta: "預估達標時間",
+          deploy: "部署模式",
+        },
+        compare: {
+          pass: "PASS 與目標差距",
+          alpha: "ALPHA 與目標差距",
+          deploy: "部署覆蓋差距",
+          leader: "舊模型 VS 影子模型",
+        },
+        blocks: {
+          roles: "角色決策",
+          features: "特徵動作",
+          history: "近期歷史",
+          timeline: "完整迭代時間線（2020-01-01 至今）",
+          expectation: "預期推演",
+          rl: "離線 RL 影子評估",
+        },
+        placeholders: {
+          telemetry: "等待即時遙測資料...",
+          history: "尚未載入歷史。",
+          contract: "等待歷史契約檢查...",
+          expectation: "等待預期模型...",
+          rl: "等待 RL 影子報告...",
+        },
+        defaults: {
+          status: "訓練中，尚未授權部署",
+          priority: "舊模型優先（修復期）",
+          legacy: "通過率=0.0000 | alpha=-0.0000",
+          shadow: "影子暖機中",
+        },
+      }
+    : {
+        panelTitle: "[SOVEREIGN MODEL COMMAND CENTER: BTC CORE]",
+        panelLead: "Single-page monitoring for legacy deployment health, shadow model evaluation, full iteration history, and target expectation.",
+        mirrorNotice: "This endpoint is a mirror view. SEO authority is consolidated on the root home page.",
+        transferLine: `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the full Alpha.`,
+        cta: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
+        metrics: {
+          epoch: "EPOCH",
+          convergence: "CONVERGENCE",
+          status: "STATUS",
+          priority: "PRIORITY MODE",
+          legacy: "LEGACY TRACK",
+          shadow: "SHADOW TRACK",
+          updated: "UPDATED",
+          erc20: "ERC20 (ETHEREUM)",
+          l2: `${String(gate.l2Network || "arbitrum").toUpperCase()} (USDC)`,
+        },
+        kpi: {
+          reach: "REACH PROBABILITY",
+          eta: "ETA UTC",
+          deploy: "DEPLOY MODE",
+        },
+        compare: {
+          pass: "PASS GAP TO TARGET",
+          alpha: "ALPHA GAP TO TARGET",
+          deploy: "DEPLOY GAP TO TARGET",
+          leader: "LEGACY VS SHADOW",
+        },
+        blocks: {
+          roles: "ROLE DECISIONS",
+          features: "FEATURE ACTIONS",
+          history: "RECENT HISTORY",
+          timeline: "FULL ITERATION TIMELINE (2020-01-01 -> NOW)",
+          expectation: "EXPECTATION",
+          rl: "RL SHADOW (OFFLINE)",
+        },
+        placeholders: {
+          telemetry: "Awaiting live telemetry...",
+          history: "No history loaded.",
+          contract: "Waiting history contract...",
+          expectation: "Waiting expectation model...",
+          rl: "Waiting RL shadow report...",
+        },
+        defaults: {
+          status: "UNAUTHORIZED TO DEPLOY (TRAINING)",
+          priority: "LEGACY PRIORITY ACTIVE (RECOVERY)",
+          legacy: "pass=0.0000 | alpha=-0.0000",
+          shadow: "shadow warming",
+        },
+      };
   const lockText = signed
     ? (isZh
         ? "簽署完成，主權模型維持訓練狀態。可直接進入冷錢包結算。"
         : "Signature verified. Model remains in training mode. Cold-wallet settlement is enabled.")
     : copy.paywallNotice;
-  const transferLine = isZh
-    ? `轉帳 ${gate.amountUsdt} USDC 至 Oracle Vault，以解密真實 Alpha。`
-    : `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`;
   const forgeCta = signed
     ? renderSovereignGateButton({
-        label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
+        label: t.cta,
         slug: "vault",
         planCode: "sovereign",
         paymentRail: "l2_usdc",
       })
     : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
   const paywallShellClass = signed ? "paywall-shell is-unlocked" : "paywall-shell";
-  const mirrorNotice = showMirrorNotice
-    ? (isZh ? "此頁為鏡像監控入口，SEO 權重已集中至首頁 / 。" : "This page is a mirror endpoint. SEO authority is consolidated to the root /.")
-    : "";
+  const mirrorNotice = showMirrorNotice ? t.mirrorNotice : "";
   return `<section class="panel glass-panel cyber-border forge-shell">
-      <h2>[ORACLE COMMAND CENTER: BTC CORE]</h2>
-      <p class="muted">${escapeHtml(isZh
-        ? "單一儀表板：同頁監看舊模型、新模型影子評估、迭代歷史與達標預期。"
-        : "Single dashboard for legacy status, new-model shadow evaluation, full iteration history, and target reach expectation.")}</p>
+      <h2>${escapeHtml(t.panelTitle)}</h2>
+      <p class="muted">${escapeHtml(t.panelLead)}</p>
       ${mirrorNotice ? `<p class="muted">${escapeHtml(mirrorNotice)}</p>` : ""}
       <div class="forge-grid">
         <div class="forge-canvas-wrap">
           <canvas id="forgeMatrixCanvas" width="960" height="320" aria-label="Loss curve convergence"></canvas>
         </div>
         <aside class="forge-metrics">
-          <div class="forge-metric"><span>EPOCH</span><strong id="forgeEpoch">4592/5000</strong></div>
-          <div class="forge-metric"><span>ALPHA_CONVERGENCE</span><strong id="forgeConvergence">94.2%</strong></div>
-          <div class="forge-metric"><span>STATUS</span><strong id="forgeStatus" class="forge-status">UNAUTHORIZED TO DEPLOY (TRAINING)</strong></div>
-          <div class="forge-metric"><span>PRIORITY_MODE</span><strong id="forgePriorityMode">LEGACY PRIORITY ACTIVE (RECOVERY)</strong></div>
-          <div class="forge-metric"><span>LEGACY_TRACK</span><strong id="forgeLegacyTrack">pass=0.0000 | alpha=-0.0000</strong></div>
-          <div class="forge-metric"><span>NEW_TRACK</span><strong id="forgeNewTrack">shadow warming</strong></div>
-          <div class="forge-metric"><span>UPDATED</span><strong id="forgeUpdated">-</strong></div>
-          <div class="forge-metric"><span>ERC20 (ETHEREUM)</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
-          <div class="forge-metric"><span>${escapeHtml(String(gate.l2Network || "arbitrum").toUpperCase())} (USDC)</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.epoch)}</span><strong id="forgeEpoch">4592/5000</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.convergence)}</span><strong id="forgeConvergence">94.2%</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.status)}</span><strong id="forgeStatus" class="forge-status">${escapeHtml(t.defaults.status)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.priority)}</span><strong id="forgePriorityMode">${escapeHtml(t.defaults.priority)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.legacy)}</span><strong id="forgeLegacyTrack">${escapeHtml(t.defaults.legacy)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.shadow)}</span><strong id="forgeNewTrack">${escapeHtml(t.defaults.shadow)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.updated)}</span><strong id="forgeUpdated">-</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.erc20)}</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(t.metrics.l2)}</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
         </aside>
       </div>
       <div class="forge-kpi-grid">
-        <div class="forge-kpi-item"><span>REACH_TARGET_PROB</span><strong id="forgeReachProb">0.0%</strong></div>
-        <div class="forge-kpi-item"><span>ETA_UTC</span><strong id="forgeEta">unknown</strong></div>
-        <div class="forge-kpi-item"><span>DEPLOY_MODE</span><strong id="forgeDeployMode">LEGACY-ONLY</strong></div>
+        <div class="forge-kpi-item"><span>${escapeHtml(t.kpi.reach)}</span><strong id="forgeReachProb">0.0%</strong></div>
+        <div class="forge-kpi-item"><span>${escapeHtml(t.kpi.eta)}</span><strong id="forgeEta">${isZh ? "未知" : "unknown"}</strong></div>
+        <div class="forge-kpi-item"><span>${escapeHtml(t.kpi.deploy)}</span><strong id="forgeDeployMode">${isZh ? "僅舊模型可部署" : "LEGACY-ONLY"}</strong></div>
       </div>
       <div class="forge-compare-grid">
-        <div class="forge-compare-card"><span>PASS GAP VS TARGET</span><strong id="forgeComparePass" class="delta-flat">+0.0000</strong></div>
-        <div class="forge-compare-card"><span>ALPHA GAP VS TARGET</span><strong id="forgeCompareAlpha" class="delta-flat">+0.0000</strong></div>
-        <div class="forge-compare-card"><span>DEPLOY GAP VS TARGET</span><strong id="forgeCompareDeploy" class="delta-flat">+0 / +0</strong></div>
-        <div class="forge-compare-card"><span>LEGACY VS SHADOW</span><strong id="forgeCompareLeader" class="delta-flat">parity</strong></div>
+        <div class="forge-compare-card"><span>${escapeHtml(t.compare.pass)}</span><strong id="forgeComparePass" class="delta-flat">+0.0000</strong></div>
+        <div class="forge-compare-card"><span>${escapeHtml(t.compare.alpha)}</span><strong id="forgeCompareAlpha" class="delta-flat">+0.0000</strong></div>
+        <div class="forge-compare-card"><span>${escapeHtml(t.compare.deploy)}</span><strong id="forgeCompareDeploy" class="delta-flat">+0 / +0</strong></div>
+        <div class="forge-compare-card"><span>${escapeHtml(t.compare.leader)}</span><strong id="forgeCompareLeader" class="delta-flat">${isZh ? "平手" : "parity"}</strong></div>
       </div>
       <div class="forge-ops-grid">
         <section class="forge-op-card">
-          <h3>ROLE DECISIONS</h3>
+          <h3>${escapeHtml(t.blocks.roles)}</h3>
           <ul id="forgeRoleDecisions" class="forge-list">
-            <li>Awaiting live telemetry...</li>
+            <li>${escapeHtml(t.placeholders.telemetry)}</li>
           </ul>
         </section>
         <section class="forge-op-card">
-          <h3>FEATURE ACTIONS</h3>
+          <h3>${escapeHtml(t.blocks.features)}</h3>
           <ul id="forgeFeatureActions" class="forge-list">
-            <li>Awaiting live telemetry...</li>
+            <li>${escapeHtml(t.placeholders.telemetry)}</li>
           </ul>
         </section>
         <section class="forge-op-card">
-          <h3>HISTORY</h3>
+          <h3>${escapeHtml(t.blocks.history)}</h3>
           <ul id="forgeHistory" class="forge-list">
-            <li>No history loaded.</li>
+            <li>${escapeHtml(t.placeholders.history)}</li>
           </ul>
         </section>
       </div>
       <div class="forge-history-card">
         <div class="forge-history-head">
-          <h3>FULL ITERATION TIMELINE (2020-01-01 -> NOW)</h3>
-          <div id="forgeHistoryMeta" class="mono-value">Waiting history contract...</div>
+          <h3>${escapeHtml(t.blocks.timeline)}</h3>
+          <div id="forgeHistoryMeta" class="mono-value">${escapeHtml(t.placeholders.contract)}</div>
         </div>
         <canvas id="forgeHistoryCanvas" width="1180" height="280" aria-label="Full history pass/alpha chart"></canvas>
       </div>
       <div class="forge-ops-grid forge-ops-grid-2">
         <section class="forge-op-card">
-          <h3>EXPECTATION</h3>
+          <h3>${escapeHtml(t.blocks.expectation)}</h3>
           <ul id="forgeExpectation" class="forge-list">
-            <li>Waiting expectation model...</li>
+            <li>${escapeHtml(t.placeholders.expectation)}</li>
           </ul>
         </section>
         <section class="forge-op-card">
-          <h3>RL SHADOW (OFFLINE)</h3>
+          <h3>${escapeHtml(t.blocks.rl)}</h3>
           <ul id="forgeRlShadow" class="forge-list">
-            <li>Waiting RL shadow report...</li>
+            <li>${escapeHtml(t.placeholders.rl)}</li>
           </ul>
         </section>
       </div>
-      <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
+      <div class="guided-cta-copy">${escapeHtml(t.transferLine)}</div>
       <div class="forge-cta-row">
         ${forgeCta}
       </div>
@@ -2475,8 +2632,9 @@ function renderForgeCommandCenterPanel({
 
 function renderRootLandingPage(locale, reports, { signed = false, unlockedAddress = null } = {}, copyOverrides = {}) {
   const copy = resolveOuroborosCopy(locale, copyOverrides);
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
   const rows = Array.isArray(reports) ? reports.slice(0, 3) : [];
-  const quickLinks = rows.map((row) => `<li><a href="/analysis/${escapeHtml(row.slug)}">${escapeHtml(String(row.title || row.slug))}</a></li>`).join("");
+  const quickLinks = rows.map((row) => `<li><a href="${escapeHtml(localizedPath(locale, `/analysis/${row.slug}`))}">${escapeHtml(String(row.title || row.slug))}</a></li>`).join("");
   const commandCenter = renderForgeCommandCenterPanel({
     locale,
     copy,
@@ -2484,35 +2642,60 @@ function renderRootLandingPage(locale, reports, { signed = false, unlockedAddres
     unlockedAddress,
     showMirrorNotice: false,
   });
+  const t = isZh
+    ? {
+        kicker: "主權模型訓練中樞",
+        title: "[BTC 訓練總控首頁]",
+        lead: "以訓練進度為核心的單一入口：即時監控舊模型可部署性、影子模型品質與歷史迭代差異。",
+        hub: "節點",
+        tier: "主權觀測層",
+        analysis: "開啟情報索引",
+        vault: "進入金庫",
+        forge: "鏡像訓練頁",
+        secondaryTitle: "[次級功能路由]",
+        secondaryLead: "原有功能已保留，以下連結可直接進入。",
+        analysisIndex: "情報索引",
+        vaultPage: "主權金庫",
+      }
+    : {
+        kicker: "SOVEREIGN MODEL TRAINING HUB",
+        title: "[BTC TRAINING COMMAND HOME]",
+        lead: "Single entry focused on model training status, legacy deployability, shadow quality, and historical iteration deltas.",
+        hub: "Hub",
+        tier: "Sovereign Observability Tier",
+        analysis: "Open Intelligence Index",
+        vault: "Open Vault",
+        forge: "Forge Mirror",
+        secondaryTitle: "[SECONDARY ROUTES]",
+        secondaryLead: "Original capabilities are retained and accessible from links below.",
+        analysisIndex: "Analysis Index",
+        vaultPage: "Sovereign Vault",
+      };
   const bodyHtml = `<main class="site-wrap">
     <header class="hero glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">SOVEREIGN MODEL COMMAND</div>
-      <h1 class="neon-text">[UNIFIED BTC COMMAND CENTER]</h1>
-      <p>${escapeHtml(normalizeOuroborosLocale(locale) === "zh-tw"
-        ? "單一首頁即時監控：舊模型部署能力、新模型影子進展、歷史迭代與達標機率。"
-        : "Single-entry command center for legacy deployment health, shadow-model progress, full iteration history, and target probability.")}</p>
+      <div class="hero-kicker terminal-font">${escapeHtml(t.kicker)}</div>
+      <h1 class="neon-text">${escapeHtml(t.title)}</h1>
+      <p>${escapeHtml(t.lead)}</p>
       <div class="geo-badge terminal-font">
-        <span>Hub:</span>
+        <span>${escapeHtml(t.hub)}:</span>
         <strong id="geoHub">Global</strong>
-        <span id="geoTier">Platinum Node</span>
+        <span id="geoTier">${escapeHtml(t.tier)}</span>
       </div>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.homeOpenIndex)}</a>
-        <a class="btn" href="/vault">${escapeHtml(copy.vaultTitle || "Vault")}</a>
-        <a class="btn" href="/forge">Forge Mirror</a>
+        <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(t.analysis)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/vault"))}">${escapeHtml(t.vault)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/forge"))}">${escapeHtml(t.forge)}</a>
       </div>
     </header>
 
     ${commandCenter}
 
     <section class="panel glass-panel cyber-border">
-      <h2>[SECONDARY ROUTES]</h2>
-      <p class="muted">${escapeHtml(normalizeOuroborosLocale(locale) === "zh-tw"
-        ? "原有功能已保留於次級路由，不影響既有流程。"
-        : "All original features remain available via secondary routes.")}</p>
+      <h2>${escapeHtml(t.secondaryTitle)}</h2>
+      <p class="muted">${escapeHtml(t.secondaryLead)}</p>
       <div class="forge-secondary-links">
-        <a class="btn" href="/analysis/">Analysis Index</a>
-        <a class="btn" href="/vault">Sovereign Vault</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(t.analysisIndex)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/vault"))}">${escapeHtml(t.vaultPage)}</a>
         <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">${escapeHtml(copy.homeMainDomain)}</a>
       </div>
       ${quickLinks ? `<ul class="forge-route-list">${quickLinks}</ul>` : `<div class="empty-box">${escapeHtml(copy.homeEmpty)}</div>`}
@@ -2554,13 +2737,14 @@ function renderRootLandingPage(locale, reports, { signed = false, unlockedAddres
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | Unified BTC Command Center",
-    description: normalizeOuroborosLocale(locale) === "zh-tw"
+    title: isZh ? "LeiMai Oracle | BTC 訓練總控首頁" : "LeiMai Oracle | BTC Training Command Home",
+    description: isZh
       ? "單一入口監控舊模型、新模型影子進度與全歷史迭代差異。"
       : "Single-entry dashboard for legacy model readiness, shadow-model progress, and full history deltas.",
     bodyHtml,
     jsonLd,
     canonicalUrl: ROOT_CANONICAL_URL,
+    localeSwitchPath: "/",
     locale,
     keywords: copy.keywords,
     pageType: "home",
@@ -2592,9 +2776,9 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
       <h1 class="neon-text">${escapeHtml(copy.vaultTitle)}</h1>
       <p>${escapeHtml(copy.vaultLead)}</p>
       <div class="hero-cta-row">
-        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
-        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
-        <a class="btn" href="/forge">[ ORACLE FORGE ]</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/"))}">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(copy.backIndex)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/forge"))}">${escapeHtml(normalizeOuroborosLocale(locale) === "zh-tw" ? "[ 訓練鏡像 ]" : "[ TRAINING MIRROR ]")}</a>
       </div>
     </header>
 
@@ -2647,6 +2831,7 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
     bodyHtml,
     jsonLd,
     canonicalUrl: `${ROOT_CANONICAL_URL}vault`,
+    localeSwitchPath: "/vault",
     locale,
     keywords: copy.keywords,
     pageType: "vault",
@@ -2665,15 +2850,15 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
   });
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">MODEL FORGE</div>
-      <h1 class="neon-text">[FORGE MIRROR: BTC COMMAND CENTER]</h1>
+      <div class="hero-kicker terminal-font">${escapeHtml(isZh ? "模型鍛造鏡像" : "MODEL FORGE MIRROR")}</div>
+      <h1 class="neon-text">${escapeHtml(isZh ? "[BTC 訓練中樞鏡像頁]" : "[BTC TRAINING COMMAND MIRROR]")}</h1>
       <p>${escapeHtml(isZh
-        ? "此為首頁監控的鏡像入口，保留給既有流程；主權重與主監控在 / 。"
-        : "Mirror endpoint of the root command center for backward compatibility. Primary monitoring and SEO authority are on /.")}</p>
+        ? "此頁為首頁訓練中樞的鏡像入口，保留既有路徑相容性。"
+        : "Mirror endpoint of the home command center kept for backward compatibility.")}</p>
       <div class="hero-cta-row">
-        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
-        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
-        <a class="btn" href="/vault">${escapeHtml(copy.vaultTitle || "Vault")}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/"))}">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(copy.backIndex)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/vault"))}">${escapeHtml(copy.vaultTitle || "Vault")}</a>
       </div>
     </header>
 
@@ -2711,14 +2896,15 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | Forge Mirror",
+    title: isZh ? "LeiMai Oracle | 訓練鏡像頁" : "LeiMai Oracle | Training Mirror",
     description: isZh
-      ? "首頁統一監控儀表板鏡像。"
-      : "Mirror endpoint for the unified root command center.",
+      ? "首頁訓練中樞鏡像頁。"
+      : "Mirror endpoint for the root training command center.",
     bodyHtml,
     jsonLd,
     canonicalUrl: ROOT_CANONICAL_URL,
     robotsContent: "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
+    localeSwitchPath: "/forge",
     locale,
     keywords: copy.keywords,
     pageType: "forge",
@@ -2728,7 +2914,7 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
 function renderAnalysisIndexPage(locale, reports, copyOverrides = {}) {
   const copy = resolveOuroborosCopy(locale, copyOverrides);
   const rows = Array.isArray(reports) ? reports : [];
-  const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
+  const cardHtml = rows.map((row) => buildReportCard(row, copy, locale)).join("");
 
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
@@ -2737,7 +2923,7 @@ function renderAnalysisIndexPage(locale, reports, copyOverrides = {}) {
       <p>${escapeHtml(copy.analysisLead)}</p>
       <div class="hero-cta-row">
         <input id="analysisSearch" class="input" type="search" placeholder="${escapeHtml(copy.analysisSearch)}">
-        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/"))}">${escapeHtml(copy.backRoot)}</a>
       </div>
     </header>
 
@@ -2785,6 +2971,7 @@ function renderAnalysisIndexPage(locale, reports, copyOverrides = {}) {
     bodyHtml,
     jsonLd,
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    localeSwitchPath: "/analysis/",
     locale,
     keywords: copy.keywords,
     pageType: "analysis-index",
@@ -2974,8 +3161,8 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
       <h1 class="neon-text clamp-3">${escapeHtml(report.title)}</h1>
       <p class="clamp-3">${escapeHtml(summary)}</p>
       <div class="hero-cta-row">
-        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.detailBack)}</a>
-        <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
+        <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(copy.detailBack)}</a>
+        <a class="btn" href="${escapeHtml(localizedPath(locale, "/"))}">${escapeHtml(copy.backRoot)}</a>
       </div>
     </header>
 
@@ -3031,6 +3218,7 @@ function renderAnalysisDetailPage(locale, report, { unlocked = false, unlockedAd
     bodyHtml,
     jsonLd: paywallJsonLd,
     canonicalUrl,
+    localeSwitchPath: `/analysis/${report.slug}`,
     locale,
     keywords: copy.keywords,
     pageType: "analysis-detail",
@@ -3046,11 +3234,12 @@ function renderAnalysisNotFoundPage(locale, slug, copyOverrides = {}) {
       <section class="panel glass-panel cyber-border">
         <h1>${escapeHtml(copy.notFoundTitle)}</h1>
         <p class="muted">${escapeHtml(copy.notFoundLead)}: <code>${escapeHtml(slug)}</code></p>
-        <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.notFoundBack)}</a>
+        <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(copy.notFoundBack)}</a>
       </section>
     </main>`,
     jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: "Analysis Not Found", url: ROOT_CANONICAL_URL },
     canonicalUrl: `${ROOT_CANONICAL_URL}analysis/`,
+    localeSwitchPath: "/analysis/",
     locale,
     keywords: copy.keywords,
     pageType: "analysis-not-found",
@@ -3068,8 +3257,8 @@ function goneResponse(res, pathname, locale = "en", copyOverrides = {}) {
         <h1>${escapeHtml(copy.goneTitle)}</h1>
         <p>${escapeHtml(copy.goneLead)} <code>${escapeHtml(pathname)}</code></p>
         <div class="hero-cta-row">
-          <a class="btn btn-main" href="/">${escapeHtml(copy.goneRoot)}</a>
-          <a class="btn" href="/analysis/">${escapeHtml(copy.goneIndex)}</a>
+          <a class="btn btn-main" href="${escapeHtml(localizedPath(locale, "/"))}">${escapeHtml(copy.goneRoot)}</a>
+          <a class="btn" href="${escapeHtml(localizedPath(locale, "/analysis/"))}">${escapeHtml(copy.goneIndex)}</a>
         </div>
       </section>
     </main>`,
@@ -3083,6 +3272,7 @@ function goneResponse(res, pathname, locale = "en", copyOverrides = {}) {
     locale,
     keywords: copy.keywords,
     pageType: "gone",
+    localeSwitchPath: "/",
   });
   res.writeHead(410, {
     "Content-Type": "text/html; charset=utf-8",
@@ -3098,10 +3288,21 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   let routePath = String(pathname || "");
   let localeByPath = "";
-  const localePathMatch = routePath.match(/^\/(en|zh-tw|es|ja)(\/.*)?$/i);
+  const localePathMatch = routePath.match(/^\/(en|zh-tw|zh-cn|es|ja)(\/.*)?$/i);
   if (localePathMatch) {
-    localeByPath = normalizeOuroborosLocale(localePathMatch[1]);
+    const rawLocale = String(localePathMatch[1] || "").toLowerCase();
+    const mappedLocale = normalizeBilingualLocale(rawLocale, "en");
     routePath = localePathMatch[2] ? String(localePathMatch[2]) : "/";
+    if (!OUROBOROS_PRIMARY_LOCALES.has(rawLocale)) {
+      appendSetCookieHeader(res, buildLocalePreferenceCookie(mappedLocale));
+      res.writeHead(301, {
+        Location: localizedPath(mappedLocale, routePath),
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end();
+      return true;
+    }
+    localeByPath = mappedLocale;
   }
   const locale = localeByPath || resolveOuroborosLocale(req);
   const copyOverrides = await readGrowthOverrides();
@@ -3109,6 +3310,31 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (method !== "GET") {
     goneResponse(res, pathname, locale, copyOverrides);
     return true;
+  }
+
+  if (localeByPath) {
+    appendSetCookieHeader(res, buildLocalePreferenceCookie(localeByPath));
+  }
+
+  if (!localeByPath) {
+    const bypass = routePath.startsWith("/assets/")
+      || routePath.startsWith("/generated/")
+      || routePath === "/robots.txt"
+      || routePath === "/sitemap.xml"
+      || routePath === "/sitemap-index.xml"
+      || routePath === "/sitemap-static.xml"
+      || routePath === "/sitemap-analysis.xml"
+      || routePath === "/llms.txt"
+      || routePath.startsWith("/.well-known/");
+    if (!bypass) {
+      appendSetCookieHeader(res, buildLocalePreferenceCookie(locale));
+      res.writeHead(302, {
+        Location: localizedPath(locale, routePath),
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return true;
+    }
   }
 
   if (routePath === "/assets/ouroboros.css") {
@@ -3197,7 +3423,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     const reports = await fetchLatestReports(5, locale);
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
-      res.setHeader("Set-Cookie", clearUnlockCookie());
+      appendSetCookieHeader(res, clearUnlockCookie());
     }
     textResponse(
       res,
@@ -3213,7 +3439,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (routePath === "/vault") {
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
-      res.setHeader("Set-Cookie", clearUnlockCookie());
+      appendSetCookieHeader(res, clearUnlockCookie());
     }
     textResponse(
       res,
@@ -3229,7 +3455,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   if (routePath === "/forge") {
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
-      res.setHeader("Set-Cookie", clearUnlockCookie());
+      appendSetCookieHeader(res, clearUnlockCookie());
     }
     textResponse(
       res,
@@ -3292,7 +3518,7 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
     }
     const unlockSession = getUnlockSessionFromReq(req);
     if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
-      res.setHeader("Set-Cookie", clearUnlockCookie());
+      appendSetCookieHeader(res, clearUnlockCookie());
     }
     textResponse(
       res,
@@ -3864,7 +4090,7 @@ export async function handleRequest(req, res) {
       if (!token) {
         return jsonResponse(res, 500, { ok: false, error: "session_sign_failed" });
       }
-      res.setHeader("Set-Cookie", buildUnlockCookie(token));
+      appendSetCookieHeader(res, buildUnlockCookie(token));
       await logUserAccess({ walletAddress: address, slug }).catch(() => false);
       triggerEntityProfilerForAddress(address);
 
