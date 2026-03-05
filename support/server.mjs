@@ -721,6 +721,34 @@ async function loadMlLivePayload() {
     : {};
   const rlDecision = rlShadowReport?.decision && typeof rlShadowReport.decision === "object" ? rlShadowReport.decision : {};
   const rlShadow = rlShadowReport?.rl_shadow && typeof rlShadowReport.rl_shadow === "object" ? rlShadowReport.rl_shadow : {};
+  const legacyPassRate = numberOr(latest.validation_pass_rate, numberOr(qualitySnapshot.validation_pass_rate, 0));
+  const legacyAlpha = numberOr(latest.all_window_alpha_vs_spot, numberOr(qualitySnapshot.all_window_alpha_vs_spot, 0));
+  const legacyDeploySymbols = numberOr(latest.deploy_symbols, numberOr(qualitySnapshot.deploy_symbols, 0));
+  const legacyDeployRules = numberOr(latest.deploy_rules, numberOr(qualitySnapshot.deploy_rules, 0));
+  const legacyQualityScore = numberOr(latest.quality_score, 0);
+  const targetPassRate = numberOr(targets.validation_pass_rate, 0.4);
+  const targetAlpha = numberOr(targets.all_window_alpha_vs_spot, -3);
+  const targetDeploySymbols = numberOr(targets.deploy_symbols, 1);
+  const targetDeployRules = numberOr(targets.deploy_rules, 2);
+  const shadowRewardProxy = numberOr(rlShadow.reward_proxy, 0);
+  const shadowRewardGap = shadowRewardProxy - legacyQualityScore;
+  const leader = shadowRewardGap > 0.05 ? "shadow" : shadowRewardGap < -0.05 ? "legacy" : "parity";
+  const compare = {
+    pass_gap_to_target: Number((legacyPassRate - targetPassRate).toFixed(6)),
+    alpha_gap_to_target: Number((legacyAlpha - targetAlpha).toFixed(6)),
+    deploy_symbols_gap_to_target: Number((legacyDeploySymbols - targetDeploySymbols).toFixed(6)),
+    deploy_rules_gap_to_target: Number((legacyDeployRules - targetDeployRules).toFixed(6)),
+    shadow_reward_gap: Number(shadowRewardGap.toFixed(6)),
+    leader,
+  };
+  const progress = {
+    reach_target_probability: numberOr(expectation.reach_target_probability, 0),
+    eta_utc: String(expectation.eta_utc || ""),
+    eta_rounds: expectation.eta_rounds == null ? null : numberOr(expectation.eta_rounds, 0),
+    priority_mode: priority.mode,
+    legacy_only_deploy: true,
+    updated_at_utc: nowIso(),
+  };
 
   return {
     ok: true,
@@ -731,6 +759,8 @@ async function loadMlLivePayload() {
     targets,
     expectation,
     history_contract: historyContract,
+    compare,
+    progress,
     forge: {
       epoch_current: epochCurrent,
       epoch_total: epochTotal,
@@ -740,11 +770,11 @@ async function loadMlLivePayload() {
     legacy_status: {
       pipeline_state: String(liveStatus?.pipeline_state || "unknown"),
       run_id: String(latest.run_id || qualitySnapshot.run_id || ""),
-      validation_pass_rate: numberOr(latest.validation_pass_rate, numberOr(qualitySnapshot.validation_pass_rate, 0)),
-      all_window_alpha_vs_spot: numberOr(latest.all_window_alpha_vs_spot, numberOr(qualitySnapshot.all_window_alpha_vs_spot, 0)),
-      deploy_symbols: numberOr(latest.deploy_symbols, numberOr(qualitySnapshot.deploy_symbols, 0)),
-      deploy_rules: numberOr(latest.deploy_rules, numberOr(qualitySnapshot.deploy_rules, 0)),
-      quality_score: numberOr(latest.quality_score, 0),
+      validation_pass_rate: legacyPassRate,
+      all_window_alpha_vs_spot: legacyAlpha,
+      deploy_symbols: legacyDeploySymbols,
+      deploy_rules: legacyDeployRules,
+      quality_score: legacyQualityScore,
     },
     new_model_status: {
       run_id: String(nonlinear.run_id || ""),
@@ -2211,6 +2241,7 @@ function renderOuroborosDocument({
   bodyHtml,
   jsonLd,
   canonicalUrl = ROOT_CANONICAL_URL,
+  robotsContent = "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
   locale = "en",
   keywords = "Sovereign AI Oracle, BTC Alpha Signals, Whale Intelligence, Institutional Crypto Analysis",
   pageType = "generic",
@@ -2241,7 +2272,7 @@ function renderOuroborosDocument({
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(description)}">
   <meta name="keywords" content="${escapeHtml(keywords)}">
-  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+  <meta name="robots" content="${escapeHtml(robotsContent)}">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="${escapeHtml(ogLocale)}">
   <meta property="og:title" content="${escapeHtml(title)}">
@@ -2329,25 +2360,137 @@ function renderPaymentModal(title = "Sovereign Invoice") {
     </div>`;
 }
 
-function renderRootLandingPage(locale, reports, copyOverrides = {}) {
+function renderForgeCommandCenterPanel({
+  locale,
+  copy,
+  signed = false,
+  unlockedAddress = null,
+  showMirrorNotice = false,
+}) {
+  const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
+  const gate = buildSovereignGateConfig("sovereign");
+  const lockText = signed
+    ? (isZh
+        ? "簽署完成，主權模型維持訓練狀態。可直接進入冷錢包結算。"
+        : "Signature verified. Model remains in training mode. Cold-wallet settlement is enabled.")
+    : copy.paywallNotice;
+  const transferLine = isZh
+    ? `轉帳 ${gate.amountUsdt} USDC 至 Oracle Vault，以解密真實 Alpha。`
+    : `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`;
+  const forgeCta = signed
+    ? renderSovereignGateButton({
+        label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
+        slug: "vault",
+        planCode: "sovereign",
+        paymentRail: "l2_usdc",
+      })
+    : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
+  const paywallShellClass = signed ? "paywall-shell is-unlocked" : "paywall-shell";
+  const mirrorNotice = showMirrorNotice
+    ? (isZh ? "此頁為鏡像監控入口，SEO 權重已集中至首頁 / 。" : "This page is a mirror endpoint. SEO authority is consolidated to the root /.")
+    : "";
+  return `<section class="panel glass-panel cyber-border forge-shell">
+      <h2>[ORACLE COMMAND CENTER: BTC CORE]</h2>
+      <p class="muted">${escapeHtml(isZh
+        ? "單一儀表板：同頁監看舊模型、新模型影子評估、迭代歷史與達標預期。"
+        : "Single dashboard for legacy status, new-model shadow evaluation, full iteration history, and target reach expectation.")}</p>
+      ${mirrorNotice ? `<p class="muted">${escapeHtml(mirrorNotice)}</p>` : ""}
+      <div class="forge-grid">
+        <div class="forge-canvas-wrap">
+          <canvas id="forgeMatrixCanvas" width="960" height="320" aria-label="Loss curve convergence"></canvas>
+        </div>
+        <aside class="forge-metrics">
+          <div class="forge-metric"><span>EPOCH</span><strong id="forgeEpoch">4592/5000</strong></div>
+          <div class="forge-metric"><span>ALPHA_CONVERGENCE</span><strong id="forgeConvergence">94.2%</strong></div>
+          <div class="forge-metric"><span>STATUS</span><strong id="forgeStatus" class="forge-status">UNAUTHORIZED TO DEPLOY (TRAINING)</strong></div>
+          <div class="forge-metric"><span>PRIORITY_MODE</span><strong id="forgePriorityMode">LEGACY PRIORITY ACTIVE (RECOVERY)</strong></div>
+          <div class="forge-metric"><span>LEGACY_TRACK</span><strong id="forgeLegacyTrack">pass=0.0000 | alpha=-0.0000</strong></div>
+          <div class="forge-metric"><span>NEW_TRACK</span><strong id="forgeNewTrack">shadow warming</strong></div>
+          <div class="forge-metric"><span>UPDATED</span><strong id="forgeUpdated">-</strong></div>
+          <div class="forge-metric"><span>ERC20 (ETHEREUM)</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
+          <div class="forge-metric"><span>${escapeHtml(String(gate.l2Network || "arbitrum").toUpperCase())} (USDC)</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
+        </aside>
+      </div>
+      <div class="forge-kpi-grid">
+        <div class="forge-kpi-item"><span>REACH_TARGET_PROB</span><strong id="forgeReachProb">0.0%</strong></div>
+        <div class="forge-kpi-item"><span>ETA_UTC</span><strong id="forgeEta">unknown</strong></div>
+        <div class="forge-kpi-item"><span>DEPLOY_MODE</span><strong id="forgeDeployMode">LEGACY-ONLY</strong></div>
+      </div>
+      <div class="forge-compare-grid">
+        <div class="forge-compare-card"><span>PASS GAP VS TARGET</span><strong id="forgeComparePass" class="delta-flat">+0.0000</strong></div>
+        <div class="forge-compare-card"><span>ALPHA GAP VS TARGET</span><strong id="forgeCompareAlpha" class="delta-flat">+0.0000</strong></div>
+        <div class="forge-compare-card"><span>DEPLOY GAP VS TARGET</span><strong id="forgeCompareDeploy" class="delta-flat">+0 / +0</strong></div>
+        <div class="forge-compare-card"><span>LEGACY VS SHADOW</span><strong id="forgeCompareLeader" class="delta-flat">parity</strong></div>
+      </div>
+      <div class="forge-ops-grid">
+        <section class="forge-op-card">
+          <h3>ROLE DECISIONS</h3>
+          <ul id="forgeRoleDecisions" class="forge-list">
+            <li>Awaiting live telemetry...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>FEATURE ACTIONS</h3>
+          <ul id="forgeFeatureActions" class="forge-list">
+            <li>Awaiting live telemetry...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>HISTORY</h3>
+          <ul id="forgeHistory" class="forge-list">
+            <li>No history loaded.</li>
+          </ul>
+        </section>
+      </div>
+      <div class="forge-history-card">
+        <div class="forge-history-head">
+          <h3>FULL ITERATION TIMELINE (2020-01-01 -> NOW)</h3>
+          <div id="forgeHistoryMeta" class="mono-value">Waiting history contract...</div>
+        </div>
+        <canvas id="forgeHistoryCanvas" width="1180" height="280" aria-label="Full history pass/alpha chart"></canvas>
+      </div>
+      <div class="forge-ops-grid forge-ops-grid-2">
+        <section class="forge-op-card">
+          <h3>EXPECTATION</h3>
+          <ul id="forgeExpectation" class="forge-list">
+            <li>Waiting expectation model...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>RL SHADOW (OFFLINE)</h3>
+          <ul id="forgeRlShadow" class="forge-list">
+            <li>Waiting RL shadow report...</li>
+          </ul>
+        </section>
+      </div>
+      <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
+      <div class="forge-cta-row">
+        ${forgeCta}
+      </div>
+      <div class="lock-message">${escapeHtml(lockText)}</div>
+      <div id="paymentResult" class="payment-result muted"></div>
+      <div class="${paywallShellClass}" style="display:none" data-unlocked="${signed ? "1" : "0"}" data-slug="vault" data-unlocked-address="${escapeHtml(unlockedAddress || "")}"></div>
+    </section>`;
+}
+
+function renderRootLandingPage(locale, reports, { signed = false, unlockedAddress = null } = {}, copyOverrides = {}) {
   const copy = resolveOuroborosCopy(locale, copyOverrides);
-  const rows = Array.isArray(reports) ? reports.slice(0, 5) : [];
-  const cardHtml = rows.map((row) => buildReportCard(row, copy)).join("");
-  const hasRows = rows.length > 0;
-
-  const bodyHtml = `<div id="vaultOverlay" class="vault-overlay">
-    <div class="vault-door top"></div>
-    <div class="vault-laser"></div>
-    <div class="vault-door bottom">
-      <button id="vaultEnterBtn" class="vault-enter-btn" type="button">[ Enter The Void ]</button>
-    </div>
-  </div>
-
-  <main class="site-wrap">
+  const rows = Array.isArray(reports) ? reports.slice(0, 3) : [];
+  const quickLinks = rows.map((row) => `<li><a href="/analysis/${escapeHtml(row.slug)}">${escapeHtml(String(row.title || row.slug))}</a></li>`).join("");
+  const commandCenter = renderForgeCommandCenterPanel({
+    locale,
+    copy,
+    signed,
+    unlockedAddress,
+    showMirrorNotice: false,
+  });
+  const bodyHtml = `<main class="site-wrap">
     <header class="hero glass-panel cyber-border">
-      <div class="hero-kicker terminal-font">${escapeHtml(copy.homeKicker)}</div>
-      <h1 class="neon-text">${escapeHtml(copy.homeTitle)}</h1>
-      <p>${escapeHtml(copy.homeLead)}</p>
+      <div class="hero-kicker terminal-font">SOVEREIGN MODEL COMMAND</div>
+      <h1 class="neon-text">[UNIFIED BTC COMMAND CENTER]</h1>
+      <p>${escapeHtml(normalizeOuroborosLocale(locale) === "zh-tw"
+        ? "單一首頁即時監控：舊模型部署能力、新模型影子進展、歷史迭代與達標機率。"
+        : "Single-entry command center for legacy deployment health, shadow-model progress, full iteration history, and target probability.")}</p>
       <div class="geo-badge terminal-font">
         <span>Hub:</span>
         <strong id="geoHub">Global</strong>
@@ -2355,31 +2498,26 @@ function renderRootLandingPage(locale, reports, copyOverrides = {}) {
       </div>
       <div class="hero-cta-row">
         <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.homeOpenIndex)}</a>
-        <a class="btn" href="/forge">[ ORACLE FORGE ]</a>
-        <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">${escapeHtml(copy.homeMainDomain)}</a>
+        <a class="btn" href="/vault">${escapeHtml(copy.vaultTitle || "Vault")}</a>
+        <a class="btn" href="/forge">Forge Mirror</a>
       </div>
     </header>
 
+    ${commandCenter}
+
     <section class="panel glass-panel cyber-border">
-      <h2>${escapeHtml(copy.homeLatestTitle)}</h2>
-      <p class="muted">${escapeHtml(copy.homeLatestLead)}</p>
-      ${hasRows ? `<div id="analysisCards" class="matrix-grid">${cardHtml}</div>` : `<div class="empty-box">${escapeHtml(copy.homeEmpty)}</div>`}
+      <h2>[SECONDARY ROUTES]</h2>
+      <p class="muted">${escapeHtml(normalizeOuroborosLocale(locale) === "zh-tw"
+        ? "原有功能已保留於次級路由，不影響既有流程。"
+        : "All original features remain available via secondary routes.")}</p>
+      <div class="forge-secondary-links">
+        <a class="btn" href="/analysis/">Analysis Index</a>
+        <a class="btn" href="/vault">Sovereign Vault</a>
+        <a class="btn" href="https://leimai.io/" target="_blank" rel="noopener">${escapeHtml(copy.homeMainDomain)}</a>
+      </div>
+      ${quickLinks ? `<ul class="forge-route-list">${quickLinks}</ul>` : `<div class="empty-box">${escapeHtml(copy.homeEmpty)}</div>`}
     </section>
 
-    <section class="panel glass-panel cyber-border forge-shell">
-      <h2>[ORACLE FORGE: BTC CORE]</h2>
-      <p class="muted">Live sovereign model convergence stream. Locked outputs are released only through the cold wallet gateway.</p>
-      <div class="forge-cta-row">
-        <a class="btn" href="/forge">Open Forge Interface</a>
-        ${renderSovereignGateButton({
-          label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
-          slug: "vault",
-          planCode: "sovereign",
-          paymentRail: "l2_usdc",
-        })}
-      </div>
-      <div id="paymentResult" class="payment-result muted"></div>
-    </section>
     ${renderPaymentModal("Sovereign Gateway Invoice")}
   </main>`;
 
@@ -2390,26 +2528,36 @@ function renderRootLandingPage(locale, reports, copyOverrides = {}) {
         "@type": "WebSite",
         name: "LeiMai Oracle",
         url: ROOT_CANONICAL_URL,
-        description: "Root authority endpoint for LeiMai Oracle Ouroboros entity.",
-      },
-      {
-        "@type": "CollectionPage",
-        name: copy.homeTitle,
-        url: `${ROOT_CANONICAL_URL}analysis/`,
-        isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+        description: "Unified command center for sovereign model operations and market intelligence.",
       },
       {
         "@type": "WebPage",
-        name: "Oracle Forge BTC Core",
-        url: `${ROOT_CANONICAL_URL}forge`,
+        name: "Unified BTC Command Center",
+        url: ROOT_CANONICAL_URL,
+        description: "Single-entry live dashboard with legacy-vs-shadow model comparison and full training progress telemetry.",
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
+      },
+      {
+        "@type": "Dataset",
+        name: "BTC Command Center Telemetry",
+        description: "Live metrics for legacy deployment readiness, shadow model drift, and expectation tracking.",
+        creator: { "@type": "Organization", name: "LeiMai Oracle" },
+        url: ROOT_CANONICAL_URL,
+      },
+      {
+        "@type": "Service",
+        name: "Sovereign Cold Wallet Gateway",
+        provider: { "@type": "Organization", name: "LeiMai Oracle" },
+        serviceType: "Cold wallet settlement for model subscriptions",
       },
     ],
   };
 
   return renderOuroborosDocument({
-    title: `LeiMai Oracle | ${copy.homeTitle}`,
-    description: copy.homeLead,
+    title: "LeiMai Oracle | Unified BTC Command Center",
+    description: normalizeOuroborosLocale(locale) === "zh-tw"
+      ? "單一入口監控舊模型、新模型影子進度與全歷史迭代差異。"
+      : "Single-entry dashboard for legacy model readiness, shadow-model progress, and full history deltas.",
     bodyHtml,
     jsonLd,
     canonicalUrl: ROOT_CANONICAL_URL,
@@ -2508,104 +2656,28 @@ function renderVaultPage(locale, { signed = false, unlockedAddress = null } = {}
 function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}, copyOverrides = {}) {
   const copy = resolveOuroborosCopy(locale, copyOverrides);
   const isZh = normalizeOuroborosLocale(locale) === "zh-tw";
-  const gate = buildSovereignGateConfig("sovereign");
-  const lockText = signed
-    ? (isZh
-        ? "簽署完成，主權模型維持訓練狀態。可直接進入冷錢包結算。"
-        : "Signature verified. Model remains in training mode. Cold-wallet settlement is enabled.")
-    : copy.paywallNotice;
-  const transferLine = isZh
-    ? `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`
-    : `Transfer ${gate.amountUsdt} USDC to the Oracle Vault to decrypt the true Alpha.`;
-  const forgeCta = signed
-    ? renderSovereignGateButton({
-        label: "[ PRE-ORDER ACCESS / SUBSCRIBE ]",
-        slug: "vault",
-        planCode: "sovereign",
-        paymentRail: "l2_usdc",
-      })
-    : `<button class="unlock-btn sign-btn pulse-glow" type="button">${escapeHtml(copy.signBtn)}</button>`;
-  const paywallShellClass = signed ? "paywall-shell is-unlocked" : "paywall-shell";
+  const commandCenter = renderForgeCommandCenterPanel({
+    locale,
+    copy,
+    signed,
+    unlockedAddress,
+    showMirrorNotice: true,
+  });
   const bodyHtml = `<main class="site-wrap">
     <header class="hero hero-compact glass-panel cyber-border">
       <div class="hero-kicker terminal-font">MODEL FORGE</div>
-      <h1 class="neon-text">[ORACLE FORGE: BTC CORE]</h1>
+      <h1 class="neon-text">[FORGE MIRROR: BTC COMMAND CENTER]</h1>
       <p>${escapeHtml(isZh
-        ? "模型仍在收斂，輸出尚未授權部署。只有主權冷錢包流程可預先鎖定存取。"
-        : "The BTC model is still converging and remains unauthorized for deployment. Pre-order access is only available through the sovereign cold-wallet flow.")}</p>
+        ? "此為首頁監控的鏡像入口，保留給既有流程；主權重與主監控在 / 。"
+        : "Mirror endpoint of the root command center for backward compatibility. Primary monitoring and SEO authority are on /.")}</p>
       <div class="hero-cta-row">
         <a class="btn" href="/">${escapeHtml(copy.backRoot)}</a>
         <a class="btn btn-main" href="/analysis/">${escapeHtml(copy.backIndex)}</a>
+        <a class="btn" href="/vault">${escapeHtml(copy.vaultTitle || "Vault")}</a>
       </div>
     </header>
 
-    <section class="panel glass-panel cyber-border forge-shell">
-      <h2>[ORACLE FORGE: BTC CORE]</h2>
-      <div class="forge-grid">
-        <div class="forge-canvas-wrap">
-          <canvas id="forgeMatrixCanvas" width="960" height="320" aria-label="Loss curve convergence"></canvas>
-        </div>
-        <aside class="forge-metrics">
-          <div class="forge-metric"><span>EPOCH</span><strong id="forgeEpoch">4592/5000</strong></div>
-          <div class="forge-metric"><span>ALPHA_CONVERGENCE</span><strong id="forgeConvergence">94.2%</strong></div>
-          <div class="forge-metric"><span>STATUS</span><strong id="forgeStatus" class="forge-status">UNAUTHORIZED TO DEPLOY (TRAINING)</strong></div>
-          <div class="forge-metric"><span>PRIORITY_MODE</span><strong id="forgePriorityMode">LEGACY PRIORITY ACTIVE (RECOVERY)</strong></div>
-          <div class="forge-metric"><span>LEGACY_TRACK</span><strong id="forgeLegacyTrack">pass=0.0000 | alpha=-0.0000</strong></div>
-          <div class="forge-metric"><span>NEW_TRACK</span><strong id="forgeNewTrack">shadow warming</strong></div>
-          <div class="forge-metric"><span>UPDATED</span><strong id="forgeUpdated">-</strong></div>
-          <div class="forge-metric"><span>ERC20 (ETHEREUM)</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
-          <div class="forge-metric"><span>${escapeHtml(String(gate.l2Network || "arbitrum").toUpperCase())} (USDC)</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
-        </aside>
-      </div>
-      <div class="forge-ops-grid">
-        <section class="forge-op-card">
-          <h3>ROLE DECISIONS</h3>
-          <ul id="forgeRoleDecisions" class="forge-list">
-            <li>Awaiting live telemetry...</li>
-          </ul>
-        </section>
-        <section class="forge-op-card">
-          <h3>FEATURE ACTIONS</h3>
-          <ul id="forgeFeatureActions" class="forge-list">
-            <li>Awaiting live telemetry...</li>
-          </ul>
-        </section>
-        <section class="forge-op-card">
-          <h3>HISTORY</h3>
-          <ul id="forgeHistory" class="forge-list">
-            <li>No history loaded.</li>
-          </ul>
-        </section>
-      </div>
-      <div class="forge-history-card">
-        <div class="forge-history-head">
-          <h3>FULL ITERATION TIMELINE (2020-01-01 -> NOW)</h3>
-          <div id="forgeHistoryMeta" class="mono-value">Waiting history contract...</div>
-        </div>
-        <canvas id="forgeHistoryCanvas" width="1180" height="280" aria-label="Full history pass/alpha chart"></canvas>
-      </div>
-      <div class="forge-ops-grid forge-ops-grid-2">
-        <section class="forge-op-card">
-          <h3>EXPECTATION</h3>
-          <ul id="forgeExpectation" class="forge-list">
-            <li>Waiting expectation model...</li>
-          </ul>
-        </section>
-        <section class="forge-op-card">
-          <h3>RL SHADOW (OFFLINE)</h3>
-          <ul id="forgeRlShadow" class="forge-list">
-            <li>Waiting RL shadow report...</li>
-          </ul>
-        </section>
-      </div>
-      <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
-      <div class="forge-cta-row">
-        ${forgeCta}
-      </div>
-      <div class="lock-message">${escapeHtml(lockText)}</div>
-      <div id="paymentResult" class="payment-result muted"></div>
-      <div class="${paywallShellClass}" style="display:none" data-unlocked="${signed ? "1" : "0"}" data-slug="vault" data-unlocked-address="${escapeHtml(unlockedAddress || "")}"></div>
-    </section>
+    ${commandCenter}
     ${renderPaymentModal("Sovereign Gateway Invoice")}
   </main>`;
 
@@ -2614,21 +2686,20 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
     "@graph": [
       {
         "@type": "WebPage",
-        name: "[ORACLE FORGE: BTC CORE]",
+        name: "[FORGE MIRROR: BTC COMMAND CENTER]",
         url: `${ROOT_CANONICAL_URL}forge`,
-        description: lockText,
+        description: isZh
+          ? "首頁統一監控儀表板的鏡像入口。"
+          : "Mirror endpoint for the unified root command center dashboard.",
         isPartOf: { "@type": "WebSite", name: "LeiMai Oracle", url: ROOT_CANONICAL_URL },
-        isAccessibleForFree: false,
-        hasPart: paywallHasPart(),
+        mainEntityOfPage: ROOT_CANONICAL_URL,
       },
       {
         "@type": "Dataset",
-        name: "BTC Core Model Forge Stream",
-        description: "Live model-convergence telemetry for sovereign BTC model training.",
+        name: "BTC Command Center Telemetry Mirror",
+        description: "Mirror view for command-center live telemetry and model progress.",
         creator: { "@type": "Organization", name: "LeiMai Oracle" },
-        url: `${ROOT_CANONICAL_URL}forge`,
-        isAccessibleForFree: false,
-        hasPart: paywallHasPart(),
+        url: ROOT_CANONICAL_URL,
       },
       {
         "@type": "Service",
@@ -2640,11 +2711,14 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
   };
 
   return renderOuroborosDocument({
-    title: "LeiMai Oracle | ORACLE FORGE BTC CORE",
-    description: lockText,
+    title: "LeiMai Oracle | Forge Mirror",
+    description: isZh
+      ? "首頁統一監控儀表板鏡像。"
+      : "Mirror endpoint for the unified root command center.",
     bodyHtml,
     jsonLd,
-    canonicalUrl: `${ROOT_CANONICAL_URL}forge`,
+    canonicalUrl: ROOT_CANONICAL_URL,
+    robotsContent: "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
     locale,
     keywords: copy.keywords,
     pageType: "forge",
@@ -3121,7 +3195,19 @@ async function handleOuroborosRoutes({ method, pathname, req, res }) {
   }
   if (routePath === "/") {
     const reports = await fetchLatestReports(5, locale);
-    textResponse(res, 200, renderRootLandingPage(locale, reports, copyOverrides), "text/html; charset=utf-8");
+    const unlockSession = getUnlockSessionFromReq(req);
+    if (!unlockSession && req?.headers?.cookie && CONFIG.sessionSecret) {
+      res.setHeader("Set-Cookie", clearUnlockCookie());
+    }
+    textResponse(
+      res,
+      200,
+      renderRootLandingPage(locale, reports, {
+        signed: Boolean(unlockSession),
+        unlockedAddress: unlockSession?.addr || null,
+      }, copyOverrides),
+      "text/html; charset=utf-8",
+    );
     return true;
   }
   if (routePath === "/vault") {

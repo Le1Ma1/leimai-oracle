@@ -362,6 +362,76 @@ body.low-gpu #matrix-bg {
   gap: 9px;
 }
 
+.forge-kpi-grid {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.forge-kpi-item {
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  background: rgba(6, 9, 12, 0.78);
+  padding: 10px 12px;
+  box-shadow: 0 0 30px var(--gold-glow);
+}
+
+.forge-kpi-item span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.forge-kpi-item strong {
+  color: #f4f7fa;
+  font-size: 13px;
+}
+
+.forge-compare-grid {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.forge-compare-card {
+  border: 1px solid rgba(var(--accent-rgb), 0.32);
+  background: rgba(6, 9, 12, 0.82);
+  padding: 10px 12px;
+  box-shadow: 0 0 30px var(--gold-glow);
+}
+
+.forge-compare-card span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.forge-compare-card strong {
+  color: #f4f7fa;
+  font-size: 13px;
+}
+
+.delta-pos {
+  color: #58d68d !important;
+  text-shadow: 0 0 14px rgba(88, 214, 141, 0.2);
+}
+
+.delta-neg {
+  color: #ff7b72 !important;
+  text-shadow: 0 0 14px rgba(255, 123, 114, 0.18);
+}
+
+.delta-flat {
+  color: #c9d3dd !important;
+}
+
 .forge-metric {
   border: 1px solid rgba(var(--accent-rgb), 0.34);
   background: rgba(6, 9, 12, 0.8);
@@ -463,6 +533,29 @@ body.low-gpu #matrix-bg {
 
 .forge-ops-grid-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.forge-secondary-links {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.forge-route-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #dbe5eb;
+}
+
+.forge-route-list li + li {
+  margin-top: 6px;
+}
+
+.forge-route-list a {
+  color: var(--accent);
+  border-bottom: 1px dashed rgba(var(--accent-rgb), 0.45);
 }
 
 .sovereign-gate-btn {
@@ -1180,6 +1273,14 @@ body.low-gpu #matrix-bg {
   }
 
   .forge-ops-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .forge-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .forge-compare-grid {
     grid-template-columns: 1fr;
   }
 

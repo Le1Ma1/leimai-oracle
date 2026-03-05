@@ -848,6 +848,13 @@
     const historyMetaNode = document.getElementById("forgeHistoryMeta");
     const expectationNode = document.getElementById("forgeExpectation");
     const rlShadowNode = document.getElementById("forgeRlShadow");
+    const comparePassNode = document.getElementById("forgeComparePass");
+    const compareAlphaNode = document.getElementById("forgeCompareAlpha");
+    const compareDeployNode = document.getElementById("forgeCompareDeploy");
+    const compareLeaderNode = document.getElementById("forgeCompareLeader");
+    const reachProbNode = document.getElementById("forgeReachProb");
+    const etaNode = document.getElementById("forgeEta");
+    const deployModeNode = document.getElementById("forgeDeployMode");
 
     const points = Array.from({ length: 96 }, (_, i) => {
       const t = i / 95;
@@ -899,6 +906,24 @@
         .slice(0, 8)
         .map((row) => `<li>${String(row).replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</li>`)
         .join("");
+    }
+
+    function signed(value, digits = 4) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "0";
+      const fixed = n.toFixed(digits);
+      return n > 0 ? `+${fixed}` : fixed;
+    }
+
+    function applyDeltaTone(node, value) {
+      if (!node) return;
+      node.classList.remove("delta-pos", "delta-neg", "delta-flat");
+      const n = Number(value);
+      if (!Number.isFinite(n) || Math.abs(n) < 1e-9) {
+        node.classList.add("delta-flat");
+        return;
+      }
+      node.classList.add(n > 0 ? "delta-pos" : "delta-neg");
     }
 
     function drawHistoryChart() {
@@ -1003,6 +1028,8 @@
       const historyRows = Array.isArray(payload.history) ? payload.history : [];
       const expectation = payload.expectation && typeof payload.expectation === "object" ? payload.expectation : {};
       const rlShadow = payload.rl_shadow_status && typeof payload.rl_shadow_status === "object" ? payload.rl_shadow_status : {};
+      const compare = payload.compare && typeof payload.compare === "object" ? payload.compare : {};
+      const progress = payload.progress && typeof payload.progress === "object" ? payload.progress : {};
       const targets = payload.targets && typeof payload.targets === "object" ? payload.targets : {};
       const historyContract = payload.history_contract && typeof payload.history_contract === "object" ? payload.history_contract : {};
       historyRowsState = historyRows;
@@ -1030,6 +1057,41 @@
       if (legacyNode) legacyNode.textContent = forgeState.legacy;
       if (newNode) newNode.textContent = forgeState.next;
       if (updatedNode) updatedNode.textContent = forgeState.updated;
+      const reachProb = Number.isFinite(Number(progress.reach_target_probability))
+        ? Number(progress.reach_target_probability)
+        : Number(expectation.reach_target_probability || 0);
+      if (reachProbNode) {
+        reachProbNode.textContent = `${(Math.max(0, Math.min(1, reachProb)) * 100).toFixed(1)}%`;
+      }
+      if (etaNode) {
+        etaNode.textContent = String(progress.eta_utc || expectation.eta_utc || "unknown");
+      }
+      if (deployModeNode) {
+        const legacyOnly = Boolean(progress.legacy_only_deploy ?? payload.legacy_only_deploy);
+        deployModeNode.textContent = legacyOnly ? "LEGACY-ONLY DEPLOY" : "DUAL TRACK";
+      }
+      const passGap = Number(compare.pass_gap_to_target ?? 0);
+      const alphaGap = Number(compare.alpha_gap_to_target ?? 0);
+      const deploySymbolsGap = Number(compare.deploy_symbols_gap_to_target ?? 0);
+      const deployRulesGap = Number(compare.deploy_rules_gap_to_target ?? 0);
+      const rewardGap = Number(compare.shadow_reward_gap ?? 0);
+      if (comparePassNode) {
+        comparePassNode.textContent = signed(passGap, 4);
+        applyDeltaTone(comparePassNode, passGap);
+      }
+      if (compareAlphaNode) {
+        compareAlphaNode.textContent = signed(alphaGap, 4);
+        applyDeltaTone(compareAlphaNode, alphaGap);
+      }
+      if (compareDeployNode) {
+        compareDeployNode.textContent = `${signed(deploySymbolsGap, 0)} / ${signed(deployRulesGap, 0)}`;
+        applyDeltaTone(compareDeployNode, deploySymbolsGap + deployRulesGap);
+      }
+      if (compareLeaderNode) {
+        const leader = String(compare.leader || "parity").toUpperCase();
+        compareLeaderNode.textContent = `${leader} (${signed(rewardGap, 4)})`;
+        applyDeltaTone(compareLeaderNode, rewardGap);
+      }
 
       const roleRows = Object.values(roles).map((value) => String(value || "").trim()).filter(Boolean);
       setList(rolesNode, roleRows);
@@ -1213,7 +1275,7 @@
     void refreshLiveState();
     liveTimer = window.setInterval(() => {
       void refreshLiveState();
-    }, 4000);
+    }, 5000);
     frame(0);
     window.addEventListener("resize", resize, { passive: true });
     window.addEventListener("beforeunload", () => {
