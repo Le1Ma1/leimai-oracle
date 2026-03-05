@@ -29,6 +29,10 @@
     canonCheck: document.getElementById("canonCheck"),
     orbitBanner: document.getElementById("orbitBanner"),
     orbitText: document.getElementById("orbitText"),
+    mapFallback: document.getElementById("mapFallback"),
+    fallbackLat: document.getElementById("fallbackLat"),
+    fallbackLng: document.getElementById("fallbackLng"),
+    fallbackForgeBtn: document.getElementById("fallbackForgeBtn"),
   };
 
   const world = {
@@ -114,6 +118,11 @@
   function setCanonModalVisible(show) {
     if (!refs.canonModal) return;
     refs.canonModal.classList.toggle("hidden", !show);
+  }
+
+  function setFallbackVisible(show) {
+    if (!refs.mapFallback) return;
+    refs.mapFallback.classList.toggle("hidden", !show);
   }
 
   function placeObelisk(lat, lng, show) {
@@ -313,9 +322,11 @@
   async function initMap() {
     const token = String(config.mapboxToken || "");
     if (!token || !window.mapboxgl) {
-      setStatus(t("status_missing_mapbox", "Mapbox token is missing. Set MAPBOX_PUBLIC_TOKEN."), "err");
+      setFallbackVisible(true);
+      setStatus(t("status_fallback_active", t("status_missing_mapbox", "Mapbox token is missing. Set MAPBOX_PUBLIC_TOKEN.")), "warn");
       return;
     }
+    setFallbackVisible(false);
     mapboxgl.accessToken = token;
     world.map = new mapboxgl.Map({
       container: "worldMap",
@@ -367,11 +378,24 @@
 
   refs.canonClose?.addEventListener("click", () => setCanonModalVisible(false));
 
+  refs.fallbackForgeBtn?.addEventListener("click", () => {
+    const lat = Number(refs.fallbackLat?.value ?? "0");
+    const lng = Number(refs.fallbackLng?.value ?? "0");
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      setStatus(t("status_check_failed", "Status check failed") + ": invalid coordinates", "err");
+      return;
+    }
+    void loadGenesis(lat, lng).catch((error) => {
+      setStatus(`${t("status_genesis_failed", "Genesis failed")}: ${String(error?.message || error)}`, "err");
+    });
+  });
+
   window.addEventListener("beforeunload", () => {
     stopCanonPolling();
   });
 
   void initMap().catch((error) => {
+    setFallbackVisible(true);
     setStatus(`${t("status_map_init_failed", "Map init failed")}: ${String(error?.message || error)}`, "err");
   });
 })();

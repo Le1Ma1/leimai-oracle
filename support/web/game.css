@@ -101,3 +101,8 @@ body {
   border: 1px solid rgba(130, 190, 255, 0.35);
 }
 
+#mapFallback input:focus,
+#mapFallback button:focus {
+  outline: 1px solid rgba(184, 125, 255, 0.8);
+  outline-offset: 1px;
+}

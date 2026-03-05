@@ -3094,6 +3094,11 @@ function renderWorldGamePage(locale = "en") {
         canon_desc: "請依指示轉帳 USDT，完成後將鎖定此區域 24 小時。",
         no_invoice: "尚未建立帳單。",
         check_canon: "檢查鎮定狀態",
+        fallback_title: "3D 地圖不可用",
+        fallback_desc: "目前缺少地圖金鑰，已切換為座標模式。輸入座標後仍可生成規則與進行區域鎮定。",
+        fallback_lat: "緯度",
+        fallback_lng: "經度",
+        fallback_btn: "以座標進入創世",
       }
     : {
         hud_kicker: "WORLDFORGE / LIVE CELL",
@@ -3118,6 +3123,11 @@ function renderWorldGamePage(locale = "en") {
         canon_desc: "Transfer the requested USDT amount to lock this zone for 24h.",
         no_invoice: "No invoice created.",
         check_canon: "Check Canonization Status",
+        fallback_title: "3D Map Unavailable",
+        fallback_desc: "Map token is missing. Fallback coordinate mode is active for gameplay.",
+        fallback_lat: "Latitude",
+        fallback_lng: "Longitude",
+        fallback_btn: "Forge by Coordinates",
       };
 
   const runtimeI18n = isZhTw
@@ -3145,6 +3155,7 @@ function renderWorldGamePage(locale = "en") {
         status_canon_invoice_failed: "定海神針帳單建立失敗",
         status_check_failed: "狀態檢查失敗",
         status_map_init_failed: "地圖初始化失敗",
+        status_fallback_active: "地圖備援模式啟用，可用座標繼續遊玩。",
       }
     : {};
 
@@ -3182,6 +3193,21 @@ function renderWorldGamePage(locale = "en") {
 <body>
   <div id="worldRoot">
     <div id="worldMap" aria-label="Worldforge Map"></div>
+    <div id="mapFallback" class="hud-panel absolute bottom-6 left-1/2 z-30 hidden w-[min(680px,95vw)] -translate-x-1/2 rounded-xl p-4">
+      <div class="text-sm font-semibold text-amber-200">${escapeHtml(copy.fallback_title)}</div>
+      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(copy.fallback_desc)}</p>
+      <div class="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
+        <label class="md:col-span-2 text-xs text-zinc-200">${escapeHtml(copy.fallback_lat)}
+          <input id="fallbackLat" class="mt-1 w-full rounded border border-zinc-600 bg-zinc-900/70 px-2 py-2 text-sm text-zinc-100" value="25.033" />
+        </label>
+        <label class="md:col-span-2 text-xs text-zinc-200">${escapeHtml(copy.fallback_lng)}
+          <input id="fallbackLng" class="mt-1 w-full rounded border border-zinc-600 bg-zinc-900/70 px-2 py-2 text-sm text-zinc-100" value="121.5654" />
+        </label>
+        <button id="fallbackForgeBtn" class="md:col-span-1 rounded border border-violet-500/50 bg-violet-900/35 px-3 py-2 text-sm text-violet-100 hover:bg-violet-800/45">
+          ${escapeHtml(copy.fallback_btn)}
+        </button>
+      </div>
+    </div>
 
     <aside class="hud-panel absolute left-4 top-4 z-20 w-[320px] rounded-xl p-4">
       <div class="text-xs tracking-[0.25em] text-zinc-400">${escapeHtml(copy.hud_kicker)}</div>
