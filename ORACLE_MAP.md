@@ -2,11 +2,17 @@
 
 Source of Truth for LeiMai Oracle architecture and execution status.
 
-- Last Updated (UTC): `2026-03-04T19:55:11Z`
+- Last Updated (UTC): `2026-03-06T02:34:54Z`
 - Operating Protocol: read this file before coding; sync this file after execution.
 - Governance Principles: MECE modules, Read/Write Isolation, Bai Ben (Minimalism).
 
 ## [LOGIC_CORE]
+
+### [x] B31_DUAL_TRACK_LEGACY_PRIORITY_AND_FORGE_LIVE_TELEMETRY
+- [LOGIC_CORE] Technical Dependency: `scripts/btc_phase_runner.py`, `scripts/ml_progress_report.py`, `engine/src/feature_cores.py`, `support/server.mjs`, `support/web/ouroboros.js`, `support/web/ouroboros.css`, `.cursorrules`.
+- [LOGIC_CORE] Business Value: dual-track contract is now explicit with legacy-first guard; when stalled/slow/target-miss, new-model expansion is deferred automatically. Forge page consumes local telemetry endpoints (`/api/v1/ml/live`, `/api/v1/ml/history`) and renders real-time priority mode, legacy/new status, role decisions, feature actions, and iteration history.
+- [BUSINESS_STATUS] 商業進度: 已完成「舊模型優先」自治守門與前端即時進度可視化，舊模型可先穩定拉回門檻，再逐步開放新模型並行；特徵核心中文標籤與進度報告亂碼一併修復。
+- [BUSINESS_STATUS] 原則檢查: 讀寫分離通過（訓練調度、報告輸出、support 展示分層）；白賁通過（沿用現有腳本與頁面，僅補必要契約）。
 
 ### [x] B30_PHASE45_HYBRID_METRICS_SNAPSHOT_AND_GATED_VERDICT
 - [LOGIC_CORE] Technical Dependency: `engine/src/features.py`, `engine/src/generate_reports.py`, `supabase/schema_reports.sql`, `support/server.mjs`, `support/web/ouroboros.css`.

@@ -397,6 +397,39 @@ body.low-gpu #matrix-bg {
   gap: 8px;
 }
 
+.forge-ops-grid {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.forge-op-card {
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(6, 9, 12, 0.72);
+  padding: 10px 12px;
+  box-shadow: 0 0 30px var(--gold-glow);
+}
+
+.forge-op-card h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+.forge-list {
+  margin: 0;
+  padding-left: 16px;
+  color: #dbe5eb;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.forge-list li + li {
+  margin-top: 4px;
+}
+
 .sovereign-gate-btn {
   border: 1px solid rgba(var(--accent-rgb), 0.62);
   background: rgba(5, 8, 12, 0.85);
@@ -1108,6 +1141,10 @@ body.low-gpu #matrix-bg {
   }
 
   .forge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .forge-ops-grid {
     grid-template-columns: 1fr;
   }
 

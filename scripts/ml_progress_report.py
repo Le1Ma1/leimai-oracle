@@ -173,12 +173,147 @@ def collect_iterations(iteration_root: Path, limit: int, targets: Targets) -> li
     return rows
 
 
-def build_recommendations(live_status: dict[str, Any], latest: dict[str, Any], targets: Targets) -> list[str]:
+def _failed_target_checks(live_status: dict[str, Any]) -> list[str]:
+    checks = live_status.get("targets", {}).get("checks", []) if isinstance(live_status, dict) else []
+    out: list[str] = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        if bool(item.get("passed")):
+            continue
+        key = str(item.get("key") or "").strip()
+        if key:
+            out.append(key)
+    return out
+
+
+def derive_priority_mode(live_status: dict[str, Any], latest: dict[str, Any], targets: Targets) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    pipeline_state = str(live_status.get("pipeline_state") or "").strip().lower()
+    stall_reason = str(live_status.get("stall_reason") or "").strip()
+    promotion_block_reason = str(live_status.get("promotion_block_reason") or "").strip()
+
+    pass_rate = _to_float(latest.get("validation_pass_rate"), 0.0)
+    all_alpha = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0)
+    deploy_symbols = _to_int(latest.get("deploy_symbols"), 0)
+    deploy_rules = _to_int(latest.get("deploy_rules"), 0)
+
+    if pipeline_state == "stalled":
+        reasons.append(f"pipeline_stalled:{stall_reason or 'unknown'}")
+    if promotion_block_reason:
+        reasons.append(f"promotion_block:{promotion_block_reason}")
+
+    if pass_rate < targets.pass_rate:
+        reasons.append("validation_pass_rate_below_target")
+    if all_alpha < targets.all_alpha:
+        reasons.append("all_window_alpha_below_target")
+    if deploy_symbols < targets.deploy_symbols:
+        reasons.append("deploy_symbols_below_target")
+    if deploy_rules < targets.deploy_rules:
+        reasons.append("deploy_rules_below_target")
+
+    for key in _failed_target_checks(live_status):
+        reasons.append(f"target_check_failed:{key}")
+
+    if reasons:
+        return "legacy_recovery", list(dict.fromkeys(reasons))
+    if pipeline_state in {"running", "validation", "finalizing"}:
+        return "dual_train", []
+    return "idle", []
+
+
+def build_feature_actions(latest: dict[str, Any]) -> dict[str, list[str]]:
+    delta = latest.get("delta", {}) if isinstance(latest.get("delta"), dict) else {}
+    alpha_delta = _to_float(delta.get("all_window_alpha_vs_spot"), 0.0)
+    pass_delta = _to_float(delta.get("validation_pass_rate"), 0.0)
+
+    boost: list[str] = []
+    prune: list[str] = []
+    watch: list[str] = []
+
+    if alpha_delta <= 0.0:
+        boost.extend(
+            [
+                "flow_liquidity__shock_density__1m",
+                "risk_volatility__realized_vol_60__1m",
+                "timing_execution__jump_density__1m",
+            ]
+        )
+    else:
+        watch.append("alpha improving; keep current feature family mix")
+
+    if pass_delta < 0.0:
+        prune.extend(
+            [
+                "high-collinearity weak utility factors (from feature_weight_profile.prune_candidates)",
+                "overfit rule variants with low trade count",
+            ]
+        )
+    else:
+        watch.append("validation pass rate is stable or improving")
+
+    return {
+        "boost": boost[:5],
+        "prune": prune[:5],
+        "watch": watch[:5],
+    }
+
+
+def build_role_decisions(
+    live_status: dict[str, Any],
+    latest: dict[str, Any],
+    targets: Targets,
+    priority_mode: str,
+    reasons: list[str],
+) -> dict[str, str]:
+    pass_rate = _to_float(latest.get("validation_pass_rate"), 0.0)
+    all_alpha = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0)
+    deploy_rules = _to_int(latest.get("deploy_rules"), 0)
+
+    macro = (
+        "all-window alpha remains below target; keep macro direction but tighten entry quality."
+        if all_alpha < targets.all_alpha
+        else "macro direction is acceptable; preserve regime sensitivity and avoid over-tightening."
+    )
+    feature = (
+        "boost flow/risk/timing families and prune high-collinearity low-utility features."
+        if pass_rate < targets.pass_rate
+        else "feature stack is stable; only incremental pruning is needed."
+    )
+    risk = (
+        "legacy-first risk mode is active until pass-rate and alpha both recover."
+        if priority_mode == "legacy_recovery"
+        else "dual-track mode is allowed; keep drawdown controls strict."
+    )
+    execution = (
+        "new model stays in shadow run while legacy gates are below target."
+        if priority_mode == "legacy_recovery"
+        else "run legacy and nonlinear tracks in parallel, promote only after stability."
+    )
+    if deploy_rules < targets.deploy_rules:
+        execution = f"{execution} deploy rule coverage is below target."
+    if reasons:
+        risk = f"{risk} reasons={','.join(reasons[:3])}"
+
+    return {
+        "macro_strategist": macro,
+        "feature_auditor": feature,
+        "risk_controller": risk,
+        "execution_operator": execution,
+    }
+
+
+def build_recommendations(
+    live_status: dict[str, Any],
+    latest: dict[str, Any],
+    targets: Targets,
+    priority_mode: str,
+) -> list[str]:
     items: list[str] = []
     pipeline_state = str(live_status.get("pipeline_state") or "")
     stall_reason = str(live_status.get("stall_reason") or "")
     if pipeline_state == "stalled":
-        items.append(f"先處理卡住狀態：{stall_reason or 'unknown'}，避免在壞狀態下繼續調參。")
+        items.append(f"Pipeline is stalled ({stall_reason or 'unknown'}); restart monitor/supervisor and continue legacy recovery.")
 
     pass_rate = _to_float(latest.get("validation_pass_rate"), 0.0)
     all_alpha = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0)
@@ -186,18 +321,17 @@ def build_recommendations(live_status: dict[str, Any], latest: dict[str, Any], t
     deploy_rules = _to_int(latest.get("deploy_rules"), 0)
 
     if pass_rate < targets.pass_rate:
-        items.append("validation pass rate 未達標，建議先降低策略自由度並增加 trade_floor。")
+        items.append("Validation pass rate is below target; keep trade-floor adaptation and legacy rounds active.")
     if all_alpha < targets.all_alpha:
-        items.append("all-window alpha 仍偏弱，建議提高波動濾網門檻，降低垂直行情過度入場。")
+        items.append("All-window alpha is below target; tighten gate thresholds and prioritize causal feature quality.")
     if deploy_symbols < targets.deploy_symbols or deploy_rules < targets.deploy_rules:
-        items.append("deploy 覆蓋不足，建議先保底輸出 1 symbol / 2 rules 再追求高分。")
+        items.append("Deploy coverage is below target; enforce at least 1 symbol / 2 rules before promotion.")
 
-    items.extend(
-        [
-            "執行舊 BTC 模型續跑：python scripts/btc_phase_runner.py --profile institutional_ramp --wait-existing",
-            "執行新概念回測：python scripts/btc_phase_runner.py --profile nonlinear_grid_v1",
-        ]
-    )
+    items.append("Continue legacy BTC training: python scripts/btc_phase_runner.py --profile institutional_ramp --wait-existing")
+    if priority_mode == "legacy_recovery":
+        items.append("Defer new model expansion until legacy gates recover above target.")
+    else:
+        items.append("Run nonlinear backtest branch: python scripts/btc_phase_runner.py --profile nonlinear_grid_v1 --wait-existing")
     return items
 
 
@@ -209,6 +343,8 @@ def write_report_md(
     targets: Targets,
     rows: list[dict[str, Any]],
     recommendations: list[str],
+    priority_mode: str,
+    role_decisions: dict[str, str],
 ) -> None:
     latest = rows[-1] if rows else {}
     lines: list[str] = []
@@ -218,6 +354,7 @@ def write_report_md(
     lines.append(f"- pipeline_state: `{live_status.get('pipeline_state', 'unknown')}`")
     lines.append(f"- stall_reason: `{live_status.get('stall_reason', 'none')}`")
     lines.append(f"- promotion_block_reason: `{live_status.get('promotion_block_reason', 'none')}`")
+    lines.append(f"- priority_mode: `{priority_mode}`")
     lines.append("")
     lines.append("## Latest Snapshot")
     lines.append("")
@@ -226,6 +363,11 @@ def write_report_md(
     lines.append(f"- all_window_alpha_vs_spot: `{_to_float(latest.get('all_window_alpha_vs_spot'), 0.0):+.4f}` (target `{targets.all_alpha:+.2f}`)")
     lines.append(f"- deploy: `{_to_int(latest.get('deploy_symbols'), 0)} symbols / {_to_int(latest.get('deploy_rules'), 0)} rules`")
     lines.append(f"- quality_score: `{_to_float(latest.get('quality_score'), 0.0):.4f}`")
+    lines.append("")
+    lines.append("## Role Decisions")
+    lines.append("")
+    for key, value in role_decisions.items():
+        lines.append(f"- {key}: {value}")
     lines.append("")
     lines.append("## Iteration Trend")
     lines.append("")
@@ -238,13 +380,13 @@ def write_report_md(
                 "- "
                 f"`{row.get('ts_utc', '-')}` | `{row.get('run_id', '-')}` | "
                 f"pass `{_to_float(row.get('validation_pass_rate'), 0.0):.4f}` "
-                f"(Δ `{_to_float(delta.get('validation_pass_rate'), 0.0):+.4f}`), "
+                f"(d `{_to_float(delta.get('validation_pass_rate'), 0.0):+.4f}`), "
                 f"alpha `{_to_float(row.get('all_window_alpha_vs_spot'), 0.0):+.4f}` "
-                f"(Δ `{_to_float(delta.get('all_window_alpha_vs_spot'), 0.0):+.4f}`), "
+                f"(d `{_to_float(delta.get('all_window_alpha_vs_spot'), 0.0):+.4f}`), "
                 f"deploy `{_to_int(row.get('deploy_symbols'), 0)}/{_to_int(row.get('deploy_rules'), 0)}` "
-                f"(Δ `{_to_int(delta.get('deploy_symbols'), 0)}/{_to_int(delta.get('deploy_rules'), 0)}`), "
+                f"(d `{_to_int(delta.get('deploy_symbols'), 0)}/{_to_int(delta.get('deploy_rules'), 0)}`), "
                 f"score `{_to_float(row.get('quality_score'), 0.0):.4f}` "
-                f"(Δ `{_to_float(delta.get('quality_score'), 0.0):+.4f}`)"
+                f"(d `{_to_float(delta.get('quality_score'), 0.0):+.4f}`)"
             )
     lines.append("")
     lines.append("## Optimization Continuation Plan")
@@ -272,7 +414,10 @@ def main() -> int:
     targets = parse_targets(live_status)
     rows = collect_iterations(Path(args.iteration_root), max(1, int(args.limit)), targets)
     latest = rows[-1] if rows else {}
-    recommendations = build_recommendations(live_status, latest, targets)
+    priority_mode, priority_reasons = derive_priority_mode(live_status, latest, targets)
+    role_decisions = build_role_decisions(live_status, latest, targets, priority_mode, priority_reasons)
+    feature_actions = build_feature_actions(latest)
+    recommendations = build_recommendations(live_status, latest, targets, priority_mode)
 
     payload = {
         "generated_at_utc": now_iso(),
@@ -282,12 +427,16 @@ def main() -> int:
             "deploy_rules": targets.deploy_rules,
             "all_window_alpha_vs_spot": targets.all_alpha,
         },
+        "priority_mode": priority_mode,
+        "priority_reasons": priority_reasons,
         "live_status": {
             "pipeline_state": live_status.get("pipeline_state"),
             "stall_reason": live_status.get("stall_reason"),
             "promotion_block_reason": live_status.get("promotion_block_reason"),
             "active_run_id": live_status.get("active_run_id"),
         },
+        "role_decisions": role_decisions,
+        "feature_actions": feature_actions,
         "iterations": rows,
         "latest": latest,
         "recommendations": recommendations,
@@ -303,6 +452,8 @@ def main() -> int:
         targets=targets,
         rows=rows,
         recommendations=recommendations,
+        priority_mode=priority_mode,
+        role_decisions=role_decisions,
     )
 
     print(
@@ -313,6 +464,7 @@ def main() -> int:
                 "out_md": str(args.out_md),
                 "iterations": len(rows),
                 "latest_run_id": latest.get("run_id"),
+                "priority_mode": priority_mode,
             },
             ensure_ascii=False,
         )

@@ -8,6 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 READ_RETRY_ATTEMPTS = 6
 READ_RETRY_SLEEP_SECONDS = 0.05
@@ -44,7 +45,7 @@ def _latest_summary_path(artifact_root: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _load_json(path: Path) -> dict:
+def _load_json(path: Path) -> dict[str, Any]:
     delay = READ_RETRY_SLEEP_SECONDS
     for attempt in range(1, READ_RETRY_ATTEMPTS + 1):
         try:
@@ -56,6 +57,23 @@ def _load_json(path: Path) -> dict:
             time.sleep(delay)
             delay *= READ_RETRY_BACKOFF
     return {}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+        if out != out:
+            return default
+        return out
+    except Exception:
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
 
 
 def _ensure_validate_sync(repo_root: Path, summary_path: Path, strictness: str) -> None:
@@ -76,7 +94,7 @@ def _ensure_validate_sync(repo_root: Path, summary_path: Path, strictness: str) 
     )
 
 
-def _extract_all_window_alpha(summary: dict) -> float:
+def _extract_all_window_alpha(summary: dict[str, Any]) -> float:
     report = summary.get("executive_report", {})
     rows = report.get("headline_by_window", []) if isinstance(report, dict) else []
     for row in rows:
@@ -91,7 +109,7 @@ def _extract_all_window_alpha(summary: dict) -> float:
     return -999.0
 
 
-def _extract_deploy_avg_alpha(deploy: dict) -> float:
+def _extract_deploy_avg_alpha(deploy: dict[str, Any]) -> float:
     values: list[float] = []
     for sym in deploy.get("symbols", []) if isinstance(deploy, dict) else []:
         if not isinstance(sym, dict):
@@ -107,7 +125,7 @@ def _extract_deploy_avg_alpha(deploy: dict) -> float:
     return sum(values) / float(len(values))
 
 
-def _collect_metrics(summary: dict, validation: dict, deploy: dict) -> dict[str, float | int | str]:
+def _collect_metrics(summary: dict[str, Any], validation: dict[str, Any], deploy: dict[str, Any]) -> dict[str, float | int | str]:
     return {
         "run_id": str(summary.get("run_id", "-")),
         "pass_rate": float(validation.get("pass_rate", 0.0) or 0.0),
@@ -209,6 +227,71 @@ def _run_nonlinear_grid_backtest(repo_root: Path) -> None:
     )
 
 
+def _read_progress_report(repo_root: Path) -> dict[str, Any]:
+    return _load_json(repo_root / "logs" / "ml_progress_report.json")
+
+
+def _derive_priority_from_report(progress_report: dict[str, Any]) -> tuple[str, list[str]]:
+    mode = str(progress_report.get("priority_mode") or "").strip().lower()
+    reasons = progress_report.get("priority_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    clean_reasons = [str(item).strip() for item in reasons if str(item).strip()]
+    if mode in {"legacy_recovery", "dual_train", "idle"}:
+        return mode, clean_reasons
+
+    latest = progress_report.get("latest", {}) if isinstance(progress_report.get("latest"), dict) else {}
+    targets = progress_report.get("targets", {}) if isinstance(progress_report.get("targets"), dict) else {}
+    pass_rate = _safe_float(latest.get("validation_pass_rate"), 0.0)
+    all_alpha = _safe_float(latest.get("all_window_alpha_vs_spot"), -10.0)
+    deploy_symbols = _safe_int(latest.get("deploy_symbols"), 0)
+    deploy_rules = _safe_int(latest.get("deploy_rules"), 0)
+    target_pass = _safe_float(targets.get("validation_pass_rate"), 0.4)
+    target_alpha = _safe_float(targets.get("all_window_alpha_vs_spot"), -3.0)
+    target_symbols = _safe_int(targets.get("deploy_symbols"), 1)
+    target_rules = _safe_int(targets.get("deploy_rules"), 2)
+    if (
+        pass_rate < target_pass
+        or all_alpha < target_alpha
+        or deploy_symbols < target_symbols
+        or deploy_rules < target_rules
+    ):
+        return "legacy_recovery", ["derived_from_metrics"]
+    return "dual_train", []
+
+
+def _persist_priority_state(
+    repo_root: Path,
+    *,
+    profile: str,
+    priority_mode: str,
+    reasons: list[str],
+    progress_report: dict[str, Any],
+) -> None:
+    payload = {
+        "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "profile": profile,
+        "priority_mode": priority_mode,
+        "priority_reasons": reasons,
+        "latest": progress_report.get("latest", {}),
+        "targets": progress_report.get("targets", {}),
+        "role_decisions": progress_report.get("role_decisions", {}),
+    }
+    out_path = repo_root / "logs" / "ml_priority_state.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _should_allow_new_model(run_new_model: bool, priority_mode: str, reasons: list[str]) -> bool:
+    if not run_new_model:
+        return False
+    if priority_mode == "legacy_recovery":
+        reason_str = ", ".join(reasons[:4]) if reasons else "legacy_priority_guard"
+        print(f"[guard] new model deferred; legacy recovery required ({reason_str})")
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BTC first-principles phase runner (bootstrap -> institutional ramp).")
     parser.add_argument(
@@ -230,6 +313,15 @@ def main() -> int:
         _wait_for_no_supervisor(repo_root=repo_root, poll_sec=max(5, int(args.poll_sec)))
 
     _run_ml_progress_report(repo_root=repo_root)
+    progress_report = _read_progress_report(repo_root=repo_root)
+    priority_mode, priority_reasons = _derive_priority_from_report(progress_report)
+    _persist_priority_state(
+        repo_root=repo_root,
+        profile=str(args.profile),
+        priority_mode=priority_mode,
+        reasons=priority_reasons,
+        progress_report=progress_report,
+    )
 
     run_new_model = False
     if args.profile == "deploy_recovery":
@@ -338,6 +430,8 @@ def main() -> int:
             ),
         ]
 
+    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons)
+
     for phase in phases:
         summary_path = _latest_summary_path(artifact_root=artifact_root)
         if summary_path is None:
@@ -378,8 +472,22 @@ def main() -> int:
         metrics = _collect_metrics(summary=summary, validation=validation, deploy=deploy)
         _print_metrics(prefix=f"after {phase.name}", metrics=metrics)
 
+    _run_ml_progress_report(repo_root=repo_root)
+    progress_report = _read_progress_report(repo_root=repo_root)
+    priority_mode, priority_reasons = _derive_priority_from_report(progress_report)
+    _persist_priority_state(
+        repo_root=repo_root,
+        profile=str(args.profile),
+        priority_mode=priority_mode,
+        reasons=priority_reasons,
+        progress_report=progress_report,
+    )
+    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons)
+
     if run_new_model:
         _run_nonlinear_grid_backtest(repo_root=repo_root)
+    else:
+        print("[new-model] skipped by priority guard (legacy-first).")
 
     print("[done] BTC phase runner completed all stages.")
     return 0

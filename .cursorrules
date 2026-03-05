@@ -33,3 +33,9 @@ Persistent global platform governance:
 - Keep `.github/workflows/platform_governor_30m.yml` and `scripts/platform_governor.py` healthy and active.
 - Start each platform iteration from `logs/platform_governor_report.json`, prioritize highest severity first, then auto-heal.
 - If governor or scheduled workflows fail: fetch logs, patch, commit, push, and rerun verification in the same cycle.
+
+Dual-model continuity contract (do not forget):
+- Always maintain two BTC tracks: `legacy` + `new`.
+- If speed degrades, pipeline stalls, or legacy targets are unmet, force `legacy-first` and pause new-model expansion.
+- `/forge` must display real local telemetry (not static placeholders): priority mode, legacy/new status, role decisions, feature actions, and recent history.
+- Before deciding any model action, read `engine/artifacts/monitor/live_status.json` and `logs/ml_progress_report.json`.

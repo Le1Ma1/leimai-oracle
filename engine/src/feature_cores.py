@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from itertools import product
 from typing import TYPE_CHECKING
@@ -11,29 +11,28 @@ if TYPE_CHECKING:
 
 
 CORE_META: dict[str, dict[str, str]] = {
-    "lmo_core_momentum_pulse": {"name_zh": "神諭動能脈衝核", "family": "TREND_FLOW"},
-    "lmo_core_mean_reclaim": {"name_zh": "神諭均值回收核", "family": "OSC_RECLAIM"},
-    "lmo_core_breakout_regime": {"name_zh": "神諭突破政權核", "family": "BREAKOUT_REGIME"},
-    "lmo_core_flow_absorption": {"name_zh": "神諭流動吸收核", "family": "FLOW_IMPACT"},
-    "lmo_core_risk_compression": {"name_zh": "神諭風險壓縮核", "family": "RISK_COMPRESSION"},
-    "lmo_core_timing_efficiency": {"name_zh": "神諭時序效率核", "family": "TIMING_EXECUTION"},
+    "lmo_core_momentum_pulse": {"name_zh": "動量脈衝核心", "family": "TREND_FLOW"},
+    "lmo_core_mean_reclaim": {"name_zh": "均值回收核心", "family": "OSC_RECLAIM"},
+    "lmo_core_breakout_regime": {"name_zh": "突破體制核心", "family": "BREAKOUT_REGIME"},
+    "lmo_core_flow_absorption": {"name_zh": "流動吸收核心", "family": "FLOW_IMPACT"},
+    "lmo_core_risk_compression": {"name_zh": "風險壓縮核心", "family": "RISK_COMPRESSION"},
+    "lmo_core_timing_efficiency": {"name_zh": "時機效率核心", "family": "TIMING_EXECUTION"},
 }
 
 RULE_LABEL_ZH: dict[str, str] = {
-    "pulse_follow": "脈衝追蹤",
+    "pulse_follow": "脈衝跟隨",
     "drift_hold": "漂移持有",
-    "deep_reclaim": "深回收",
-    "snap_back": "回彈捕捉",
-    "regime_break": "政權突破",
+    "deep_reclaim": "深度回收",
+    "snap_back": "快速回彈",
+    "regime_break": "體制突破",
     "vol_reaccel": "波動再加速",
     "shock_absorb": "衝擊吸收",
     "flow_reprice": "流動重定價",
     "compression_release": "壓縮釋放",
-    "range_reopen": "區間再開",
-    "phase_edge": "收線相位邊際",
-    "jump_sync": "跳動同步",
+    "range_reopen": "區間重開",
+    "phase_edge": "相位邊際",
+    "jump_sync": "跳變同步",
 }
-
 
 def list_supported_cores() -> tuple[str, ...]:
     return tuple(CORE_META.keys())
@@ -513,3 +512,4 @@ def generate_feature_core_candidates(
         return candidates
 
     raise ValueError(f"Unsupported core id: {core_id}")
+

@@ -836,10 +836,14 @@
     const epochNode = document.getElementById("forgeEpoch");
     const convNode = document.getElementById("forgeConvergence");
     const statusNode = document.getElementById("forgeStatus");
+    const priorityNode = document.getElementById("forgePriorityMode");
+    const legacyNode = document.getElementById("forgeLegacyTrack");
+    const newNode = document.getElementById("forgeNewTrack");
+    const updatedNode = document.getElementById("forgeUpdated");
+    const rolesNode = document.getElementById("forgeRoleDecisions");
+    const featuresNode = document.getElementById("forgeFeatureActions");
+    const historyNode = document.getElementById("forgeHistory");
 
-    const totalEpoch = 5000;
-    const startEpoch = 4592;
-    const startConvergence = 94.2;
     const points = Array.from({ length: 96 }, (_, i) => {
       const t = i / 95;
       const baseline = 0.78 - (t * 0.56);
@@ -854,6 +858,97 @@
 
     let rafId = 0;
     let tick = 0;
+    let liveTimer = 0;
+
+    const forgeState = {
+      epochCurrent: 4592,
+      epochTotal: 5000,
+      convergence: 94.2,
+      status: "UNAUTHORIZED TO DEPLOY (TRAINING)",
+      priority: "LEGACY PRIORITY ACTIVE (RECOVERY)",
+      legacy: "pass=0.0000 | alpha=-0.0000",
+      next: "shadow warming",
+      updated: "-",
+    };
+
+    function asFixed(value, digits, fallback = 0) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toFixed(digits) : Number(fallback).toFixed(digits);
+    }
+
+    function setList(node, rows) {
+      if (!node) return;
+      const safeRows = Array.isArray(rows) ? rows.filter((v) => String(v || "").trim()) : [];
+      if (safeRows.length === 0) {
+        node.innerHTML = "<li>No live data.</li>";
+        return;
+      }
+      node.innerHTML = safeRows
+        .slice(0, 8)
+        .map((row) => `<li>${String(row).replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</li>`)
+        .join("");
+    }
+
+    function applyLivePayload(payload) {
+      if (!payload || typeof payload !== "object") return;
+      const forge = payload.forge && typeof payload.forge === "object" ? payload.forge : {};
+      const legacy = payload.legacy_status && typeof payload.legacy_status === "object" ? payload.legacy_status : {};
+      const next = payload.new_model_status && typeof payload.new_model_status === "object" ? payload.new_model_status : {};
+      const roles = payload.role_decisions && typeof payload.role_decisions === "object" ? payload.role_decisions : {};
+      const featureActions = payload.feature_actions && typeof payload.feature_actions === "object" ? payload.feature_actions : {};
+      const historyRows = Array.isArray(payload.history) ? payload.history : [];
+
+      const epochTotal = Number.parseInt(String(forge.epoch_total || forgeState.epochTotal), 10);
+      const epochCurrent = Number.parseInt(String(forge.epoch_current || forgeState.epochCurrent), 10);
+      forgeState.epochTotal = Number.isFinite(epochTotal) && epochTotal > 0 ? epochTotal : forgeState.epochTotal;
+      forgeState.epochCurrent = Number.isFinite(epochCurrent) && epochCurrent > 0 ? Math.min(epochCurrent, forgeState.epochTotal) : forgeState.epochCurrent;
+      forgeState.convergence = Number.isFinite(Number(forge.alpha_convergence_pct))
+        ? Math.max(0, Math.min(99.9, Number(forge.alpha_convergence_pct)))
+        : forgeState.convergence;
+      forgeState.status = String(forge.status_text || forgeState.status);
+      forgeState.priority = String(payload.priority_mode || forgeState.priority).toUpperCase();
+      forgeState.legacy = `pass=${asFixed(legacy.validation_pass_rate, 4)} | alpha=${asFixed(legacy.all_window_alpha_vs_spot, 4)} | deploy=${String(legacy.deploy_symbols || 0)}/${String(legacy.deploy_rules || 0)}`;
+      forgeState.next = `status=${String(next.status || "unknown")} | return=${String(next.total_return_pct || "-")} | dd=${String(next.max_drawdown_pct || "-")}`;
+      forgeState.updated = String(payload.generated_at_utc || "-");
+
+      if (priorityNode) priorityNode.textContent = forgeState.priority;
+      if (legacyNode) legacyNode.textContent = forgeState.legacy;
+      if (newNode) newNode.textContent = forgeState.next;
+      if (updatedNode) updatedNode.textContent = forgeState.updated;
+
+      const roleRows = Object.values(roles).map((value) => String(value || "").trim()).filter(Boolean);
+      setList(rolesNode, roleRows);
+
+      const featureRows = [];
+      for (const key of ["boost", "prune", "watch"]) {
+        const rows = Array.isArray(featureActions[key]) ? featureActions[key] : [];
+        for (const row of rows.slice(0, 3)) {
+          featureRows.push(`${key.toUpperCase()}: ${String(row)}`);
+        }
+      }
+      setList(featuresNode, featureRows);
+
+      const historyView = historyRows
+        .slice(-6)
+        .reverse()
+        .map((row) => {
+          const ts = String(row?.ts_utc || "-").replace("T", " ").replace("Z", " UTC");
+          const pass = asFixed(row?.validation_pass_rate, 3);
+          const alpha = asFixed(row?.all_window_alpha_vs_spot, 3);
+          const score = asFixed(row?.quality_score, 3);
+          return `${ts} | pass ${pass} | alpha ${alpha} | score ${score}`;
+        });
+      setList(historyNode, historyView);
+    }
+
+    async function refreshLiveState() {
+      try {
+        const payload = await fetchJson("/api/v1/ml/live", null, { method: "GET" });
+        applyLivePayload(payload);
+      } catch {
+        // Keep latest known local state if network fails.
+      }
+    }
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
@@ -947,24 +1042,29 @@
       drawLossCurve(t);
 
       if (epochNode) {
-        const epoch = Math.min(totalEpoch, startEpoch + Math.floor((tick % 420) / 9));
-        epochNode.textContent = `${epoch}/${totalEpoch}`;
+        epochNode.textContent = `${forgeState.epochCurrent}/${forgeState.epochTotal}`;
       }
       if (convNode) {
-        const convergence = Math.min(99.7, startConvergence + ((tick % 420) / 420) * 3.4);
+        const drift = Math.sin(tick * 0.018) * 0.08;
+        const convergence = Math.max(0, Math.min(99.9, forgeState.convergence + drift));
         convNode.textContent = `${convergence.toFixed(1)}%`;
       }
       if (statusNode) {
-        statusNode.textContent = "UNAUTHORIZED TO DEPLOY (TRAINING)";
+        statusNode.textContent = forgeState.status;
       }
       rafId = window.requestAnimationFrame(frame);
     }
 
     resize();
+    void refreshLiveState();
+    liveTimer = window.setInterval(() => {
+      void refreshLiveState();
+    }, 4000);
     frame(0);
     window.addEventListener("resize", resize, { passive: true });
     window.addEventListener("beforeunload", () => {
       window.cancelAnimationFrame(rafId);
+      window.clearInterval(liveTimer);
       window.removeEventListener("resize", resize);
     });
   }

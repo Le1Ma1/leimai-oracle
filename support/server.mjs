@@ -67,6 +67,9 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const GROWTH_SCOREBOARD_PATH = path.join(REPO_ROOT, "logs", "growth_scoreboard.json");
 const GROWTH_ACTIONS_PATH = path.join(REPO_ROOT, "logs", "agent_actions.jsonl");
 const GROWTH_OVERRIDES_PATH = path.join(__dirname, "web", "generated", "growth_overrides.json");
+const ML_LIVE_STATUS_PATH = path.join(REPO_ROOT, "engine", "artifacts", "monitor", "live_status.json");
+const ML_PROGRESS_REPORT_PATH = path.join(REPO_ROOT, "logs", "ml_progress_report.json");
+const ML_NONLINEAR_REPORT_MD_PATH = path.join(REPO_ROOT, "logs", "nonlinear_grid_latest.md");
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -412,6 +415,251 @@ async function readJsonLinesSafe(filePath, limit = 50) {
   } catch {
     return [];
   }
+}
+
+async function readTextFileSafe(filePath, fallback = "") {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch {
+    return fallback;
+  }
+}
+
+function numberOr(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function resolveRepoPath(rawPath) {
+  const cleaned = String(rawPath || "").trim();
+  if (!cleaned) return "";
+  if (path.isAbsolute(cleaned)) return cleaned;
+  return path.resolve(REPO_ROOT, cleaned);
+}
+
+function parseNonlinearBacktestMarkdown(raw) {
+  const text = String(raw || "");
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\-\s+([A-Za-z0-9_\/-]+):\s*`?([^`]+?)`?\s*$/);
+    if (!m) continue;
+    out[String(m[1]).trim().toLowerCase()] = String(m[2]).trim();
+  }
+  return out;
+}
+
+function extractFeatureProfile(summary) {
+  const rows = Array.isArray(summary?.results) ? summary.results : [];
+  for (const result of rows) {
+    const windows = Array.isArray(result?.windows) ? result.windows : [];
+    for (const windowRow of windows) {
+      const profile = windowRow?.feature_weight_profile;
+      if (profile && typeof profile === "object") {
+        return profile;
+      }
+    }
+  }
+  return {};
+}
+
+function deriveFeatureActions(progressReport, featureProfile) {
+  const fromReport = progressReport?.feature_actions && typeof progressReport.feature_actions === "object"
+    ? progressReport.feature_actions
+    : {};
+  const boost = Array.isArray(fromReport.boost) ? fromReport.boost.map((v) => String(v)) : [];
+  const prune = Array.isArray(fromReport.prune) ? fromReport.prune.map((v) => String(v)) : [];
+  const watch = Array.isArray(fromReport.watch) ? fromReport.watch.map((v) => String(v)) : [];
+  if (boost.length || prune.length || watch.length) {
+    return {
+      boost: boost.slice(0, 6),
+      prune: prune.slice(0, 6),
+      watch: watch.slice(0, 6),
+    };
+  }
+
+  const outBoost = [];
+  const outPrune = [];
+  const outWatch = [];
+  const top = Array.isArray(featureProfile?.top_features) ? featureProfile.top_features : [];
+  const pruneRows = Array.isArray(featureProfile?.prune_candidates) ? featureProfile.prune_candidates : [];
+  const family = featureProfile?.family_contribution && typeof featureProfile.family_contribution === "object"
+    ? featureProfile.family_contribution
+    : {};
+
+  for (const row of top.slice(0, 6)) {
+    if (!row || typeof row !== "object") continue;
+    const name = String(row.name || "").trim();
+    if (!name) continue;
+    outBoost.push(name);
+  }
+  for (const row of pruneRows.slice(0, 6)) {
+    if (!row || typeof row !== "object") continue;
+    const name = String(row.name || "").trim();
+    if (!name) continue;
+    const reason = String(row.reason || "prune").trim();
+    outPrune.push(`${name} (${reason})`);
+  }
+
+  const familyRows = Object.entries(family)
+    .map(([key, value]) => [String(key), numberOr(value, 0)])
+    .sort((a, b) => b[1] - a[1]);
+  for (const [name, value] of familyRows.slice(0, 4)) {
+    outWatch.push(`${name}: ${(value * 100).toFixed(1)}%`);
+  }
+
+  return {
+    boost: outBoost,
+    prune: outPrune,
+    watch: outWatch,
+  };
+}
+
+function derivePriorityMode(liveStatus, progressReport) {
+  const directMode = String(progressReport?.priority_mode || "").trim().toLowerCase();
+  const directReasons = Array.isArray(progressReport?.priority_reasons) ? progressReport.priority_reasons.map((x) => String(x)) : [];
+  if (directMode === "legacy_recovery" || directMode === "dual_train" || directMode === "idle") {
+    return { mode: directMode, reasons: directReasons.slice(0, 8) };
+  }
+
+  const latest = progressReport?.latest && typeof progressReport.latest === "object" ? progressReport.latest : {};
+  const targets = progressReport?.targets && typeof progressReport.targets === "object" ? progressReport.targets : {};
+  const checks = Array.isArray(liveStatus?.targets?.checks) ? liveStatus.targets.checks : [];
+  const reasons = [];
+  const state = String(liveStatus?.pipeline_state || "").toLowerCase();
+  const stall = String(liveStatus?.stall_reason || "");
+
+  if (state === "stalled") reasons.push(`pipeline_stalled:${stall || "unknown"}`);
+  for (const check of checks) {
+    if (!check || typeof check !== "object") continue;
+    if (Boolean(check.passed)) continue;
+    const key = String(check.key || "").trim();
+    if (key) reasons.push(`target_check_failed:${key}`);
+  }
+
+  const passRate = numberOr(latest.validation_pass_rate, 0);
+  const allAlpha = numberOr(latest.all_window_alpha_vs_spot, -10);
+  const deploySymbols = numberOr(latest.deploy_symbols, 0);
+  const deployRules = numberOr(latest.deploy_rules, 0);
+  const passTarget = numberOr(targets.validation_pass_rate, 0.4);
+  const alphaTarget = numberOr(targets.all_window_alpha_vs_spot, -3);
+  const symTarget = numberOr(targets.deploy_symbols, 1);
+  const ruleTarget = numberOr(targets.deploy_rules, 2);
+  if (passRate < passTarget) reasons.push("validation_pass_rate_below_target");
+  if (allAlpha < alphaTarget) reasons.push("all_window_alpha_below_target");
+  if (deploySymbols < symTarget) reasons.push("deploy_symbols_below_target");
+  if (deployRules < ruleTarget) reasons.push("deploy_rules_below_target");
+
+  if (reasons.length) return { mode: "legacy_recovery", reasons: Array.from(new Set(reasons)).slice(0, 8) };
+  if (state === "running" || state === "validation" || state === "finalizing") return { mode: "dual_train", reasons: [] };
+  return { mode: "idle", reasons: [] };
+}
+
+function buildRoleDecisionsLive({ priority, liveStatus, progressReport, featureActions, nonlinear }) {
+  const latest = progressReport?.latest && typeof progressReport.latest === "object" ? progressReport.latest : {};
+  const targets = progressReport?.targets && typeof progressReport.targets === "object" ? progressReport.targets : {};
+  const passRate = numberOr(latest.validation_pass_rate, 0);
+  const allAlpha = numberOr(latest.all_window_alpha_vs_spot, -10);
+  const passTarget = numberOr(targets.validation_pass_rate, 0.4);
+  const alphaTarget = numberOr(targets.all_window_alpha_vs_spot, -3);
+  const nonlinearReturnPct = numberOr(String(nonlinear.total_return_pct || "").replace("%", ""), Number.NaN);
+
+  const macro = allAlpha < alphaTarget
+    ? "Macro Strategist: keep legacy regime recovery; alpha is still below target."
+    : "Macro Strategist: macro direction is acceptable for controlled dual-track execution.";
+  const feature = featureActions.boost.length
+    ? `Feature Auditor: reinforce ${featureActions.boost.slice(0, 3).join(", ")}.`
+    : "Feature Auditor: keep current feature mix and monitor collinearity drift.";
+  const risk = passRate < passTarget || priority.mode === "legacy_recovery"
+    ? "Risk Controller: legacy-first guard enabled; block aggressive expansion."
+    : "Risk Controller: dual-track permitted with strict drawdown and gate checks.";
+  const execution = priority.mode === "legacy_recovery"
+    ? "Execution Operator: run legacy pipeline only; nonlinear model remains shadow."
+    : Number.isFinite(nonlinearReturnPct)
+      ? "Execution Operator: run legacy + nonlinear branch in parallel."
+      : "Execution Operator: run legacy track and keep nonlinear branch warm.";
+  return {
+    macro_strategist: macro,
+    feature_auditor: feature,
+    risk_controller: risk,
+    execution_operator: execution,
+    pipeline_state: String(liveStatus?.pipeline_state || "unknown"),
+  };
+}
+
+async function loadSummaryByProgressReport(progressReport) {
+  const iterationFileRaw = String(progressReport?.latest?.iteration_file || "").trim();
+  if (!iterationFileRaw) return {};
+  const iterationFilePath = resolveRepoPath(iterationFileRaw);
+  if (!iterationFilePath) return {};
+  const iterationPayload = await readJsonFileSafe(iterationFilePath, {});
+  const summaryPathRaw = iterationPayload?.final_artifacts?.summary;
+  const summaryPath = resolveRepoPath(summaryPathRaw);
+  if (!summaryPath) return {};
+  return readJsonFileSafe(summaryPath, {});
+}
+
+async function loadMlLivePayload() {
+  const [liveStatus, progressReport, nonlinearMdRaw] = await Promise.all([
+    readJsonFileSafe(ML_LIVE_STATUS_PATH, {}),
+    readJsonFileSafe(ML_PROGRESS_REPORT_PATH, {}),
+    readTextFileSafe(ML_NONLINEAR_REPORT_MD_PATH, ""),
+  ]);
+  const summary = await loadSummaryByProgressReport(progressReport);
+  const featureProfile = extractFeatureProfile(summary);
+  const featureActions = deriveFeatureActions(progressReport, featureProfile);
+  const nonlinear = parseNonlinearBacktestMarkdown(nonlinearMdRaw);
+  const priority = derivePriorityMode(liveStatus, progressReport);
+  const roleDecisions = buildRoleDecisionsLive({ priority, liveStatus, progressReport, featureActions, nonlinear });
+
+  const latest = progressReport?.latest && typeof progressReport.latest === "object" ? progressReport.latest : {};
+  const qualitySnapshot = liveStatus?.quality_snapshot && typeof liveStatus.quality_snapshot === "object"
+    ? liveStatus.quality_snapshot
+    : {};
+
+  const epochTotal = 5000;
+  const tasksPct = Math.max(0, Math.min(100, numberOr(liveStatus?.progress?.tasks_pct, 0)));
+  const epochCurrent = Math.max(1, Math.min(epochTotal, Math.round((tasksPct / 100) * epochTotal)));
+  const qualityScore = numberOr(latest.quality_score, 0);
+  const alphaConvergencePct = Math.max(0, Math.min(99.9, Number((qualityScore * 100).toFixed(1))));
+  const statusText = priority.mode === "legacy_recovery"
+    ? "LEGACY PRIORITY ACTIVE (RECOVERY)"
+    : priority.mode === "dual_train"
+      ? "DUAL TRACK ACTIVE (LEGACY + NEW)"
+      : "IDLE / WAITING NEXT CYCLE";
+
+  const historyRows = Array.isArray(progressReport?.iterations) ? progressReport.iterations : [];
+
+  return {
+    ok: true,
+    generated_at_utc: nowIso(),
+    priority_mode: priority.mode,
+    priority_reasons: priority.reasons,
+    forge: {
+      epoch_current: epochCurrent,
+      epoch_total: epochTotal,
+      alpha_convergence_pct: alphaConvergencePct,
+      status_text: statusText,
+    },
+    legacy_status: {
+      pipeline_state: String(liveStatus?.pipeline_state || "unknown"),
+      run_id: String(latest.run_id || qualitySnapshot.run_id || ""),
+      validation_pass_rate: numberOr(latest.validation_pass_rate, numberOr(qualitySnapshot.validation_pass_rate, 0)),
+      all_window_alpha_vs_spot: numberOr(latest.all_window_alpha_vs_spot, numberOr(qualitySnapshot.all_window_alpha_vs_spot, 0)),
+      deploy_symbols: numberOr(latest.deploy_symbols, numberOr(qualitySnapshot.deploy_symbols, 0)),
+      deploy_rules: numberOr(latest.deploy_rules, numberOr(qualitySnapshot.deploy_rules, 0)),
+      quality_score: numberOr(latest.quality_score, 0),
+    },
+    new_model_status: {
+      run_id: String(nonlinear.run_id || ""),
+      total_return_pct: String(nonlinear.total_return_pct || ""),
+      max_drawdown_pct: String(nonlinear.max_drawdown_pct || ""),
+      win_rate: String(nonlinear.win_rate || ""),
+      status: priority.mode === "legacy_recovery" ? "shadow_blocked_by_legacy_priority" : "shadow_running",
+    },
+    role_decisions: roleDecisions,
+    feature_actions: featureActions,
+    history: historyRows,
+  };
 }
 
 function normalizeCopyOverrides(raw) {
@@ -2194,9 +2442,33 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
           <div class="forge-metric"><span>EPOCH</span><strong id="forgeEpoch">4592/5000</strong></div>
           <div class="forge-metric"><span>ALPHA_CONVERGENCE</span><strong id="forgeConvergence">94.2%</strong></div>
           <div class="forge-metric"><span>STATUS</span><strong id="forgeStatus" class="forge-status">UNAUTHORIZED TO DEPLOY (TRAINING)</strong></div>
+          <div class="forge-metric"><span>PRIORITY_MODE</span><strong id="forgePriorityMode">LEGACY PRIORITY ACTIVE (RECOVERY)</strong></div>
+          <div class="forge-metric"><span>LEGACY_TRACK</span><strong id="forgeLegacyTrack">pass=0.0000 | alpha=-0.0000</strong></div>
+          <div class="forge-metric"><span>NEW_TRACK</span><strong id="forgeNewTrack">shadow warming</strong></div>
+          <div class="forge-metric"><span>UPDATED</span><strong id="forgeUpdated">-</strong></div>
           <div class="forge-metric"><span>ERC20 (ETHEREUM)</span><strong class="mono-value">${escapeHtml(gate.erc20Address)}</strong></div>
           <div class="forge-metric"><span>${escapeHtml(String(gate.l2Network || "arbitrum").toUpperCase())} (USDC)</span><strong class="mono-value">${escapeHtml(gate.arbitrumAddress)}</strong></div>
         </aside>
+      </div>
+      <div class="forge-ops-grid">
+        <section class="forge-op-card">
+          <h3>ROLE DECISIONS</h3>
+          <ul id="forgeRoleDecisions" class="forge-list">
+            <li>Awaiting live telemetry...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>FEATURE ACTIONS</h3>
+          <ul id="forgeFeatureActions" class="forge-list">
+            <li>Awaiting live telemetry...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>HISTORY</h3>
+          <ul id="forgeHistory" class="forge-list">
+            <li>No history loaded.</li>
+          </ul>
+        </section>
       </div>
       <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
       <div class="forge-cta-row">
@@ -3565,6 +3837,23 @@ export async function handleRequest(req, res) {
         generated_at_utc: nowIso(),
         source_status: sourceStatus,
         counts: summarizeCounts(chainState, appState, board),
+      });
+    }
+
+    if (method === "GET" && pathname === "/api/v1/ml/live") {
+      const payload = await loadMlLivePayload();
+      return jsonResponse(res, 200, payload);
+    }
+
+    if (method === "GET" && pathname === "/api/v1/ml/history") {
+      const limit = Math.min(Math.max(1, Number(searchParams.get("limit") || 30)), 240);
+      const payload = await loadMlLivePayload();
+      const rows = Array.isArray(payload.history) ? payload.history : [];
+      return jsonResponse(res, 200, {
+        ok: true,
+        generated_at_utc: nowIso(),
+        priority_mode: payload.priority_mode || "idle",
+        rows: rows.slice(-limit).reverse(),
       });
     }
 
