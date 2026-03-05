@@ -7,12 +7,14 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 READ_RETRY_ATTEMPTS = 6
 READ_RETRY_SLEEP_SECONDS = 0.05
 READ_RETRY_BACKOFF = 1.7
+FULL_HISTORY_REQUIRED_START_UTC = "2020-01-01T00:00:00Z"
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_iso_utc(raw: Any) -> datetime | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 def _ensure_validate_sync(repo_root: Path, summary_path: Path, strictness: str) -> None:
     env = dict(os.environ)
     env["ENGINE_VALIDATION_STRICTNESS"] = str(strictness).strip().lower()
@@ -107,6 +119,41 @@ def _extract_all_window_alpha(summary: dict[str, Any]) -> float:
         except Exception:
             return -999.0
     return -999.0
+
+
+def _extract_all_window_start(summary: dict[str, Any]) -> datetime | None:
+    results = summary.get("results", []) if isinstance(summary, dict) else []
+    starts: list[datetime] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        windows = result.get("windows", [])
+        if not isinstance(windows, list):
+            continue
+        for window in windows:
+            if not isinstance(window, dict):
+                continue
+            if str(window.get("window")) != "all":
+                continue
+            dt = _parse_iso_utc(window.get("start_utc"))
+            if dt is not None:
+                starts.append(dt)
+    if not starts:
+        return None
+    return min(starts)
+
+
+def _assert_full_history_contract(summary: dict[str, Any], required_start_utc: str = FULL_HISTORY_REQUIRED_START_UTC) -> None:
+    required = _parse_iso_utc(required_start_utc)
+    observed = _extract_all_window_start(summary)
+    if required is None:
+        return
+    if observed is None:
+        raise RuntimeError("Full-history contract failed: cannot resolve all-window start timestamp from summary.")
+    if observed > required:
+        raise RuntimeError(
+            f"Full-history contract failed: observed all-window start {observed.isoformat()} > required {required.isoformat()}."
+        )
 
 
 def _extract_deploy_avg_alpha(deploy: dict[str, Any]) -> float:
@@ -227,6 +274,10 @@ def _run_nonlinear_grid_backtest(repo_root: Path) -> None:
     )
 
 
+def _run_rl_shadow_report(repo_root: Path) -> None:
+    _run(["python", "scripts/rl_shadow_report.py"], cwd=repo_root)
+
+
 def _read_progress_report(repo_root: Path) -> dict[str, Any]:
     return _load_json(repo_root / "logs" / "ml_progress_report.json")
 
@@ -282,8 +333,11 @@ def _persist_priority_state(
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _should_allow_new_model(run_new_model: bool, priority_mode: str, reasons: list[str]) -> bool:
+def _should_allow_new_model(run_new_model: bool, priority_mode: str, reasons: list[str], legacy_only: bool) -> bool:
     if not run_new_model:
+        return False
+    if legacy_only:
+        print("[guard] legacy-only mode enabled; skip new model branch.")
         return False
     if priority_mode == "legacy_recovery":
         reason_str = ", ".join(reasons[:4]) if reasons else "legacy_priority_guard"
@@ -304,10 +358,14 @@ def main() -> int:
     parser.add_argument("--wait-existing", action="store_true", help="Wait for any active supervisor/iterate before starting.")
     parser.add_argument("--monitor-interval", type=float, default=2.0, help="Monitor refresh interval in seconds.")
     parser.add_argument("--poll-sec", type=int, default=20, help="Polling interval when waiting for active runs.")
+    parser.add_argument("--allow-shadow-new-model", action="store_true", help="Allow non-legacy shadow branch after guards pass.")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
     artifact_root = repo_root / "engine" / "artifacts"
+    legacy_only = str(os.getenv("BTC_RUNNER_LEGACY_ONLY", "1")).strip().lower() not in {"0", "false", "no"}
+    if args.allow_shadow_new_model:
+        legacy_only = False
 
     if args.wait_existing:
         _wait_for_no_supervisor(repo_root=repo_root, poll_sec=max(5, int(args.poll_sec)))
@@ -430,7 +488,7 @@ def main() -> int:
             ),
         ]
 
-    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons)
+    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons, legacy_only=legacy_only)
 
     for phase in phases:
         summary_path = _latest_summary_path(artifact_root=artifact_root)
@@ -444,6 +502,7 @@ def main() -> int:
         )
         base = summary_path.parent
         summary = _load_json(base / "summary.json")
+        _assert_full_history_contract(summary=summary)
         validation = _load_json(base / "validation_report.json")
         deploy = _load_json(base / "deploy_pool.json")
         metrics = _collect_metrics(summary=summary, validation=validation, deploy=deploy)
@@ -467,6 +526,7 @@ def main() -> int:
 
         base = summary_path.parent
         summary = _load_json(base / "summary.json")
+        _assert_full_history_contract(summary=summary)
         validation = _load_json(base / "validation_report.json")
         deploy = _load_json(base / "deploy_pool.json")
         metrics = _collect_metrics(summary=summary, validation=validation, deploy=deploy)
@@ -482,7 +542,8 @@ def main() -> int:
         reasons=priority_reasons,
         progress_report=progress_report,
     )
-    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons)
+    _run_rl_shadow_report(repo_root=repo_root)
+    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons, legacy_only=legacy_only)
 
     if run_new_model:
         _run_nonlinear_grid_backtest(repo_root=repo_root)

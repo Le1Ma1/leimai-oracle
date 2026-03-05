@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 
@@ -13,6 +15,7 @@ DEFAULT_LIVE_STATUS = ROOT / "engine" / "artifacts" / "monitor" / "live_status.j
 DEFAULT_ITERATION_ROOT = ROOT / "engine" / "artifacts" / "optimization" / "single" / "iterations"
 DEFAULT_OUT_JSON = ROOT / "logs" / "ml_progress_report.json"
 DEFAULT_OUT_MD = ROOT / "logs" / "ml_progress_report.md"
+FULL_HISTORY_REQUIRED_START_UTC = "2020-01-01T00:00:00Z"
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,16 @@ class Targets:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def parse_iso_utc(raw: Any) -> datetime | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -89,6 +102,28 @@ def _extract_all_window_alpha(validation_payload: dict[str, Any], fallback: floa
     return fallback
 
 
+def _extract_all_window_start(summary_payload: dict[str, Any]) -> str | None:
+    results = summary_payload.get("results", []) if isinstance(summary_payload, dict) else []
+    starts: list[datetime] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        windows = result.get("windows", [])
+        if not isinstance(windows, list):
+            continue
+        for win in windows:
+            if not isinstance(win, dict):
+                continue
+            if str(win.get("window")) != "all":
+                continue
+            dt = parse_iso_utc(win.get("start_utc"))
+            if dt is not None:
+                starts.append(dt)
+    if not starts:
+        return None
+    return min(starts).isoformat().replace("+00:00", "Z")
+
+
 def _score(metrics: dict[str, Any], targets: Targets) -> float:
     pass_norm = clip01(_to_float(metrics.get("validation_pass_rate"), 0.0) / targets.pass_rate)
     sym_norm = clip01(_to_int(metrics.get("deploy_symbols"), 0) / float(targets.deploy_symbols))
@@ -96,6 +131,59 @@ def _score(metrics: dict[str, Any], targets: Targets) -> float:
     alpha = _to_float(metrics.get("all_window_alpha_vs_spot"), -10.0)
     alpha_norm = clip01((alpha - targets.all_alpha + 2.0) / 4.0)
     return round((0.35 * pass_norm) + (0.25 * sym_norm) + (0.20 * rule_norm) + (0.20 * alpha_norm), 6)
+
+
+def _std(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean = sum(values) / float(len(values))
+    var = sum((v - mean) ** 2 for v in values) / float(len(values) - 1)
+    return math.sqrt(max(0.0, var))
+
+
+def _improvement_tags(row: dict[str, Any]) -> list[str]:
+    delta = row.get("delta", {}) if isinstance(row.get("delta"), dict) else {}
+    tags: list[str] = []
+    if _to_float(delta.get("validation_pass_rate"), 0.0) > 0:
+        tags.append("pass_rate_up")
+    if _to_float(delta.get("all_window_alpha_vs_spot"), 0.0) > 0:
+        tags.append("alpha_up")
+    if _to_int(delta.get("deploy_symbols"), 0) > 0 or _to_int(delta.get("deploy_rules"), 0) > 0:
+        tags.append("deploy_expand")
+    if _to_float(delta.get("quality_score"), 0.0) > 0:
+        tags.append("quality_up")
+    if _to_float(delta.get("quality_score"), 0.0) < 0:
+        tags.append("quality_down")
+    if not tags:
+        tags.append("stable")
+    return tags
+
+
+def _phase(row: dict[str, Any], targets: Targets) -> str:
+    pass_rate = _to_float(row.get("validation_pass_rate"), 0.0)
+    alpha = _to_float(row.get("all_window_alpha_vs_spot"), -10.0)
+    symbols = _to_int(row.get("deploy_symbols"), 0)
+    rules = _to_int(row.get("deploy_rules"), 0)
+    if pass_rate >= targets.pass_rate and alpha >= targets.all_alpha and symbols >= targets.deploy_symbols and rules >= targets.deploy_rules:
+        return "candidate"
+    if pass_rate >= targets.pass_rate * 0.9 and alpha >= targets.all_alpha - 1.0:
+        return "stabilize"
+    return "recovery"
+
+
+def enrich_rows(rows: list[dict[str, Any]], targets: Targets) -> list[dict[str, Any]]:
+    for row in rows:
+        row["target_pass_rate"] = targets.pass_rate
+        row["target_alpha"] = targets.all_alpha
+        row["target_deploy_symbols"] = targets.deploy_symbols
+        row["target_deploy_rules"] = targets.deploy_rules
+        row["gap_pass_rate"] = round(targets.pass_rate - _to_float(row.get("validation_pass_rate"), 0.0), 6)
+        row["gap_alpha"] = round(targets.all_alpha - _to_float(row.get("all_window_alpha_vs_spot"), -10.0), 6)
+        row["gap_deploy_symbols"] = int(targets.deploy_symbols - _to_int(row.get("deploy_symbols"), 0))
+        row["gap_deploy_rules"] = int(targets.deploy_rules - _to_int(row.get("deploy_rules"), 0))
+        row["phase"] = _phase(row, targets)
+        row["improvement_tags"] = _improvement_tags(row)
+    return rows
 
 
 def collect_iterations(iteration_root: Path, limit: int, targets: Targets) -> list[dict[str, Any]]:
@@ -137,6 +225,7 @@ def collect_iterations(iteration_root: Path, limit: int, targets: Targets) -> li
             "all_window_alpha_vs_spot": all_alpha,
             "deploy_symbols": _to_int(deploy.get("total_symbols"), _to_int(best.get("deploy_total_symbols"), 0)),
             "deploy_rules": _to_int(deploy.get("total_rules"), _to_int(best.get("deploy_total_rules"), 0)),
+            "all_window_start_utc": _extract_all_window_start(summary),
         }
         row["quality_score"] = _score(row, targets)
         rows.append(row)
@@ -170,7 +259,8 @@ def collect_iterations(iteration_root: Path, limit: int, targets: Targets) -> li
                 ),
             }
         previous = row
-    return rows
+
+    return enrich_rows(rows, targets)
 
 
 def _failed_target_checks(live_status: dict[str, Any]) -> list[str]:
@@ -202,7 +292,6 @@ def derive_priority_mode(live_status: dict[str, Any], latest: dict[str, Any], ta
         reasons.append(f"pipeline_stalled:{stall_reason or 'unknown'}")
     if promotion_block_reason:
         reasons.append(f"promotion_block:{promotion_block_reason}")
-
     if pass_rate < targets.pass_rate:
         reasons.append("validation_pass_rate_below_target")
     if all_alpha < targets.all_alpha:
@@ -211,7 +300,6 @@ def derive_priority_mode(live_status: dict[str, Any], latest: dict[str, Any], ta
         reasons.append("deploy_symbols_below_target")
     if deploy_rules < targets.deploy_rules:
         reasons.append("deploy_rules_below_target")
-
     for key in _failed_target_checks(live_status):
         reasons.append(f"target_check_failed:{key}")
 
@@ -259,8 +347,110 @@ def build_feature_actions(latest: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
+def _estimate_round_interval_seconds(rows: list[dict[str, Any]]) -> float:
+    if len(rows) < 2:
+        return 4 * 3600.0
+    deltas: list[float] = []
+    for i in range(1, len(rows)):
+        prev = parse_iso_utc(rows[i - 1].get("ts_utc"))
+        cur = parse_iso_utc(rows[i].get("ts_utc"))
+        if prev is None or cur is None:
+            continue
+        dt = (cur - prev).total_seconds()
+        if dt > 0:
+            deltas.append(dt)
+    if not deltas:
+        return 4 * 3600.0
+    return max(600.0, median(deltas))
+
+
+def build_expectation(rows: list[dict[str, Any]], targets: Targets) -> dict[str, Any]:
+    latest = rows[-1] if rows else {}
+    recent = rows[-8:] if len(rows) > 1 else rows
+
+    pass_values = [_to_float(r.get("validation_pass_rate"), 0.0) for r in recent]
+    alpha_values = [_to_float(r.get("all_window_alpha_vs_spot"), -10.0) for r in recent]
+    deploy_values = [_to_float(r.get("deploy_rules"), 0.0) for r in recent]
+
+    pass_deltas = [_to_float(r.get("delta", {}).get("validation_pass_rate"), 0.0) for r in recent[1:]]
+    alpha_deltas = [_to_float(r.get("delta", {}).get("all_window_alpha_vs_spot"), 0.0) for r in recent[1:]]
+    deploy_deltas = [_to_float(r.get("delta", {}).get("deploy_rules"), 0.0) for r in recent[1:]]
+
+    pass_slope = median(pass_deltas) if pass_deltas else 0.0
+    alpha_slope = median(alpha_deltas) if alpha_deltas else 0.0
+    deploy_slope = median(deploy_deltas) if deploy_deltas else 0.0
+
+    pass_latest = _to_float(latest.get("validation_pass_rate"), 0.0)
+    alpha_latest = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0)
+    deploy_latest = _to_float(latest.get("deploy_rules"), 0.0)
+
+    pass_next = pass_latest + pass_slope
+    alpha_next = alpha_latest + alpha_slope
+    deploy_next = deploy_latest + deploy_slope
+
+    pass_band = max(0.01, abs(pass_slope) * 1.8, _std(pass_values) * 0.8)
+    alpha_band = max(0.15, abs(alpha_slope) * 1.8, _std(alpha_values) * 0.8)
+    deploy_band = max(0.25, abs(deploy_slope) * 1.5, _std(deploy_values) * 0.6)
+
+    def _rounds_to_target(current: float, target: float, slope: float) -> float | None:
+        if current >= target:
+            return 0.0
+        if slope <= 1e-9:
+            return None
+        return max(0.0, (target - current) / slope)
+
+    pass_rounds = _rounds_to_target(pass_latest, targets.pass_rate, pass_slope)
+    alpha_rounds = _rounds_to_target(alpha_latest, targets.all_alpha, alpha_slope)
+    deploy_rounds = _rounds_to_target(deploy_latest, float(targets.deploy_rules), deploy_slope)
+
+    rounds_candidates = [x for x in [pass_rounds, alpha_rounds, deploy_rounds] if x is not None]
+    eta_rounds = max(rounds_candidates) if rounds_candidates else None
+    round_interval = _estimate_round_interval_seconds(rows)
+    eta_utc = None
+    if eta_rounds is not None:
+        eta_dt = datetime.now(timezone.utc) + timedelta(seconds=eta_rounds * round_interval)
+        eta_utc = eta_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    def _p(current: float, target: float, rounds: float | None, slope: float) -> float:
+        if current >= target:
+            return 0.88
+        if rounds is None:
+            return 0.06 if slope <= 0 else 0.15
+        base = math.exp(-0.45 * rounds)
+        if slope <= 0:
+            base *= 0.35
+        return clip01(base)
+
+    p_pass = _p(pass_latest, targets.pass_rate, pass_rounds, pass_slope)
+    p_alpha = _p(alpha_latest, targets.all_alpha, alpha_rounds, alpha_slope)
+    p_deploy = _p(deploy_latest, float(targets.deploy_rules), deploy_rounds, deploy_slope)
+    reach_p = float(max(0.0, min(1.0, (p_pass * p_alpha * p_deploy) ** (1 / 3))))
+
+    return {
+        "pass_rate_next_range": [
+            round(max(0.0, pass_next - pass_band), 6),
+            round(min(1.0, pass_next + pass_band), 6),
+        ],
+        "alpha_next_range": [
+            round(alpha_next - alpha_band, 6),
+            round(alpha_next + alpha_band, 6),
+        ],
+        "deploy_next_range": [
+            round(max(0.0, deploy_next - deploy_band), 6),
+            round(max(0.0, deploy_next + deploy_band), 6),
+        ],
+        "reach_target_probability": round(reach_p, 6),
+        "eta_rounds": None if eta_rounds is None else round(eta_rounds, 3),
+        "eta_utc": eta_utc,
+        "slope": {
+            "validation_pass_rate": round(pass_slope, 6),
+            "all_window_alpha_vs_spot": round(alpha_slope, 6),
+            "deploy_rules": round(deploy_slope, 6),
+        },
+    }
+
+
 def build_role_decisions(
-    live_status: dict[str, Any],
     latest: dict[str, Any],
     targets: Targets,
     priority_mode: str,
@@ -286,9 +476,9 @@ def build_role_decisions(
         else "dual-track mode is allowed; keep drawdown controls strict."
     )
     execution = (
-        "new model stays in shadow run while legacy gates are below target."
+        "legacy remains the only deployable source; new branches stay shadow."
         if priority_mode == "legacy_recovery"
-        else "run legacy and nonlinear tracks in parallel, promote only after stability."
+        else "run legacy and shadow branches in parallel, promote only after stability."
     )
     if deploy_rules < targets.deploy_rules:
         execution = f"{execution} deploy rule coverage is below target."
@@ -303,11 +493,31 @@ def build_role_decisions(
     }
 
 
+def build_history_contract(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    required_dt = parse_iso_utc(FULL_HISTORY_REQUIRED_START_UTC)
+    starts = [parse_iso_utc(row.get("all_window_start_utc")) for row in rows if row.get("all_window_start_utc")]
+    starts = [dt for dt in starts if dt is not None]
+    observed = min(starts) if starts else None
+    if observed is None or required_dt is None:
+        return {
+            "required_start_utc": FULL_HISTORY_REQUIRED_START_UTC,
+            "observed_start_utc": None,
+            "full_history_ok": False,
+        }
+    return {
+        "required_start_utc": FULL_HISTORY_REQUIRED_START_UTC,
+        "observed_start_utc": observed.isoformat().replace("+00:00", "Z"),
+        "full_history_ok": observed <= required_dt,
+    }
+
+
 def build_recommendations(
     live_status: dict[str, Any],
     latest: dict[str, Any],
     targets: Targets,
     priority_mode: str,
+    expectation: dict[str, Any],
+    history_contract: dict[str, Any],
 ) -> list[str]:
     items: list[str] = []
     pipeline_state = str(live_status.get("pipeline_state") or "")
@@ -319,6 +529,7 @@ def build_recommendations(
     all_alpha = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0)
     deploy_symbols = _to_int(latest.get("deploy_symbols"), 0)
     deploy_rules = _to_int(latest.get("deploy_rules"), 0)
+    reach_p = _to_float(expectation.get("reach_target_probability"), 0.0)
 
     if pass_rate < targets.pass_rate:
         items.append("Validation pass rate is below target; keep trade-floor adaptation and legacy rounds active.")
@@ -326,12 +537,14 @@ def build_recommendations(
         items.append("All-window alpha is below target; tighten gate thresholds and prioritize causal feature quality.")
     if deploy_symbols < targets.deploy_symbols or deploy_rules < targets.deploy_rules:
         items.append("Deploy coverage is below target; enforce at least 1 symbol / 2 rules before promotion.")
+    if reach_p < 0.35:
+        items.append("Expected convergence probability is low; prioritize feature pruning and entry gate tightening before adding complexity.")
+    if not bool(history_contract.get("full_history_ok")):
+        items.append("Full-history contract is not satisfied; repair all-window start coverage before promotion decisions.")
 
-    items.append("Continue legacy BTC training: python scripts/btc_phase_runner.py --profile institutional_ramp --wait-existing")
+    items.append("Continue legacy BTC training only: python scripts/btc_phase_runner.py --profile institutional_ramp --wait-existing")
     if priority_mode == "legacy_recovery":
-        items.append("Defer new model expansion until legacy gates recover above target.")
-    else:
-        items.append("Run nonlinear backtest branch: python scripts/btc_phase_runner.py --profile nonlinear_grid_v1 --wait-existing")
+        items.append("Keep nonlinear and RL branches in shadow mode until legacy gates recover above target.")
     return items
 
 
@@ -345,6 +558,8 @@ def write_report_md(
     recommendations: list[str],
     priority_mode: str,
     role_decisions: dict[str, str],
+    expectation: dict[str, Any],
+    history_contract: dict[str, Any],
 ) -> None:
     latest = rows[-1] if rows else {}
     lines: list[str] = []
@@ -364,6 +579,18 @@ def write_report_md(
     lines.append(f"- deploy: `{_to_int(latest.get('deploy_symbols'), 0)} symbols / {_to_int(latest.get('deploy_rules'), 0)} rules`")
     lines.append(f"- quality_score: `{_to_float(latest.get('quality_score'), 0.0):.4f}`")
     lines.append("")
+    lines.append("## Expectation")
+    lines.append("")
+    lines.append(f"- reach_target_probability: `{_to_float(expectation.get('reach_target_probability'), 0.0):.3f}`")
+    lines.append(f"- eta_rounds: `{expectation.get('eta_rounds', None)}`")
+    lines.append(f"- eta_utc: `{expectation.get('eta_utc', None)}`")
+    lines.append("")
+    lines.append("## Full-History Contract")
+    lines.append("")
+    lines.append(f"- required_start_utc: `{history_contract.get('required_start_utc')}`")
+    lines.append(f"- observed_start_utc: `{history_contract.get('observed_start_utc')}`")
+    lines.append(f"- full_history_ok: `{history_contract.get('full_history_ok')}`")
+    lines.append("")
     lines.append("## Role Decisions")
     lines.append("")
     for key, value in role_decisions.items():
@@ -374,19 +601,19 @@ def write_report_md(
     if not rows:
         lines.append("- no iteration artifacts found")
     else:
-        for row in rows[-6:]:
+        for row in rows[-8:]:
             delta = row.get("delta", {})
             lines.append(
                 "- "
                 f"`{row.get('ts_utc', '-')}` | `{row.get('run_id', '-')}` | "
+                f"phase `{row.get('phase', 'unknown')}` | "
                 f"pass `{_to_float(row.get('validation_pass_rate'), 0.0):.4f}` "
                 f"(d `{_to_float(delta.get('validation_pass_rate'), 0.0):+.4f}`), "
                 f"alpha `{_to_float(row.get('all_window_alpha_vs_spot'), 0.0):+.4f}` "
                 f"(d `{_to_float(delta.get('all_window_alpha_vs_spot'), 0.0):+.4f}`), "
                 f"deploy `{_to_int(row.get('deploy_symbols'), 0)}/{_to_int(row.get('deploy_rules'), 0)}` "
                 f"(d `{_to_int(delta.get('deploy_symbols'), 0)}/{_to_int(delta.get('deploy_rules'), 0)}`), "
-                f"score `{_to_float(row.get('quality_score'), 0.0):.4f}` "
-                f"(d `{_to_float(delta.get('quality_score'), 0.0):+.4f}`)"
+                f"tags `{','.join(row.get('improvement_tags', []))}`"
             )
     lines.append("")
     lines.append("## Optimization Continuation Plan")
@@ -402,7 +629,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate ML progress report for legacy BTC iterations.")
     parser.add_argument("--live-status", default=str(DEFAULT_LIVE_STATUS))
     parser.add_argument("--iteration-root", default=str(DEFAULT_ITERATION_ROOT))
-    parser.add_argument("--limit", type=int, default=12)
+    parser.add_argument("--limit", type=int, default=1200, help="Maximum iterations to include (use high value for full history).")
     parser.add_argument("--out-json", default=str(DEFAULT_OUT_JSON))
     parser.add_argument("--out-md", default=str(DEFAULT_OUT_MD))
     return parser.parse_args()
@@ -415,9 +642,18 @@ def main() -> int:
     rows = collect_iterations(Path(args.iteration_root), max(1, int(args.limit)), targets)
     latest = rows[-1] if rows else {}
     priority_mode, priority_reasons = derive_priority_mode(live_status, latest, targets)
-    role_decisions = build_role_decisions(live_status, latest, targets, priority_mode, priority_reasons)
+    role_decisions = build_role_decisions(latest, targets, priority_mode, priority_reasons)
     feature_actions = build_feature_actions(latest)
-    recommendations = build_recommendations(live_status, latest, targets, priority_mode)
+    expectation = build_expectation(rows, targets)
+    history_contract = build_history_contract(rows)
+    recommendations = build_recommendations(
+        live_status=live_status,
+        latest=latest,
+        targets=targets,
+        priority_mode=priority_mode,
+        expectation=expectation,
+        history_contract=history_contract,
+    )
 
     payload = {
         "generated_at_utc": now_iso(),
@@ -429,6 +665,8 @@ def main() -> int:
         },
         "priority_mode": priority_mode,
         "priority_reasons": priority_reasons,
+        "history_contract": history_contract,
+        "expectation": expectation,
         "live_status": {
             "pipeline_state": live_status.get("pipeline_state"),
             "stall_reason": live_status.get("stall_reason"),
@@ -454,6 +692,8 @@ def main() -> int:
         recommendations=recommendations,
         priority_mode=priority_mode,
         role_decisions=role_decisions,
+        expectation=expectation,
+        history_contract=history_contract,
     )
 
     print(
@@ -465,6 +705,7 @@ def main() -> int:
                 "iterations": len(rows),
                 "latest_run_id": latest.get("run_id"),
                 "priority_mode": priority_mode,
+                "reach_target_probability": expectation.get("reach_target_probability"),
             },
             ensure_ascii=False,
         )

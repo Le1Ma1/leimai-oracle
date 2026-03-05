@@ -843,6 +843,11 @@
     const rolesNode = document.getElementById("forgeRoleDecisions");
     const featuresNode = document.getElementById("forgeFeatureActions");
     const historyNode = document.getElementById("forgeHistory");
+    const historyCanvas = document.getElementById("forgeHistoryCanvas");
+    const historyCtx = historyCanvas ? historyCanvas.getContext("2d") : null;
+    const historyMetaNode = document.getElementById("forgeHistoryMeta");
+    const expectationNode = document.getElementById("forgeExpectation");
+    const rlShadowNode = document.getElementById("forgeRlShadow");
 
     const points = Array.from({ length: 96 }, (_, i) => {
       const t = i / 95;
@@ -859,6 +864,13 @@
     let rafId = 0;
     let tick = 0;
     let liveTimer = 0;
+    let historyRowsState = [];
+    let targetsState = {
+      validation_pass_rate: 0.4,
+      all_window_alpha_vs_spot: -3.0,
+      deploy_symbols: 1,
+      deploy_rules: 2,
+    };
 
     const forgeState = {
       epochCurrent: 4592,
@@ -889,6 +901,98 @@
         .join("");
     }
 
+    function drawHistoryChart() {
+      if (!historyCtx || !historyCanvas) return;
+      const ratio = window.devicePixelRatio || 1;
+      const rect = historyCanvas.getBoundingClientRect();
+      const w = Math.max(600, Math.floor(rect.width * ratio));
+      const h = Math.max(220, Math.floor(rect.height * ratio));
+      historyCanvas.width = w;
+      historyCanvas.height = h;
+      historyCtx.clearRect(0, 0, w, h);
+
+      const rows = Array.isArray(historyRowsState) ? historyRowsState : [];
+      if (rows.length < 2) {
+        historyCtx.fillStyle = "rgba(219,229,235,0.72)";
+        historyCtx.font = `${12 * ratio}px JetBrains Mono, monospace`;
+        historyCtx.fillText("Waiting full history data...", 14 * ratio, 22 * ratio);
+        return;
+      }
+
+      const left = 42 * ratio;
+      const right = 16 * ratio;
+      const top = 14 * ratio;
+      const midTop = Math.floor(h * 0.50);
+      const gap = 8 * ratio;
+      const passTop = top;
+      const passBottom = midTop - gap;
+      const alphaTop = midTop + gap;
+      const alphaBottom = h - 18 * ratio;
+      const innerW = Math.max(1, w - left - right);
+
+      const passValues = rows.map((r) => Number.parseFloat(String(r?.validation_pass_rate ?? "0"))).map((v) => (Number.isFinite(v) ? v : 0));
+      const alphaValues = rows.map((r) => Number.parseFloat(String(r?.all_window_alpha_vs_spot ?? "0"))).map((v) => (Number.isFinite(v) ? v : 0));
+      const passTarget = Number.parseFloat(String(targetsState.validation_pass_rate ?? "0.4"));
+      const alphaTarget = Number.parseFloat(String(targetsState.all_window_alpha_vs_spot ?? "-3"));
+      const alphaMin = Math.min(...alphaValues, alphaTarget) - 0.5;
+      const alphaMax = Math.max(...alphaValues, alphaTarget) + 0.5;
+      const safeAlphaSpan = Math.max(0.8, alphaMax - alphaMin);
+
+      historyCtx.strokeStyle = "rgba(192,192,192,0.12)";
+      historyCtx.lineWidth = 1;
+      for (let i = 0; i <= 10; i += 1) {
+        const x = left + (i / 10) * innerW;
+        historyCtx.beginPath();
+        historyCtx.moveTo(x, passTop);
+        historyCtx.lineTo(x, alphaBottom);
+        historyCtx.stroke();
+      }
+
+      const yPassTarget = passBottom - Math.max(0, Math.min(1, passTarget)) * (passBottom - passTop);
+      historyCtx.strokeStyle = "rgba(212,175,55,0.35)";
+      historyCtx.setLineDash([5 * ratio, 4 * ratio]);
+      historyCtx.beginPath();
+      historyCtx.moveTo(left, yPassTarget);
+      historyCtx.lineTo(left + innerW, yPassTarget);
+      historyCtx.stroke();
+
+      const alphaTargetNorm = (alphaTarget - alphaMin) / safeAlphaSpan;
+      const yAlphaTarget = alphaBottom - alphaTargetNorm * (alphaBottom - alphaTop);
+      historyCtx.strokeStyle = "rgba(255,69,0,0.35)";
+      historyCtx.beginPath();
+      historyCtx.moveTo(left, yAlphaTarget);
+      historyCtx.lineTo(left + innerW, yAlphaTarget);
+      historyCtx.stroke();
+      historyCtx.setLineDash([]);
+
+      historyCtx.strokeStyle = "rgba(212,175,55,0.85)";
+      historyCtx.lineWidth = 2;
+      historyCtx.beginPath();
+      passValues.forEach((value, idx) => {
+        const x = left + (idx / Math.max(1, passValues.length - 1)) * innerW;
+        const y = passBottom - Math.max(0, Math.min(1, value)) * (passBottom - passTop);
+        if (idx === 0) historyCtx.moveTo(x, y);
+        else historyCtx.lineTo(x, y);
+      });
+      historyCtx.stroke();
+
+      historyCtx.strokeStyle = "rgba(255,69,0,0.85)";
+      historyCtx.beginPath();
+      alphaValues.forEach((value, idx) => {
+        const x = left + (idx / Math.max(1, alphaValues.length - 1)) * innerW;
+        const norm = (value - alphaMin) / safeAlphaSpan;
+        const y = alphaBottom - Math.max(0, Math.min(1, norm)) * (alphaBottom - alphaTop);
+        if (idx === 0) historyCtx.moveTo(x, y);
+        else historyCtx.lineTo(x, y);
+      });
+      historyCtx.stroke();
+
+      historyCtx.fillStyle = "rgba(219,229,235,0.82)";
+      historyCtx.font = `${10 * ratio}px JetBrains Mono, monospace`;
+      historyCtx.fillText("PASS_RATE (top)", left, 10 * ratio);
+      historyCtx.fillText("ALPHA_vs_SPOT (bottom)", left, (midTop + 2 * ratio));
+    }
+
     function applyLivePayload(payload) {
       if (!payload || typeof payload !== "object") return;
       const forge = payload.forge && typeof payload.forge === "object" ? payload.forge : {};
@@ -897,6 +1001,17 @@
       const roles = payload.role_decisions && typeof payload.role_decisions === "object" ? payload.role_decisions : {};
       const featureActions = payload.feature_actions && typeof payload.feature_actions === "object" ? payload.feature_actions : {};
       const historyRows = Array.isArray(payload.history) ? payload.history : [];
+      const expectation = payload.expectation && typeof payload.expectation === "object" ? payload.expectation : {};
+      const rlShadow = payload.rl_shadow_status && typeof payload.rl_shadow_status === "object" ? payload.rl_shadow_status : {};
+      const targets = payload.targets && typeof payload.targets === "object" ? payload.targets : {};
+      const historyContract = payload.history_contract && typeof payload.history_contract === "object" ? payload.history_contract : {};
+      historyRowsState = historyRows;
+      targetsState = {
+        validation_pass_rate: Number.isFinite(Number(targets.validation_pass_rate)) ? Number(targets.validation_pass_rate) : targetsState.validation_pass_rate,
+        all_window_alpha_vs_spot: Number.isFinite(Number(targets.all_window_alpha_vs_spot)) ? Number(targets.all_window_alpha_vs_spot) : targetsState.all_window_alpha_vs_spot,
+        deploy_symbols: Number.isFinite(Number(targets.deploy_symbols)) ? Number(targets.deploy_symbols) : targetsState.deploy_symbols,
+        deploy_rules: Number.isFinite(Number(targets.deploy_rules)) ? Number(targets.deploy_rules) : targetsState.deploy_rules,
+      };
 
       const epochTotal = Number.parseInt(String(forge.epoch_total || forgeState.epochTotal), 10);
       const epochCurrent = Number.parseInt(String(forge.epoch_current || forgeState.epochCurrent), 10);
@@ -929,16 +1044,54 @@
       setList(featuresNode, featureRows);
 
       const historyView = historyRows
-        .slice(-6)
+        .slice(-10)
         .reverse()
         .map((row) => {
           const ts = String(row?.ts_utc || "-").replace("T", " ").replace("Z", " UTC");
           const pass = asFixed(row?.validation_pass_rate, 3);
           const alpha = asFixed(row?.all_window_alpha_vs_spot, 3);
           const score = asFixed(row?.quality_score, 3);
-          return `${ts} | pass ${pass} | alpha ${alpha} | score ${score}`;
+          const phase = String(row?.phase || "unknown");
+          const tags = Array.isArray(row?.improvement_tags) ? row.improvement_tags.join(",") : "";
+          return `${ts} | ${phase} | pass ${pass} | alpha ${alpha} | score ${score}${tags ? ` | ${tags}` : ""}`;
         });
       setList(historyNode, historyView);
+
+      const expectationRows = [];
+      const p = Number.parseFloat(String(expectation.reach_target_probability || "0"));
+      const etaRounds = expectation.eta_rounds;
+      expectationRows.push(`REACH_PROB: ${Number.isFinite(p) ? (p * 100).toFixed(1) : "0.0"}%`);
+      expectationRows.push(`ETA_ROUNDS: ${etaRounds == null ? "unknown" : String(etaRounds)}`);
+      expectationRows.push(`ETA_UTC: ${String(expectation.eta_utc || "unknown")}`);
+      const passRange = Array.isArray(expectation.pass_rate_next_range) ? expectation.pass_rate_next_range : [];
+      if (passRange.length === 2) expectationRows.push(`PASS_NEXT: ${asFixed(passRange[0], 4)} ~ ${asFixed(passRange[1], 4)}`);
+      const alphaRange = Array.isArray(expectation.alpha_next_range) ? expectation.alpha_next_range : [];
+      if (alphaRange.length === 2) expectationRows.push(`ALPHA_NEXT: ${asFixed(alphaRange[0], 4)} ~ ${asFixed(alphaRange[1], 4)}`);
+      const deployRange = Array.isArray(expectation.deploy_next_range) ? expectation.deploy_next_range : [];
+      if (deployRange.length === 2) expectationRows.push(`DEPLOY_NEXT: ${asFixed(deployRange[0], 2)} ~ ${asFixed(deployRange[1], 2)}`);
+      setList(expectationNode, expectationRows);
+
+      const rlRows = [];
+      rlRows.push(`STATUS: ${String(rlShadow.status || "hold_shadow")}`);
+      rlRows.push(`REASON: ${String(rlShadow.reason || "-")}`);
+      rlRows.push(`REWARD_PROXY: ${asFixed(rlShadow.reward_proxy, 6)}`);
+      rlRows.push(`RETURN_EST: ${asFixed(rlShadow.friction_adjusted_return_est, 6)}`);
+      rlRows.push(`DD_EST: ${asFixed(rlShadow.max_drawdown_est, 6)}`);
+      rlRows.push(`TRADES_EST: ${asFixed(rlShadow.trades_est, 2)}`);
+      const topActions = Array.isArray(rlShadow.top_actions) ? rlShadow.top_actions : [];
+      if (topActions.length > 0) {
+        const top = topActions[0] || {};
+        rlRows.push(`TOP_ACTION: ${String(top.rule_key || "n/a")} @ ${String(top.core_id || "n/a")} (${asFixed(top.probability, 3)})`);
+      }
+      setList(rlShadowNode, rlRows);
+
+      if (historyMetaNode) {
+        const fullOk = Boolean(historyContract.full_history_ok);
+        const observed = String(historyContract.observed_start_utc || "-");
+        const required = String(historyContract.required_start_utc || "2020-01-01T00:00:00Z");
+        historyMetaNode.textContent = `${fullOk ? "FULL_HISTORY_OK" : "FULL_HISTORY_GAP"} | observed=${observed} | required=${required}`;
+      }
+      drawHistoryChart();
     }
 
     async function refreshLiveState() {
@@ -954,6 +1107,7 @@
       const rect = canvas.getBoundingClientRect();
       canvas.width = Math.max(600, Math.floor(rect.width * (window.devicePixelRatio || 1)));
       canvas.height = Math.max(220, Math.floor(rect.height * (window.devicePixelRatio || 1)));
+      drawHistoryChart();
     }
 
     function drawGrid() {

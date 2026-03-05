@@ -70,6 +70,7 @@ const GROWTH_OVERRIDES_PATH = path.join(__dirname, "web", "generated", "growth_o
 const ML_LIVE_STATUS_PATH = path.join(REPO_ROOT, "engine", "artifacts", "monitor", "live_status.json");
 const ML_PROGRESS_REPORT_PATH = path.join(REPO_ROOT, "logs", "ml_progress_report.json");
 const ML_NONLINEAR_REPORT_MD_PATH = path.join(REPO_ROOT, "logs", "nonlinear_grid_latest.md");
+const ML_RL_SHADOW_REPORT_PATH = path.join(REPO_ROOT, "logs", "rl_shadow_report.json");
 function parseDotEnv(content) {
   const out = {};
   for (const line of String(content || "").split(/\r?\n/)) {
@@ -448,6 +449,80 @@ function parseNonlinearBacktestMarkdown(raw) {
   return out;
 }
 
+function parseExpectationFallback(rows, targets) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) {
+    return {
+      pass_rate_next_range: [0, 0],
+      alpha_next_range: [0, 0],
+      deploy_next_range: [0, 0],
+      reach_target_probability: 0,
+      eta_rounds: null,
+      eta_utc: null,
+      slope: {
+        validation_pass_rate: 0,
+        all_window_alpha_vs_spot: 0,
+        deploy_rules: 0,
+      },
+    };
+  }
+  const latest = list[list.length - 1] || {};
+  const pass = numberOr(latest.validation_pass_rate, 0);
+  const alpha = numberOr(latest.all_window_alpha_vs_spot, -10);
+  const deploy = numberOr(latest.deploy_rules, 0);
+  const passTarget = numberOr(targets.validation_pass_rate, 0.4);
+  const alphaTarget = numberOr(targets.all_window_alpha_vs_spot, -3.0);
+  const deployTarget = numberOr(targets.deploy_rules, 2);
+  const passGap = Math.max(0, passTarget - pass);
+  const alphaGap = Math.max(0, alphaTarget - alpha);
+  const deployGap = Math.max(0, deployTarget - deploy);
+  const reach = Math.max(0, Math.min(1, 1 - ((passGap * 1.6) + (Math.min(6, alphaGap) / 6) + (deployGap / Math.max(1, deployTarget))) / 3));
+  return {
+    pass_rate_next_range: [Math.max(0, pass - 0.02), Math.min(1, pass + 0.02)],
+    alpha_next_range: [alpha - 0.6, alpha + 0.6],
+    deploy_next_range: [Math.max(0, deploy - 0.5), Math.max(0, deploy + 0.5)],
+    reach_target_probability: Number(reach.toFixed(4)),
+    eta_rounds: null,
+    eta_utc: null,
+    slope: {
+      validation_pass_rate: 0,
+      all_window_alpha_vs_spot: 0,
+      deploy_rules: 0,
+    },
+  };
+}
+
+function enrichHistoryRows(rows, targets) {
+  const list = Array.isArray(rows) ? rows : [];
+  const passTarget = numberOr(targets.validation_pass_rate, 0.4);
+  const alphaTarget = numberOr(targets.all_window_alpha_vs_spot, -3);
+  const symTarget = numberOr(targets.deploy_symbols, 1);
+  const ruleTarget = numberOr(targets.deploy_rules, 2);
+  return list.map((row) => {
+    const safe = row && typeof row === "object" ? row : {};
+    const passRate = numberOr(safe.validation_pass_rate, 0);
+    const alpha = numberOr(safe.all_window_alpha_vs_spot, -10);
+    const symbols = numberOr(safe.deploy_symbols, 0);
+    const rules = numberOr(safe.deploy_rules, 0);
+    const out = { ...safe };
+    if (typeof out.target_pass_rate !== "number") out.target_pass_rate = passTarget;
+    if (typeof out.target_alpha !== "number") out.target_alpha = alphaTarget;
+    if (typeof out.target_deploy_symbols !== "number") out.target_deploy_symbols = symTarget;
+    if (typeof out.target_deploy_rules !== "number") out.target_deploy_rules = ruleTarget;
+    if (typeof out.gap_pass_rate !== "number") out.gap_pass_rate = Number((passTarget - passRate).toFixed(6));
+    if (typeof out.gap_alpha !== "number") out.gap_alpha = Number((alphaTarget - alpha).toFixed(6));
+    if (typeof out.gap_deploy_symbols !== "number") out.gap_deploy_symbols = symTarget - symbols;
+    if (typeof out.gap_deploy_rules !== "number") out.gap_deploy_rules = ruleTarget - rules;
+    if (!out.phase) {
+      out.phase = passRate >= passTarget && alpha >= alphaTarget && symbols >= symTarget && rules >= ruleTarget
+        ? "candidate"
+        : (passRate >= passTarget * 0.9 && alpha >= alphaTarget - 1 ? "stabilize" : "recovery");
+    }
+    if (!Array.isArray(out.improvement_tags)) out.improvement_tags = [];
+    return out;
+  });
+}
+
 function extractFeatureProfile(summary) {
   const rows = Array.isArray(summary?.results) ? summary.results : [];
   for (const result of rows) {
@@ -599,10 +674,11 @@ async function loadSummaryByProgressReport(progressReport) {
 }
 
 async function loadMlLivePayload() {
-  const [liveStatus, progressReport, nonlinearMdRaw] = await Promise.all([
+  const [liveStatus, progressReport, nonlinearMdRaw, rlShadowReport] = await Promise.all([
     readJsonFileSafe(ML_LIVE_STATUS_PATH, {}),
     readJsonFileSafe(ML_PROGRESS_REPORT_PATH, {}),
     readTextFileSafe(ML_NONLINEAR_REPORT_MD_PATH, ""),
+    readJsonFileSafe(ML_RL_SHADOW_REPORT_PATH, {}),
   ]);
   const summary = await loadSummaryByProgressReport(progressReport);
   const featureProfile = extractFeatureProfile(summary);
@@ -627,13 +703,34 @@ async function loadMlLivePayload() {
       ? "DUAL TRACK ACTIVE (LEGACY + NEW)"
       : "IDLE / WAITING NEXT CYCLE";
 
-  const historyRows = Array.isArray(progressReport?.iterations) ? progressReport.iterations : [];
+  const targets = progressReport?.targets && typeof progressReport.targets === "object"
+    ? progressReport.targets
+    : {
+      validation_pass_rate: numberOr(liveStatus?.targets?.thresholds?.target_pass_rate, 0.4),
+      deploy_symbols: numberOr(liveStatus?.targets?.thresholds?.target_deploy_symbols, 1),
+      deploy_rules: numberOr(liveStatus?.targets?.thresholds?.target_deploy_rules, 2),
+      all_window_alpha_vs_spot: numberOr(liveStatus?.targets?.thresholds?.target_all_alpha, -3.0),
+    };
+  const rawHistoryRows = Array.isArray(progressReport?.iterations) ? progressReport.iterations : [];
+  const historyRows = enrichHistoryRows(rawHistoryRows, targets);
+  const expectation = progressReport?.expectation && typeof progressReport.expectation === "object"
+    ? progressReport.expectation
+    : parseExpectationFallback(historyRows, targets);
+  const historyContract = progressReport?.history_contract && typeof progressReport.history_contract === "object"
+    ? progressReport.history_contract
+    : {};
+  const rlDecision = rlShadowReport?.decision && typeof rlShadowReport.decision === "object" ? rlShadowReport.decision : {};
+  const rlShadow = rlShadowReport?.rl_shadow && typeof rlShadowReport.rl_shadow === "object" ? rlShadowReport.rl_shadow : {};
 
   return {
     ok: true,
     generated_at_utc: nowIso(),
+    legacy_only_deploy: true,
     priority_mode: priority.mode,
     priority_reasons: priority.reasons,
+    targets,
+    expectation,
+    history_contract: historyContract,
     forge: {
       epoch_current: epochCurrent,
       epoch_total: epochTotal,
@@ -655,6 +752,16 @@ async function loadMlLivePayload() {
       max_drawdown_pct: String(nonlinear.max_drawdown_pct || ""),
       win_rate: String(nonlinear.win_rate || ""),
       status: priority.mode === "legacy_recovery" ? "shadow_blocked_by_legacy_priority" : "shadow_running",
+    },
+    rl_shadow_status: {
+      status: String(rlDecision.recommend || "hold_shadow"),
+      reason: String(rlDecision.reason || ""),
+      reward_proxy: numberOr(rlShadow.reward_proxy, 0),
+      friction_adjusted_return_est: numberOr(rlShadow.friction_adjusted_return_est, 0),
+      max_drawdown_est: numberOr(rlShadow.max_drawdown_est, 0),
+      trades_est: numberOr(rlShadow.trades_est, 0),
+      generated_at_utc: String(rlShadowReport.generated_at_utc || ""),
+      top_actions: Array.isArray(rlShadow.top_actions) ? rlShadow.top_actions.slice(0, 6) : [],
     },
     role_decisions: roleDecisions,
     feature_actions: featureActions,
@@ -2470,6 +2577,27 @@ function renderForgePage(locale, { signed = false, unlockedAddress = null } = {}
           </ul>
         </section>
       </div>
+      <div class="forge-history-card">
+        <div class="forge-history-head">
+          <h3>FULL ITERATION TIMELINE (2020-01-01 -> NOW)</h3>
+          <div id="forgeHistoryMeta" class="mono-value">Waiting history contract...</div>
+        </div>
+        <canvas id="forgeHistoryCanvas" width="1180" height="280" aria-label="Full history pass/alpha chart"></canvas>
+      </div>
+      <div class="forge-ops-grid forge-ops-grid-2">
+        <section class="forge-op-card">
+          <h3>EXPECTATION</h3>
+          <ul id="forgeExpectation" class="forge-list">
+            <li>Waiting expectation model...</li>
+          </ul>
+        </section>
+        <section class="forge-op-card">
+          <h3>RL SHADOW (OFFLINE)</h3>
+          <ul id="forgeRlShadow" class="forge-list">
+            <li>Waiting RL shadow report...</li>
+          </ul>
+        </section>
+      </div>
       <div class="guided-cta-copy">${escapeHtml(transferLine)}</div>
       <div class="forge-cta-row">
         ${forgeCta}
@@ -3846,14 +3974,21 @@ export async function handleRequest(req, res) {
     }
 
     if (method === "GET" && pathname === "/api/v1/ml/history") {
-      const limit = Math.min(Math.max(1, Number(searchParams.get("limit") || 30)), 240);
+      const limitRaw = Number(searchParams.get("limit"));
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(Math.max(1, limitRaw), 5000)
+        : null;
       const payload = await loadMlLivePayload();
       const rows = Array.isArray(payload.history) ? payload.history : [];
       return jsonResponse(res, 200, {
         ok: true,
         generated_at_utc: nowIso(),
         priority_mode: payload.priority_mode || "idle",
-        rows: rows.slice(-limit).reverse(),
+        targets: payload.targets || {},
+        expectation: payload.expectation || {},
+        history_contract: payload.history_contract || {},
+        legacy_only_deploy: true,
+        rows: limit ? rows.slice(-limit).reverse() : [...rows].reverse(),
       });
     }
 
