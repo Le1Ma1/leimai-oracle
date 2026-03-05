@@ -18,7 +18,7 @@ Visual self-management rule:
 Execution discipline (do not skip):
 - Before any platform operation, load env from both `./.env` and `./support/.env` when present.
 - Treat env as source of truth for platform auth and IDs (GitHub, Vercel, Supabase).
-- Required preflight checks (masked output only): `GITHUB_TOKEN`, `VERCEL_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+- Required preflight checks (masked output only): `GITHUB_TOKEN`, `VERCEL_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `MAPBOX_PUBLIC_TOKEN`, `NEXT_PUBLIC_MAPBOX_TOKEN`.
 - Never print full secret values in logs or terminal summaries. Only show presence/absence or masked suffix.
 - If `gh` CLI is unavailable, use GitHub REST API with `GITHUB_TOKEN` directly; do not stop there.
 
