@@ -268,7 +268,8 @@ def score_matrix(issues: list[str], visual: dict[str, Any], copy_scan: dict[str,
 
     seo = 100.0
     jsonld_present = copy_scan.get("jsonld_present", {}) if isinstance(copy_scan, dict) else {}
-    if not jsonld_present.get("analysis", False) or not jsonld_present.get("detail", False):
+    detail_required = bool(visual.get("index_has_reports", False))
+    if not jsonld_present.get("analysis", False) or (detail_required and not jsonld_present.get("detail", False)):
         seo = 0.0
 
     weighted = (quality_density * 0.40) + (brand * 0.30) + (business * 0.20) + (seo * 0.10)
