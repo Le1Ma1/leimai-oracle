@@ -27,3 +27,9 @@ Delivery contract (default behavior):
 - After push: verify latest GitHub Actions status; if failed, fetch failure logs and apply fix in the same cycle.
 - For deployment-impacting changes: verify Vercel + Supabase integration health after push.
 - When any check fails, continue autonomous debugging until green, then report final status with concrete run IDs/commit SHA.
+
+Persistent global platform governance:
+- Treat GitHub + Vercel + Supabase + crypto-support runtime as delegated always-on operations.
+- Keep `.github/workflows/platform_governor_30m.yml` and `scripts/platform_governor.py` healthy and active.
+- Start each platform iteration from `logs/platform_governor_report.json`, prioritize highest severity first, then auto-heal.
+- If governor or scheduled workflows fail: fetch logs, patch, commit, push, and rerun verification in the same cycle.
