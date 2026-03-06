@@ -106,7 +106,14 @@ def _list_python_processes() -> list[dict[str, Any]]:
             (
                 "Get-CimInstance Win32_Process "
                 "| Where-Object { $_.Name -match '^python(\\.exe)?$' } "
-                "| Select-Object ProcessId,CommandLine "
+                "| ForEach-Object { "
+                "$proc = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; "
+                "[PSCustomObject]@{ "
+                "ProcessId = $_.ProcessId; "
+                "CommandLine = $_.CommandLine; "
+                "StartedAtUtc = if ($proc) { $proc.StartTime.ToUniversalTime().ToString('o') } else { '' } "
+                "} "
+                "} "
                 "| ConvertTo-Json -Compress"
             ),
         ]
@@ -422,6 +429,13 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
     targets_cfg = _parse_supervisor_targets(processes)
     iterate_active = "iterate_pid" in active_processes
     supervisor_active = "alpha_supervisor_pid" in active_processes
+    iterate_started_at: datetime | None = None
+    for row in processes:
+        cmd_l = str(row.get("CommandLine") or "").lower()
+        if "engine.src.main" in cmd_l and "--mode iterate" in cmd_l:
+            started = _parse_utc(row.get("StartedAtUtc"))
+            if started is not None and (iterate_started_at is None or started > iterate_started_at):
+                iterate_started_at = started
 
     log_files = _list_out_logs(log_root)
     events = _parse_events(log_files)
@@ -429,6 +443,8 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
 
     round_starts = [event for event in events if str(event.get("event")) == "ITERATION_ROUND_START" and event.get("run_id")]
     latest_start = round_starts[-1] if round_starts else None
+    if iterate_active and iterate_started_at is not None and latest_start is not None and latest_start["_ts"] < iterate_started_at:
+        latest_start = None
     active_run_id = str(latest_start.get("run_id")) if latest_start is not None else None
 
     run_events: list[dict[str, Any]] = []
@@ -525,6 +541,8 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
 
     warnings: list[str] = []
     latest_event_ts = events[-1]["_ts"] if events else None
+    if iterate_active and iterate_started_at is not None and (latest_event_ts is None or latest_event_ts < iterate_started_at):
+        latest_event_ts = None
     last_event_age_sec: int | None = None
     if latest_event_ts is not None:
         age_sec = (now - latest_event_ts).total_seconds()
@@ -537,7 +555,9 @@ def _build_status(repo_root: Path) -> dict[str, Any]:
     pipeline_state = "idle"
     stall_reason: str | None = None
     if iterate_active:
-        if tasks_total > 0 and tasks_done < tasks_total:
+        if latest_start is None:
+            pipeline_state = "running"
+        elif tasks_total > 0 and tasks_done < tasks_total:
             pipeline_state = "stalled" if stale_active else "running"
             if stale_active:
                 stall_reason = "no_progress_events_while_running"
