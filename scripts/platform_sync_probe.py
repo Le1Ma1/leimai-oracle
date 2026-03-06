@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -29,6 +29,7 @@ class SyncConfig:
     vercel_team_id: str
     public_base_url: str
     expected_markers: tuple[str, ...]
+    state_paths: tuple[str, ...]
     timeout_sec: float
     retries: int
 
@@ -70,13 +71,20 @@ def parse_config() -> SyncConfig:
     marker_raw = str(
         os.getenv(
             "PLATFORM_SYNC_EXPECTED_MARKERS",
-            "Quant Engine Dashboard|量化引擎儀表板|LEIMAI ORACLE",
+            "LEIMAI ORACLE|Quant Governance Dashboard|量化治理儀表板",
         )
     )
     markers = tuple(token.strip() for token in marker_raw.split("|") if token.strip())
-    public_base_url = str(os.getenv("SUPPORT_BASE_URL", "")).strip().rstrip("/")
+
+    public_base_url = str(
+        os.getenv("PLATFORM_SYNC_PUBLIC_BASE_URL")
+        or os.getenv("SUPPORT_MAIN_SITE_URL")
+        or os.getenv("SUPPORT_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
     if not public_base_url:
         public_base_url = "https://leimai.io"
+
     return SyncConfig(
         github_token=str(os.getenv("GITHUB_TOKEN", "")).strip(),
         github_owner=str(os.getenv("GITHUB_OWNER", "Le1Ma1")).strip() or "Le1Ma1",
@@ -86,6 +94,7 @@ def parse_config() -> SyncConfig:
         vercel_team_id=str(os.getenv("VERCEL_ORG_ID", os.getenv("VERCEL_TEAM_ID", ""))).strip(),
         public_base_url=public_base_url,
         expected_markers=markers,
+        state_paths=("/state/visual_state.json", "/state/evolution_validation.json"),
         timeout_sec=timeout_sec,
         retries=retries,
     )
@@ -100,7 +109,7 @@ def run_git(*args: str) -> tuple[bool, str]:
             capture_output=True,
             text=True,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return False, str(exc)
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "").strip()
@@ -135,7 +144,7 @@ def request_json(
                     return False, code, None, (resp.text or "")[:280]
                 try:
                     payload = resp.json()
-                except Exception:
+                except Exception:  # noqa: BLE001
                     payload = {}
                 return True, code, payload, None
             except requests.RequestException as exc:
@@ -221,6 +230,8 @@ def vercel_latest_production(cfg: SyncConfig) -> tuple[dict[str, Any], str | Non
         "state": str(latest.get("readyState", "")),
         "target": str(latest.get("target", "")),
         "created_at": latest.get("createdAt"),
+        "error_code": str(latest.get("errorCode", "")),
+        "error_message": str(latest.get("errorMessage", "")),
         "commit_sha": str((latest.get("meta") or {}).get("githubCommitSha", "")),
         "commit_ref": str((latest.get("meta") or {}).get("githubCommitRef", "")),
         "repo": str((latest.get("meta") or {}).get("githubRepo", "")),
@@ -264,6 +275,37 @@ def public_surface(cfg: SyncConfig) -> tuple[dict[str, Any], str | None]:
     }, None
 
 
+def public_state_contract(cfg: SyncConfig) -> tuple[dict[str, Any], str | None]:
+    checks: list[dict[str, Any]] = []
+    for rel_path in cfg.state_paths:
+        full_url = f"{cfg.public_base_url}{rel_path}"
+        ok, code, payload, err = request_json(
+            "GET",
+            full_url,
+            timeout_sec=cfg.timeout_sec,
+            retries=cfg.retries,
+        )
+        item: dict[str, Any] = {
+            "path": rel_path,
+            "url": full_url,
+            "status_code": code,
+            "ok": bool(ok),
+            "contract_ok": False,
+            "error": err or "",
+        }
+        if ok and isinstance(payload, dict):
+            has_run_id = bool(str(payload.get("run_id") or "").strip())
+            status_key = str(payload.get("status_key") or "")
+            regime_key = str(payload.get("regime_key") or "")
+            contract_ok = has_run_id and status_key.startswith("STATUS_") and regime_key.startswith("REGIME_")
+            item["contract_ok"] = contract_ok
+            item["status_key"] = status_key
+            item["regime_key"] = regime_key
+        checks.append(item)
+    all_ok = all(bool(row.get("ok")) and bool(row.get("contract_ok")) for row in checks)
+    return {"ok": all_ok, "checks": checks}, None if all_ok else "public_state_contract_failed"
+
+
 def collect_local_git_state() -> dict[str, Any]:
     head_ok, head = run_git("rev-parse", "HEAD")
     branch_ok, branch = run_git("branch", "--show-current")
@@ -300,15 +342,19 @@ def build_status(cfg: SyncConfig) -> dict[str, Any]:
     gh_sha, gh_err = github_main_sha(cfg)
     vercel, vercel_err = vercel_latest_production(cfg)
     public, public_err = public_surface(cfg)
+    state_contract, state_contract_err = public_state_contract(cfg)
 
     deployed_sha = str(vercel.get("commit_sha", "")).strip()
+    deployed_state = str(vercel.get("state", "")).upper()
+    vercel_ready = deployed_state == "READY"
     local_sha = str(local.get("head_sha", "")).strip()
     origin_sha = str(local.get("origin_main_sha", "")).strip()
 
     source_sha = gh_sha or origin_sha
-    vercel_synced = bool(source_sha and deployed_sha and deployed_sha == source_sha)
+    vercel_synced = bool(source_sha and deployed_sha and deployed_sha == source_sha and vercel_ready)
     local_synced = bool(source_sha and local_sha and local_sha == source_sha and not bool(local.get("dirty", False)))
     marker_ok = bool(public.get("marker_hit", False))
+    state_contract_ok = bool(state_contract.get("ok", False))
 
     issues: list[dict[str, str]] = []
     if gh_err:
@@ -317,6 +363,15 @@ def build_status(cfg: SyncConfig) -> dict[str, Any]:
         issues.append({"code": "vercel_probe_failed", "severity": "major", "detail": vercel_err})
     if public_err:
         issues.append({"code": "public_probe_failed", "severity": "major", "detail": public_err})
+    if not vercel_ready:
+        severity = "critical" if deployed_state == "ERROR" else "major"
+        issues.append(
+            {
+                "code": "vercel_deployment_not_ready",
+                "severity": severity,
+                "detail": f"state={deployed_state or 'unknown'} code={str(vercel.get('error_code') or '')}",
+            }
+        )
     if source_sha and deployed_sha and deployed_sha != source_sha:
         issues.append(
             {
@@ -331,6 +386,14 @@ def build_status(cfg: SyncConfig) -> dict[str, Any]:
                 "code": "public_marker_mismatch",
                 "severity": "major",
                 "detail": "public site content does not contain expected dashboard markers",
+            }
+        )
+    if state_contract_err or not state_contract_ok:
+        issues.append(
+            {
+                "code": "public_state_contract_failed",
+                "severity": "critical",
+                "detail": "state json endpoints unreachable or enum contract invalid",
             }
         )
     if bool(local.get("dirty", False)):
@@ -357,16 +420,16 @@ def build_status(cfg: SyncConfig) -> dict[str, Any]:
         if highest == "ok" or severity_rank.get(level, 0) > severity_rank.get(highest, 0):
             highest = level
 
-    pass_status = bool(vercel_synced and marker_ok and highest in {"ok", "minor"})
+    pass_status = bool(vercel_synced and marker_ok and state_contract_ok and highest in {"ok", "minor"})
     recommendation = (
         "push_and_deploy"
         if bool(local.get("dirty", False)) or int(local.get("behind", 0) or 0) > 0
         else "monitor"
     )
     if not vercel_synced:
-        recommendation = "repair_deployment_source"
-    if not marker_ok:
-        recommendation = "verify_frontend_entrypoint"
+        recommendation = "repair_vercel_deployment"
+    if not marker_ok or not state_contract_ok:
+        recommendation = "verify_public_surface_and_state_contract"
 
     return {
         "generated_at_utc": now_iso(),
@@ -378,10 +441,13 @@ def build_status(cfg: SyncConfig) -> dict[str, Any]:
         "local": local,
         "vercel": vercel,
         "public": public,
+        "public_state_contract": state_contract,
         "checks": {
             "local_synced_to_source": local_synced,
             "vercel_synced_to_source": vercel_synced,
+            "vercel_ready": vercel_ready,
             "public_marker_ok": marker_ok,
+            "public_state_contract_ok": state_contract_ok,
         },
         "issues": issues,
         "severity": highest,

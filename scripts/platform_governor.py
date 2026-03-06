@@ -34,6 +34,14 @@ CRITICAL_WORKFLOWS = {
     "harvest_payments_5m.yml",
 }
 
+DESIRED_VERCEL_SETTINGS = {
+    "rootDirectory": "monitor",
+    "framework": "nextjs",
+    "buildCommand": "npm run build",
+    "installCommand": "npm install",
+    "devCommand": "npm run dev",
+}
+
 
 @dataclass(frozen=True)
 class GovernorConfig:
@@ -477,6 +485,103 @@ def check_supabase_freshness(
     return check, issues, actions, used
 
 
+def vercel_project_settings(
+    session: requests.Session,
+    cfg: GovernorConfig,
+) -> tuple[dict[str, Any], str | None]:
+    params: dict[str, Any] = {}
+    if cfg.vercel_team_id:
+        params["teamId"] = cfg.vercel_team_id
+    ok, _status, payload, error = request_with_retry(
+        session,
+        "GET",
+        f"https://api.vercel.com/v9/projects/{cfg.vercel_project_id}",
+        headers=vercel_headers(cfg),
+        params=params,
+        timeout_sec=cfg.timeout_sec,
+        retries=cfg.retries,
+    )
+    if not ok:
+        return {}, error or "vercel_project_query_failed"
+    project = payload if isinstance(payload, dict) else {}
+    return {
+        "id": str(project.get("id") or ""),
+        "name": str(project.get("name") or ""),
+        "rootDirectory": str(project.get("rootDirectory") or ""),
+        "framework": str(project.get("framework") or ""),
+        "buildCommand": str(project.get("buildCommand") or ""),
+        "installCommand": str(project.get("installCommand") or ""),
+        "devCommand": str(project.get("devCommand") or ""),
+        "link": project.get("link") if isinstance(project.get("link"), dict) else {},
+    }, None
+
+
+def vercel_patch_project_to_monitor(
+    session: requests.Session,
+    cfg: GovernorConfig,
+    *,
+    dry_run: bool,
+) -> tuple[bool, str]:
+    if dry_run:
+        return True, "dry_run"
+    params: dict[str, Any] = {}
+    if cfg.vercel_team_id:
+        params["teamId"] = cfg.vercel_team_id
+    ok, status, _payload, error = request_with_retry(
+        session,
+        "PATCH",
+        f"https://api.vercel.com/v9/projects/{cfg.vercel_project_id}",
+        headers=vercel_headers(cfg),
+        params=params,
+        json_body=DESIRED_VERCEL_SETTINGS,
+        timeout_sec=cfg.timeout_sec,
+        retries=cfg.retries,
+    )
+    if ok:
+        return True, f"http_{status}"
+    return False, error or "vercel_project_patch_failed"
+
+
+def vercel_trigger_production_deploy(
+    session: requests.Session,
+    cfg: GovernorConfig,
+    *,
+    project_name: str,
+    repo_id: int,
+    ref: str,
+    dry_run: bool,
+) -> tuple[bool, str]:
+    if dry_run:
+        return True, "dry_run"
+    params: dict[str, Any] = {}
+    if cfg.vercel_team_id:
+        params["teamId"] = cfg.vercel_team_id
+    body = {
+        "name": str(project_name or "leimai-oracle").strip() or "leimai-oracle",
+        "project": str(project_name or "leimai-oracle").strip() or "leimai-oracle",
+        "target": "production",
+        "gitSource": {
+            "type": "github",
+            "repoId": int(repo_id),
+            "ref": str(ref or "main"),
+        },
+    }
+    ok, status, payload, error = request_with_retry(
+        session,
+        "POST",
+        "https://api.vercel.com/v13/deployments",
+        headers=vercel_headers(cfg),
+        params=params,
+        json_body=body,
+        timeout_sec=cfg.timeout_sec,
+        retries=cfg.retries,
+    )
+    if ok:
+        deploy_id = str((payload or {}).get("id") or "")
+        return True, f"http_{status}:deploy_id={deploy_id}"
+    return False, error or "vercel_deploy_trigger_failed"
+
+
 def check_vercel_deployment(
     session: requests.Session,
     cfg: GovernorConfig,
@@ -492,7 +597,7 @@ def check_vercel_deployment(
         issues.append(build_issue("vercel_config_missing", "major", "Vercel token or project id missing"))
         return check, issues, actions, used
 
-    params: dict[str, Any] = {"projectId": cfg.vercel_project_id, "limit": 3}
+    params: dict[str, Any] = {"projectId": cfg.vercel_project_id, "target": "production", "limit": 3}
     if cfg.vercel_team_id:
         params["teamId"] = cfg.vercel_team_id
     url = "https://api.vercel.com/v6/deployments"
@@ -515,8 +620,10 @@ def check_vercel_deployment(
         return check, issues, actions, used
 
     latest = rows[0] if isinstance(rows[0], dict) else {}
-    state = str(latest.get("state") or "").upper()
+    state = str(latest.get("readyState") or latest.get("state") or "").upper()
     deployment_id = str(latest.get("uid") or latest.get("id") or "")
+    error_code = str(latest.get("errorCode") or "")
+    error_message = str(latest.get("errorMessage") or "")
     url_target = str(latest.get("url") or "")
     created_ms = float(latest.get("created") or 0.0)
     created_ts = (
@@ -530,22 +637,103 @@ def check_vercel_deployment(
         "latest_id": deployment_id,
         "latest_url": url_target,
         "latest_created_at_utc": iso_utc(created_ts) if created_ts else "",
+        "latest_error_code": error_code,
+        "latest_error_message": error_message,
     }
 
-    if state not in {"READY", "CANCELED"}:
+    project, project_error = vercel_project_settings(session, cfg)
+    if project_error:
+        issues.append(build_issue("vercel_project_query_failed", "major", "Failed to query Vercel project settings", error=project_error))
+    else:
+        mismatches: dict[str, dict[str, str]] = {}
+        for key, expected in DESIRED_VERCEL_SETTINGS.items():
+            actual = str(project.get(key) or "")
+            if actual != str(expected):
+                mismatches[key] = {"expected": str(expected), "actual": actual}
+        check["project_name"] = str(project.get("name") or "")
+        check["project_root_directory"] = str(project.get("rootDirectory") or "")
+        check["project_framework"] = str(project.get("framework") or "")
+        if mismatches:
+            issues.append(
+                build_issue(
+                    "vercel_project_settings_mismatch",
+                    "major",
+                    "Vercel project settings drift from monitor defaults",
+                    mismatches=mismatches,
+                )
+            )
+            can_heal = cfg.auto_heal and used < action_budget
+            if can_heal:
+                ok_patch, detail_patch = vercel_patch_project_to_monitor(session, cfg, dry_run=cfg.dry_run)
+                actions.append(
+                    build_action(
+                        "patch_vercel_project_settings",
+                        str(project.get("name") or cfg.vercel_project_id),
+                        ok_patch,
+                        detail_patch,
+                    )
+                )
+                used += 1
+
+    if state != "READY":
         severity = "critical" if state == "ERROR" else "major"
-        issues.append(build_issue("vercel_deploy_unhealthy", severity, "Latest Vercel deployment not healthy", state=state, deployment_id=deployment_id))
+        issues.append(
+            build_issue(
+                "vercel_deploy_unhealthy",
+                severity,
+                "Latest production deployment not READY",
+                state=state or "UNKNOWN",
+                deployment_id=deployment_id,
+                error_code=error_code,
+                error_message=error_message,
+            )
+        )
         can_heal = cfg.auto_heal and used < action_budget
         if can_heal:
-            ok_dispatch, detail = gh_dispatch_workflow(
-                session,
-                cfg,
-                "vercel_env_sync.yml",
-                inputs=None,
-                dry_run=cfg.dry_run,
-            )
-            actions.append(build_action("dispatch_workflow", "vercel_env_sync.yml", ok_dispatch, detail))
-            used += 1
+            repo_id_raw = ""
+            ref = "main"
+            project_name = str(project.get("name") or "leimai-oracle")
+            if isinstance(project, dict):
+                link = project.get("link") if isinstance(project.get("link"), dict) else {}
+                repo_id_raw = str(link.get("repoId") or "")
+            meta = latest.get("meta") if isinstance(latest.get("meta"), dict) else {}
+            if not repo_id_raw:
+                repo_id_raw = str(meta.get("githubRepoId") or meta.get("githubCommitRepoId") or "")
+            ref = str(meta.get("githubCommitRef") or "main")
+            repo_id = 0
+            try:
+                repo_id = int(repo_id_raw)
+            except (TypeError, ValueError):
+                repo_id = 0
+            if repo_id > 0:
+                ok_redeploy, detail_redeploy = vercel_trigger_production_deploy(
+                    session,
+                    cfg,
+                    project_name=project_name,
+                    repo_id=repo_id,
+                    ref=ref,
+                    dry_run=cfg.dry_run,
+                )
+                actions.append(
+                    build_action(
+                        "trigger_vercel_production_deploy",
+                        project_name,
+                        ok_redeploy,
+                        detail_redeploy,
+                        repo_id=repo_id,
+                        ref=ref,
+                    )
+                )
+                used += 1
+            else:
+                issues.append(
+                    build_issue(
+                        "vercel_redeploy_repo_id_missing",
+                        "major",
+                        "Cannot auto trigger Vercel redeploy because repoId is missing",
+                        deployment_id=deployment_id,
+                    )
+                )
 
     return check, issues, actions, used
 
