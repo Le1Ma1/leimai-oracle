@@ -41,6 +41,22 @@ export type RuntimeCompletionReasonKey =
 
 export type RuntimeNotifyKey = "NOTIFY_RUN_STARTED" | "NOTIFY_STALLED" | "NOTIFY_COMPLETED" | "NOTIFY_RESUMED";
 
+export type ProfileKey =
+  | "PROFILE_BASELINE"
+  | "PROFILE_EVENT_EXPANSION"
+  | "PROFILE_PRECISION_RECOVERY"
+  | "PROFILE_ALPHA_RESCUE"
+  | "PROFILE_STABILITY_SCAN"
+  | "PROFILE_UNKNOWN"
+  | string;
+
+export type DiagnosisObjectiveKey =
+  | "OBJECTIVE_RECOVER_TRADE_FLOW"
+  | "OBJECTIVE_RESTORE_PRECISION_COMPLIANCE"
+  | "OBJECTIVE_REDUCE_ALL_WINDOW_LOSS"
+  | "OBJECTIVE_STABILIZE_GENERALIZATION"
+  | string;
+
 export interface EvolutionValidation {
   artifact_version: string;
   generated_at_utc: string;
@@ -149,6 +165,35 @@ export interface TrainingRoadmap {
     hard_cap: number;
     loop_runs: number;
   };
+  diagnosis?: {
+    objective_key: DiagnosisObjectiveKey;
+    recommended_profile_key: ProfileKey;
+    recommended_overrides?: Record<string, string>;
+    confidence: number;
+    top_bottlenecks: Array<{
+      reason_key: RejectionReason | string;
+      severity: number;
+      observed: number;
+      target: number;
+    }>;
+  };
+  profile_comparison?: {
+    winner_profile_key: ProfileKey;
+    sampled_rounds: number;
+    rows: Array<{
+      profile_key: ProfileKey;
+      rounds: number;
+      avg_pass_rate: number;
+      avg_all_window_alpha: number;
+      avg_veto_pressure: number;
+      avg_quality_score: number;
+      gate_hit_rate: number;
+    }>;
+  };
+  latest_loop_profile?: {
+    profile_name: string;
+    overrides: Record<string, string>;
+  };
   latest_round: TrainingRound | Record<string, never>;
   best_round: TrainingRound | Record<string, never>;
   rounds: TrainingRound[];
@@ -176,6 +221,10 @@ export interface TrainingRuntime {
   gate_block_reason_key: RuntimeStallReasonKey | string;
   stalled_reason_key: RuntimeStallReasonKey | string;
   completion_reason_key: RuntimeCompletionReasonKey | string;
+  diagnosis_objective_key: DiagnosisObjectiveKey | string;
+  diagnosis_recommended_profile_key: ProfileKey | string;
+  diagnosis_top_reason_key: RejectionReason | string;
+  diagnosis_confidence: number;
   last_event_at_utc: string | null;
   last_sync_at_utc: string;
   notify_event_key: RuntimeNotifyKey | string;

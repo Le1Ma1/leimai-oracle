@@ -78,7 +78,23 @@ const packs: Record<LocaleCode, LocalePack> = {
       enableNotify: "啟用通知",
       notifyDenied: "瀏覽器通知已被封鎖",
       toastClose: "關閉",
-      stateSource: "狀態來源"
+      stateSource: "狀態來源",
+      diagnosisTitle: "根因診斷",
+      diagnosisHint: "依據最近一輪指標評估阻塞點與建議修正",
+      objective: "當前目標",
+      recommendedProfile: "建議設定檔",
+      confidenceScore: "建議信心",
+      topBottlenecks: "前三瓶頸",
+      profileCompareTitle: "Profile 對照",
+      profileCompareHint: "比較各設定檔在歷史輪次的穩定度",
+      profileName: "設定檔",
+      roundCount: "輪次",
+      avgPassRate: "平均通過率",
+      avgAlpha: "平均全窗 Alpha",
+      avgVeto: "平均否決壓力",
+      avgQuality: "平均品質分數",
+      winnerProfile: "目前最佳",
+      gateHitRate: "閘門命中率"
     },
     enums: {
       STATUS_VETO_ALL: "全量否決保護",
@@ -126,7 +142,17 @@ const packs: Record<LocaleCode, LocalePack> = {
       SOURCE_SUPABASE: "Supabase 即時狀態",
       SOURCE_STATIC: "部署快照狀態",
       SOURCE_API: "API 狀態",
-      SOURCE_UNKNOWN: "未知來源"
+      SOURCE_UNKNOWN: "未知來源",
+      PROFILE_BASELINE: "基線穩定",
+      PROFILE_EVENT_EXPANSION: "事件擴張",
+      PROFILE_PRECISION_RECOVERY: "精度修復",
+      PROFILE_ALPHA_RESCUE: "Alpha 修復",
+      PROFILE_STABILITY_SCAN: "穩健掃描",
+      PROFILE_UNKNOWN: "未知設定檔",
+      OBJECTIVE_RECOVER_TRADE_FLOW: "恢復交易流量",
+      OBJECTIVE_RESTORE_PRECISION_COMPLIANCE: "恢復 Precision 下限達成",
+      OBJECTIVE_REDUCE_ALL_WINDOW_LOSS: "降低全窗虧損",
+      OBJECTIVE_STABILIZE_GENERALIZATION: "穩定泛化能力"
     }
   },
   "en-US": {
@@ -200,7 +226,23 @@ const packs: Record<LocaleCode, LocalePack> = {
       enableNotify: "Enable notifications",
       notifyDenied: "Browser notifications are blocked",
       toastClose: "Close",
-      stateSource: "State Source"
+      stateSource: "State Source",
+      diagnosisTitle: "Root-Cause Diagnosis",
+      diagnosisHint: "Identify blockers and the next corrective profile from latest metrics",
+      objective: "Current Objective",
+      recommendedProfile: "Recommended Profile",
+      confidenceScore: "Recommendation Confidence",
+      topBottlenecks: "Top Bottlenecks",
+      profileCompareTitle: "Profile Comparison",
+      profileCompareHint: "Stability comparison across profile history",
+      profileName: "Profile",
+      roundCount: "Rounds",
+      avgPassRate: "Avg Pass Rate",
+      avgAlpha: "Avg All-window Alpha",
+      avgVeto: "Avg Veto Pressure",
+      avgQuality: "Avg Quality Score",
+      winnerProfile: "Current Winner",
+      gateHitRate: "Gate Hit Rate"
     },
     enums: {
       STATUS_VETO_ALL: "Veto-All Safeguard",
@@ -248,7 +290,17 @@ const packs: Record<LocaleCode, LocalePack> = {
       SOURCE_SUPABASE: "Supabase live state",
       SOURCE_STATIC: "Deployment snapshot state",
       SOURCE_API: "API state",
-      SOURCE_UNKNOWN: "Unknown source"
+      SOURCE_UNKNOWN: "Unknown source",
+      PROFILE_BASELINE: "Baseline",
+      PROFILE_EVENT_EXPANSION: "Event Expansion",
+      PROFILE_PRECISION_RECOVERY: "Precision Recovery",
+      PROFILE_ALPHA_RESCUE: "Alpha Rescue",
+      PROFILE_STABILITY_SCAN: "Stability Scan",
+      PROFILE_UNKNOWN: "Unknown profile",
+      OBJECTIVE_RECOVER_TRADE_FLOW: "Recover trade flow",
+      OBJECTIVE_RESTORE_PRECISION_COMPLIANCE: "Restore precision-floor compliance",
+      OBJECTIVE_REDUCE_ALL_WINDOW_LOSS: "Reduce all-window loss",
+      OBJECTIVE_STABILIZE_GENERALIZATION: "Stabilize generalization"
     }
   }
 };

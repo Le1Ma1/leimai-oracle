@@ -162,6 +162,12 @@ body {
   color: #c8ffe1;
 }
 
+.missionAlert.info {
+  border: 1px solid rgba(255, 214, 127, 0.35);
+  background: rgba(56, 42, 14, 0.4);
+  color: #ffe8bc;
+}
+
 .topGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -219,6 +225,104 @@ body {
   display: grid;
   grid-template-columns: 1.25fr 1fr;
   gap: 14px;
+}
+
+.analysisGrid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.analysisHint {
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.8rem;
+  margin-bottom: 10px;
+}
+
+.diagnosisSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diagnosisSummary strong {
+  color: #ffdca2;
+}
+
+.bottleneckBlock {
+  margin-top: 10px;
+}
+
+.bottleneckList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.bottleneckList li {
+  display: grid;
+  grid-template-columns: 48px 1fr 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 214, 127, 0.22);
+  border-radius: 10px;
+  background: rgba(10, 10, 10, 0.58);
+}
+
+.bottleneckList .rank {
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  color: #f5c77d;
+}
+
+.bottleneckList .reason {
+  color: rgba(248, 230, 200, 0.9);
+}
+
+.bottleneckList .severity {
+  text-align: right;
+  color: #ffb7b7;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+}
+
+.winnerLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.winnerLine strong {
+  color: #ffdca2;
+}
+
+.profileTableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.profileTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.profileTable th,
+.profileTable td {
+  border-bottom: 1px solid rgba(255, 214, 127, 0.18);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.8rem;
+  color: rgba(248, 230, 200, 0.88);
+  white-space: nowrap;
+}
+
+.profileTable th {
+  color: rgba(248, 230, 200, 0.68);
+  font-weight: 600;
 }
 
 .roadmapList {
@@ -517,6 +621,9 @@ body {
     grid-template-columns: 1fr;
   }
   .roundMetrics {
+    grid-template-columns: 1fr;
+  }
+  .diagnosisSummary {
     grid-template-columns: 1fr;
   }
   .ceoGrid {

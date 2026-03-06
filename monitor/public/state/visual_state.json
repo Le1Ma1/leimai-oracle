@@ -1,7 +1,7 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "last_synced_at": "2026-03-06T21:27:34Z",
-  "run_id": "iter_r2_bc43867bb9da",
+  "last_synced_at": "2026-03-06T22:01:45Z",
+  "run_id": "iter_r2_ae80f0c292c9",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
   "heartbeat_ok": true,
@@ -9,10 +9,10 @@
   "max_drawdown": 0.38314789068133304,
   "meta_diagnostics": {
     "precision_floor": 0.6,
-    "precision_floor_compliance_rate": 0.6000000000000001,
+    "precision_floor_compliance_rate": 0.6,
     "failsafe_veto_all_rate": 0.5833333333333334,
-    "veto_rate": 0.9819601880011058,
-    "threshold_selected": 0.5550000000000002
+    "veto_rate": 0.9816837157865634,
+    "threshold_selected": 0.5750000000000002
   },
   "rejection_breakdown": [
     {

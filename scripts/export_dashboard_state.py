@@ -38,6 +38,59 @@ REASON_MAP = {
     "walk_forward": "REASON_WF_FAIL",
 }
 
+PROFILE_OVERRIDE_PRESETS: dict[str, dict[str, str]] = {
+    "PROFILE_BASELINE": {
+        "ENGINE_META_LABEL_TP_MULT": "1.20",
+        "ENGINE_META_LABEL_SL_MULT": "1.00",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
+        "ENGINE_META_LABEL_VOL_WINDOW": "24",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.45",
+        "ENGINE_META_LABEL_MIN_EVENTS": "60",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+    "PROFILE_EVENT_EXPANSION": {
+        "ENGINE_META_LABEL_TP_MULT": "1.05",
+        "ENGINE_META_LABEL_SL_MULT": "1.05",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "32",
+        "ENGINE_META_LABEL_VOL_WINDOW": "18",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.36",
+        "ENGINE_META_LABEL_MIN_EVENTS": "30",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "4",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+    "PROFILE_PRECISION_RECOVERY": {
+        "ENGINE_META_LABEL_TP_MULT": "1.28",
+        "ENGINE_META_LABEL_SL_MULT": "0.92",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "20",
+        "ENGINE_META_LABEL_VOL_WINDOW": "20",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.50",
+        "ENGINE_META_LABEL_MIN_EVENTS": "55",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "6",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "2",
+    },
+    "PROFILE_ALPHA_RESCUE": {
+        "ENGINE_META_LABEL_TP_MULT": "1.12",
+        "ENGINE_META_LABEL_SL_MULT": "1.10",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "28",
+        "ENGINE_META_LABEL_VOL_WINDOW": "22",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.40",
+        "ENGINE_META_LABEL_MIN_EVENTS": "40",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+    "PROFILE_STABILITY_SCAN": {
+        "ENGINE_META_LABEL_TP_MULT": "1.20",
+        "ENGINE_META_LABEL_SL_MULT": "1.00",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
+        "ENGINE_META_LABEL_VOL_WINDOW": "22",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.46",
+        "ENGINE_META_LABEL_MIN_EVENTS": "50",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -481,6 +534,223 @@ def _collect_iteration_rounds(*, max_rounds: int, gate: dict[str, Any]) -> list[
     return out
 
 
+def _normalize_profile_key(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return "PROFILE_UNKNOWN"
+    if "baseline" in text:
+        return "PROFILE_BASELINE"
+    if "trade_floor" in text or "event_expansion" in text:
+        return "PROFILE_EVENT_EXPANSION"
+    if "precision" in text:
+        return "PROFILE_PRECISION_RECOVERY"
+    if "alpha" in text or "rescue" in text:
+        return "PROFILE_ALPHA_RESCUE"
+    if "stability" in text:
+        return "PROFILE_STABILITY_SCAN"
+    slug = "".join(ch if ch.isalnum() else "_" for ch in text).strip("_")
+    if not slug:
+        return "PROFILE_UNKNOWN"
+    return f"PROFILE_{slug.upper()}"
+
+
+def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    profile_rows: dict[str, dict[str, Any]] = {}
+    for row in rounds:
+        if not isinstance(row, dict):
+            continue
+        profile_key = _normalize_profile_key(row.get("round_profile"))
+        bucket = profile_rows.setdefault(
+            profile_key,
+            {
+                "profile_key": profile_key,
+                "rounds": 0,
+                "pass_sum": 0.0,
+                "alpha_sum": 0.0,
+                "veto_sum": 0.0,
+                "quality_sum": 0.0,
+                "gate_hits": 0,
+            },
+        )
+        bucket["rounds"] += 1
+        bucket["pass_sum"] += safe_float(row.get("validation_pass_rate"), 0.0)
+        bucket["alpha_sum"] += safe_float(row.get("all_window_alpha"), 0.0)
+        bucket["veto_sum"] += max(
+            safe_float(row.get("veto_rate"), 0.0),
+            safe_float(row.get("failsafe_veto_all_rate"), 0.0),
+        )
+        bucket["quality_sum"] += safe_float(row.get("quality_score"), 0.0)
+        bucket["gate_hits"] += 1 if bool(row.get("gate_hit")) else 0
+
+    rows: list[dict[str, Any]] = []
+    for profile_key, agg in profile_rows.items():
+        count = max(1, safe_int(agg.get("rounds"), 1))
+        rows.append(
+            {
+                "profile_key": profile_key,
+                "rounds": count,
+                "avg_pass_rate": safe_float(agg.get("pass_sum"), 0.0) / count,
+                "avg_all_window_alpha": safe_float(agg.get("alpha_sum"), 0.0) / count,
+                "avg_veto_pressure": safe_float(agg.get("veto_sum"), 0.0) / count,
+                "avg_quality_score": safe_float(agg.get("quality_sum"), 0.0) / count,
+                "gate_hit_rate": safe_float(agg.get("gate_hits"), 0.0) / count,
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            safe_float(item.get("avg_quality_score"), 0.0),
+            safe_float(item.get("avg_pass_rate"), 0.0),
+            safe_float(item.get("avg_all_window_alpha"), -999.0),
+        ),
+        reverse=True,
+    )
+    winner_profile_key = str(rows[0]["profile_key"]) if rows else "PROFILE_UNKNOWN"
+    return {
+        "winner_profile_key": winner_profile_key,
+        "rows": rows,
+        "sampled_rounds": len(rounds),
+    }
+
+
+def _diagnose_latest_round(*, latest_round: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
+    if not latest_round:
+        return {
+            "objective_key": "OBJECTIVE_STABILIZE_GENERALIZATION",
+            "recommended_profile_key": "PROFILE_BASELINE",
+            "confidence": 0.0,
+            "top_bottlenecks": [],
+        }
+
+    pass_rate = safe_float(latest_round.get("validation_pass_rate"), 0.0)
+    alpha_all = safe_float(latest_round.get("all_window_alpha"), 0.0)
+    dsr = safe_float(latest_round.get("dsr"), -10.0)
+    pbo = safe_float(latest_round.get("pbo"), 1.0)
+    precision_floor = safe_float(latest_round.get("precision_floor"), 0.0)
+    precision = safe_float(latest_round.get("precision"), 0.0)
+    floor_compliance = safe_float(latest_round.get("precision_floor_compliance_rate"), 0.0)
+    trades_total = safe_int(latest_round.get("trades_total_all_window"), 0)
+    veto_pressure = max(
+        safe_float(latest_round.get("veto_rate"), 0.0),
+        safe_float(latest_round.get("failsafe_veto_all_rate"), 0.0),
+    )
+    gate_pass = safe_float(gate.get("min_validation_pass_rate"), 0.20)
+    gate_alpha = safe_float(gate.get("min_all_window_alpha"), 0.0)
+    deploy_required = bool(gate.get("require_deploy_ready", True))
+    deploy_ready = bool(latest_round.get("deploy_ready"))
+
+    bottlenecks: list[dict[str, Any]] = []
+    if pass_rate < gate_pass:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_CV_FAIL",
+                "severity": min(1.0, max(0.0, (gate_pass - pass_rate) / max(1e-6, gate_pass))),
+                "observed": pass_rate,
+                "target": gate_pass,
+            }
+        )
+    if alpha_all <= gate_alpha:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_ALL_WINDOW_ALPHA",
+                "severity": min(1.0, max(0.0, (gate_alpha - alpha_all) / 2.0)),
+                "observed": alpha_all,
+                "target": gate_alpha,
+            }
+        )
+    if trades_total <= 0 or veto_pressure >= 0.90:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_TRADE_DENSITY_LOW",
+                "severity": min(1.0, max(veto_pressure, 0.8 if trades_total <= 0 else 0.0)),
+                "observed": float(trades_total),
+                "target": 1.0,
+            }
+        )
+    if floor_compliance < 0.70 or precision < precision_floor:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_LOW_PRECISION",
+                "severity": min(1.0, max(0.0, max(precision_floor - precision, 0.70 - floor_compliance))),
+                "observed": max(precision, floor_compliance),
+                "target": max(precision_floor, 0.70),
+            }
+        )
+    if dsr < -1.50:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_DSR_BELOW_MIN",
+                "severity": min(1.0, max(0.0, (-1.50 - dsr) / 2.5)),
+                "observed": dsr,
+                "target": -1.50,
+            }
+        )
+    if pbo > 0.35:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_HIGH_PBO",
+                "severity": min(1.0, max(0.0, (pbo - 0.35) / 0.65)),
+                "observed": pbo,
+                "target": 0.35,
+            }
+        )
+    if deploy_required and not deploy_ready:
+        bottlenecks.append(
+            {
+                "reason_key": "REASON_FINAL_SCORE_LOW",
+                "severity": 0.65,
+                "observed": 0.0,
+                "target": 1.0,
+            }
+        )
+
+    bottlenecks.sort(key=lambda item: safe_float(item.get("severity"), 0.0), reverse=True)
+    top = bottlenecks[:3]
+
+    if trades_total <= 0 or veto_pressure >= 0.95:
+        objective_key = "OBJECTIVE_RECOVER_TRADE_FLOW"
+        recommended_profile_key = "PROFILE_EVENT_EXPANSION"
+    elif floor_compliance < 0.60 or precision < precision_floor:
+        objective_key = "OBJECTIVE_RESTORE_PRECISION_COMPLIANCE"
+        recommended_profile_key = "PROFILE_PRECISION_RECOVERY"
+    elif alpha_all <= gate_alpha:
+        objective_key = "OBJECTIVE_REDUCE_ALL_WINDOW_LOSS"
+        recommended_profile_key = "PROFILE_ALPHA_RESCUE"
+    else:
+        objective_key = "OBJECTIVE_STABILIZE_GENERALIZATION"
+        recommended_profile_key = "PROFILE_STABILITY_SCAN"
+
+    severity_peak = safe_float(top[0].get("severity"), 0.0) if top else 0.0
+    confidence = min(0.95, max(0.30, 0.45 + (0.40 * severity_peak)))
+    return {
+        "objective_key": objective_key,
+        "recommended_profile_key": recommended_profile_key,
+        "recommended_overrides": PROFILE_OVERRIDE_PRESETS.get(
+            recommended_profile_key,
+            PROFILE_OVERRIDE_PRESETS["PROFILE_BASELINE"],
+        ),
+        "confidence": confidence,
+        "top_bottlenecks": top,
+    }
+
+
+def _latest_loop_profile_override(loop_state: dict[str, Any]) -> dict[str, Any]:
+    rounds = loop_state.get("rounds", [])
+    if not isinstance(rounds, list) or not rounds:
+        return {}
+    last = rounds[-1]
+    if not isinstance(last, dict):
+        return {}
+    overrides = last.get("overrides")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    profile_name = str(last.get("profile_name") or "")
+    return {
+        "profile_name": profile_name,
+        "overrides": overrides,
+    }
+
+
 def _load_training_loop_state() -> dict[str, Any]:
     return read_json(CONTROL_ROOT / "training_loop_state.json")
 
@@ -523,6 +793,9 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
     stagnation_count = safe_int(loop_state.get("stagnation_count"), 0)
     hard_cap = safe_int(loop_state.get("hard_cap"), 50)
     loop_runs = safe_int(loop_state.get("loop_runs"), 0)
+    diagnosis = _diagnose_latest_round(latest_round=latest_round, gate=gate)
+    profile_comparison = _build_profile_comparison(rounds)
+    last_loop_profile = _latest_loop_profile_override(loop_state)
 
     return {
         "artifact_version": "phase1_training_roadmap_v1",
@@ -539,6 +812,9 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
             "hard_cap": hard_cap,
             "loop_runs": loop_runs,
         },
+        "diagnosis": diagnosis,
+        "profile_comparison": profile_comparison,
+        "latest_loop_profile": last_loop_profile,
         "latest_round": latest_round,
         "best_round": best_round,
         "rounds": rounds,
@@ -668,12 +944,16 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
     )
     phase_key = _runtime_phase_key(pipeline_state)
 
-    run_id = str(
-        live_status.get("active_run_id")
-        or visual_state.get("run_id")
-        or ((training_roadmap.get("latest_round") or {}).get("run_id") if isinstance(training_roadmap.get("latest_round"), dict) else "")
-        or ""
-    ).strip()
+    live_run_id = str(live_status.get("active_run_id") or "").strip()
+    visual_run_id = str(visual_state.get("run_id") or "").strip()
+    latest_round_payload = training_roadmap.get("latest_round")
+    roadmap_run_id = ""
+    if isinstance(latest_round_payload, dict):
+        roadmap_run_id = str(latest_round_payload.get("run_id") or "").strip()
+    if runtime_status_key == "RUNTIME_RUNNING":
+        run_id = live_run_id or visual_run_id or roadmap_run_id
+    else:
+        run_id = visual_run_id or roadmap_run_id or live_run_id
     started_at_utc = _extract_started_at(live_status, loop_state)
     started_dt = parse_iso_utc(started_at_utc)
     now_dt = parse_iso_utc(latest_synced) or datetime.now(timezone.utc)
@@ -720,6 +1000,15 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         if runtime_status_key == "RUNTIME_COMPLETED"
         else ""
     )
+    diagnosis = training_roadmap.get("diagnosis")
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    top_bottlenecks = diagnosis.get("top_bottlenecks")
+    top_bottlenecks = top_bottlenecks if isinstance(top_bottlenecks, list) else []
+    top_reason_key = ""
+    if top_bottlenecks:
+        first = top_bottlenecks[0]
+        if isinstance(first, dict):
+            top_reason_key = str(first.get("reason_key") or "")
 
     last_event_at_utc = _extract_last_event_ts(live_status)
     notify_event_key, notify_seq = _notify_event_key(
@@ -750,6 +1039,10 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "gate_block_reason_key": gate_block_reason_key,
         "stalled_reason_key": stalled_reason_key,
         "completion_reason_key": completion_reason_key,
+        "diagnosis_objective_key": str(diagnosis.get("objective_key") or ""),
+        "diagnosis_recommended_profile_key": str(diagnosis.get("recommended_profile_key") or ""),
+        "diagnosis_top_reason_key": top_reason_key,
+        "diagnosis_confidence": safe_float(diagnosis.get("confidence"), 0.0),
         "last_event_at_utc": last_event_at_utc or None,
         "last_sync_at_utc": str(visual_state.get("last_synced_at") or latest_synced),
         "notify_event_key": notify_event_key,

@@ -344,6 +344,8 @@ export default function HomePage() {
     () => (roadmap?.best_round && "run_id" in roadmap.best_round ? roadmap.best_round : null),
     [roadmap?.best_round]
   );
+  const diagnosis = roadmap?.diagnosis || null;
+  const profileComparisonRows = useMemo(() => roadmap?.profile_comparison?.rows || [], [roadmap?.profile_comparison?.rows]);
 
   return (
     <main className="dashboard">
@@ -445,6 +447,13 @@ export default function HomePage() {
         {runtime?.runtime_status_key === "RUNTIME_COMPLETED" ? (
           <div className="missionAlert ok">
             <strong>{t(locale, "completionReason")}:</strong> {t(locale, runtime.completion_reason_key || "COMPLETION_UNKNOWN")}
+          </div>
+        ) : null}
+        {gateBlocked && diagnosis ? (
+          <div className="missionAlert info">
+            <strong>{t(locale, "objective")}:</strong> {t(locale, diagnosis.objective_key || "OBJECTIVE_STABILIZE_GENERALIZATION")} |{" "}
+            <strong>{t(locale, "recommendedProfile")}:</strong> {t(locale, diagnosis.recommended_profile_key || "PROFILE_BASELINE")} |{" "}
+            <strong>{t(locale, "confidenceScore")}:</strong> {formatPct(Number(diagnosis.confidence || 0))}
           </div>
         ) : null}
       </section>
@@ -591,6 +600,84 @@ export default function HomePage() {
                 <strong className="mono">{visualState?.run_id || t(locale, "na")}</strong>
               </div>
             </div>
+          </article>
+        </div>
+
+        <div className="analysisGrid">
+          <article className="card diagnosisCard">
+            <div className="cardHeader">{t(locale, "diagnosisTitle")}</div>
+            <div className="analysisHint">{t(locale, "diagnosisHint")}</div>
+            <div className="diagnosisSummary">
+              <div>
+                <span className="label">{t(locale, "objective")}</span>
+                <strong>{t(locale, diagnosis?.objective_key || "OBJECTIVE_STABILIZE_GENERALIZATION")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "recommendedProfile")}</span>
+                <strong>{t(locale, diagnosis?.recommended_profile_key || "PROFILE_BASELINE")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "confidenceScore")}</span>
+                <strong>{formatPct(Number(diagnosis?.confidence || 0))}</strong>
+              </div>
+            </div>
+            <div className="bottleneckBlock">
+              <div className="label">{t(locale, "topBottlenecks")}</div>
+              {(diagnosis?.top_bottlenecks || []).length ? (
+                <ul className="bottleneckList">
+                  {(diagnosis?.top_bottlenecks || []).map((item, idx) => (
+                    <li key={`${item.reason_key}-${idx}`}>
+                      <span className="rank">#{idx + 1}</span>
+                      <span className="reason">{t(locale, item.reason_key || "REASON_UNKNOWN")}</span>
+                      <span className="severity">{formatPct(Number(item.severity || 0))}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="empty">{t(locale, "na")}</div>
+              )}
+            </div>
+          </article>
+
+          <article className="card profileTableCard">
+            <div className="cardHeader">{t(locale, "profileCompareTitle")}</div>
+            <div className="analysisHint">{t(locale, "profileCompareHint")}</div>
+            <div className="winnerLine">
+              <span className="label">{t(locale, "winnerProfile")}</span>
+              <strong>{t(locale, roadmap?.profile_comparison?.winner_profile_key || "PROFILE_UNKNOWN")}</strong>
+            </div>
+            {profileComparisonRows.length ? (
+              <div className="profileTableWrap">
+                <table className="profileTable">
+                  <thead>
+                    <tr>
+                      <th>{t(locale, "profileName")}</th>
+                      <th>{t(locale, "roundCount")}</th>
+                      <th>{t(locale, "avgPassRate")}</th>
+                      <th>{t(locale, "avgAlpha")}</th>
+                      <th>{t(locale, "avgVeto")}</th>
+                      <th>{t(locale, "avgQuality")}</th>
+                      <th>{t(locale, "gateHitRate")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {profileComparisonRows.slice(0, 6).map((row) => (
+                      <tr key={`${row.profile_key}-${row.rounds}`}>
+                        <td>{t(locale, row.profile_key || "PROFILE_UNKNOWN")}</td>
+                        <td>{row.rounds}</td>
+                        <td>{formatPct(row.avg_pass_rate)}</td>
+                        <td>{formatSigned(row.avg_all_window_alpha)}</td>
+                        <td>{formatPct(row.avg_veto_pressure)}</td>
+                        <td>{formatNumber(row.avg_quality_score, 3)}</td>
+                        <td>{formatPct(row.gate_hit_rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty">{t(locale, "na")}</div>
+            )}
           </article>
         </div>
       </section>

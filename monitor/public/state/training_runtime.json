@@ -1,11 +1,11 @@
 {
   "artifact_version": "phase1_training_runtime_v1",
-  "generated_at_utc": "2026-03-06T21:27:34Z",
+  "generated_at_utc": "2026-03-06T22:01:45Z",
   "runtime_status_key": "RUNTIME_STALLED",
   "phase_key": "PHASE_WAITING",
-  "run_id": "iter_r2_bc43867bb9da",
+  "run_id": "iter_r2_ae80f0c292c9",
   "started_at_utc": "2026-03-06T21:06:52Z",
-  "elapsed_sec": 1242,
+  "elapsed_sec": 3293,
   "remaining_sec": null,
   "eta_utc": null,
   "eta_confidence": "low",
@@ -20,8 +20,12 @@
   "gate_block_reason_key": "STALL_TARGET_NOT_MET",
   "stalled_reason_key": "STALL_TARGET_NOT_MET",
   "completion_reason_key": "",
+  "diagnosis_objective_key": "OBJECTIVE_RECOVER_TRADE_FLOW",
+  "diagnosis_recommended_profile_key": "PROFILE_EVENT_EXPANSION",
+  "diagnosis_top_reason_key": "REASON_CV_FAIL",
+  "diagnosis_confidence": 0.8500000000000001,
   "last_event_at_utc": "2026-03-06T21:11:04Z",
-  "last_sync_at_utc": "2026-03-06T21:27:34Z",
+  "last_sync_at_utc": "2026-03-06T22:01:45Z",
   "notify_event_key": "",
-  "notify_seq": 9
+  "notify_seq": 14
 }

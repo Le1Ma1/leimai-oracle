@@ -166,25 +166,70 @@ def quality_score(metrics: dict[str, Any]) -> float:
     return float((0.35 * pass_norm) + (0.35 * alpha_norm) + (0.20 * deploy_norm) + (0.10 * robustness))
 
 
-def choose_meta_overrides(last_metrics: dict[str, Any] | None, loop_index: int) -> dict[str, str]:
-    # Baseline profile with finer threshold scan.
+PROFILE_PRESETS: dict[str, dict[str, str]] = {
+    "r1_baseline": {
+        "ENGINE_META_LABEL_TP_MULT": "1.20",
+        "ENGINE_META_LABEL_SL_MULT": "1.00",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
+        "ENGINE_META_LABEL_VOL_WINDOW": "24",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.45",
+        "ENGINE_META_LABEL_MIN_EVENTS": "60",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+    "r2_event_expansion": {
+        "ENGINE_META_LABEL_TP_MULT": "1.05",
+        "ENGINE_META_LABEL_SL_MULT": "1.05",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "32",
+        "ENGINE_META_LABEL_VOL_WINDOW": "18",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.36",
+        "ENGINE_META_LABEL_MIN_EVENTS": "30",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "4",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+    "r3_precision_recovery": {
+        "ENGINE_META_LABEL_TP_MULT": "1.28",
+        "ENGINE_META_LABEL_SL_MULT": "0.92",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "20",
+        "ENGINE_META_LABEL_VOL_WINDOW": "20",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.50",
+        "ENGINE_META_LABEL_MIN_EVENTS": "55",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "6",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "2",
+    },
+    "r4_alpha_rescue": {
+        "ENGINE_META_LABEL_TP_MULT": "1.12",
+        "ENGINE_META_LABEL_SL_MULT": "1.10",
+        "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "28",
+        "ENGINE_META_LABEL_VOL_WINDOW": "22",
+        "ENGINE_META_LABEL_THRESHOLD_MIN": "0.40",
+        "ENGINE_META_LABEL_MIN_EVENTS": "40",
+        "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+        "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
+    },
+}
+
+
+def choose_meta_overrides(
+    *,
+    last_metrics: dict[str, Any] | None,
+    loop_index: int,
+    stagnation_count: int,
+) -> tuple[str, dict[str, str]]:
     overrides: dict[str, str] = {
         "ENGINE_META_LABEL_THRESHOLD_STEP": "0.005",
         "ENGINE_META_LABEL_PROB_THRESHOLD_FALLBACK": "0.55",
     }
+
+    def _with_profile(profile_name: str) -> tuple[str, dict[str, str]]:
+        merged = dict(overrides)
+        merged.update(PROFILE_PRESETS.get(profile_name, PROFILE_PRESETS["r1_baseline"]))
+        if loop_index % 4 == 0 and profile_name in {"r1_baseline", "r4_alpha_rescue"}:
+            merged["ENGINE_META_LABEL_THRESHOLD_MIN"] = "0.44"
+        return profile_name, merged
+
     if last_metrics is None:
-        overrides.update(
-            {
-                "ENGINE_META_LABEL_TP_MULT": "1.20",
-                "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
-                "ENGINE_META_LABEL_VOL_WINDOW": "24",
-                "ENGINE_META_LABEL_THRESHOLD_MIN": "0.45",
-                "ENGINE_META_LABEL_MIN_EVENTS": "60",
-                "ENGINE_META_LABEL_CPCV_SPLITS": "5",
-                "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
-            }
-        )
-        return overrides
+        return _with_profile("r1_baseline")
 
     veto_rate = max(
         safe_float(last_metrics.get("veto_all_rate"), 0.0),
@@ -193,57 +238,19 @@ def choose_meta_overrides(last_metrics: dict[str, Any] | None, loop_index: int) 
     trades_total = safe_int(last_metrics.get("trades_total_all_window"), 0)
     floor_comp = safe_float(last_metrics.get("precision_floor_compliance_rate"), 0.0)
     pass_rate = safe_float(last_metrics.get("validation_pass_rate"), 0.0)
+    alpha_all = safe_float(last_metrics.get("all_window_alpha"), 0.0)
 
-    if veto_rate > 0.95 or trades_total <= 0:
-        overrides.update(
-            {
-                "ENGINE_META_LABEL_TP_MULT": "1.20",
-                "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
-                "ENGINE_META_LABEL_VOL_WINDOW": "24",
-                "ENGINE_META_LABEL_THRESHOLD_MIN": "0.45",
-                "ENGINE_META_LABEL_MIN_EVENTS": "60",
-                "ENGINE_META_LABEL_CPCV_SPLITS": "5",
-                "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
-            }
-        )
-    elif floor_comp < 0.40:
-        overrides.update(
-            {
-                "ENGINE_META_LABEL_TP_MULT": "1.30",
-                "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "20",
-                "ENGINE_META_LABEL_VOL_WINDOW": "22",
-                "ENGINE_META_LABEL_THRESHOLD_MIN": "0.47",
-                "ENGINE_META_LABEL_MIN_EVENTS": "70",
-                "ENGINE_META_LABEL_CPCV_SPLITS": "5",
-                "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1",
-            }
-        )
-    elif pass_rate < 0.20:
-        overrides.update(
-            {
-                "ENGINE_META_LABEL_TP_MULT": "1.25",
-                "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "22",
-                "ENGINE_META_LABEL_VOL_WINDOW": "24",
-                "ENGINE_META_LABEL_THRESHOLD_MIN": "0.46",
-                "ENGINE_META_LABEL_MIN_EVENTS": "65",
-            }
-        )
-    else:
-        overrides.update(
-            {
-                "ENGINE_META_LABEL_TP_MULT": "1.35",
-                "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "20",
-                "ENGINE_META_LABEL_VOL_WINDOW": "20",
-                "ENGINE_META_LABEL_THRESHOLD_MIN": "0.50",
-                "ENGINE_META_LABEL_MIN_EVENTS": "80",
-                "ENGINE_META_LABEL_CPCV_SPLITS": "6",
-                "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "2",
-            }
-        )
+    if stagnation_count >= 2:
+        cycle = ["r2_event_expansion", "r4_alpha_rescue", "r3_precision_recovery"]
+        return _with_profile(cycle[(loop_index + stagnation_count) % len(cycle)])
 
-    if loop_index % 4 == 0:
-        overrides["ENGINE_META_LABEL_THRESHOLD_MIN"] = "0.44"
-    return overrides
+    if trades_total <= 0 or veto_rate > 0.95:
+        return _with_profile("r2_event_expansion")
+    if floor_comp < 0.40:
+        return _with_profile("r3_precision_recovery")
+    if pass_rate < 0.20 or alpha_all <= 0.0:
+        return _with_profile("r4_alpha_rescue")
+    return _with_profile("r1_baseline")
 
 
 def alpha_supervisor_cmd(args: argparse.Namespace) -> list[str]:
@@ -369,7 +376,11 @@ def main() -> int:
 
         while loop_runs < hard_cap:
             loop_index = loop_runs + 1
-            overrides = choose_meta_overrides(last_metrics=last_metrics, loop_index=loop_index)
+            profile_name, overrides = choose_meta_overrides(
+                last_metrics=last_metrics,
+                loop_index=loop_index,
+                stagnation_count=stagnation_count,
+            )
             env = os.environ.copy()
             env.update(overrides)
 
@@ -391,6 +402,7 @@ def main() -> int:
                 "loop_index": loop_index,
                 "started_at_utc": started_at,
                 "ended_at_utc": now_iso(),
+                "profile_name": profile_name,
                 "overrides": overrides,
                 "metrics": metrics,
                 "gate_hit": this_gate_hit,
