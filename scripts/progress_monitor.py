@@ -826,9 +826,12 @@ def _append_history(path: Path, status: dict[str, Any]) -> bool:
 def _export_dashboard_state(repo_root: Path, timeout_sec: float) -> tuple[bool, str]:
     cmd = ["python", "scripts/export_dashboard_state.py"]
     try:
+        env = os.environ.copy()
+        env["DASHBOARD_PUBLIC_SNAPSHOT_WRITE"] = "0"
         proc = subprocess.run(
             cmd,
             cwd=str(repo_root),
+            env=env,
             check=False,
             capture_output=True,
             text=True,

@@ -1,6 +1,6 @@
 {
   "artifact_version": "phase1_training_roadmap_v1",
-  "generated_at_utc": "2026-03-06T20:50:22Z",
+  "generated_at_utc": "2026-03-06T20:52:27Z",
   "status_key": "TRAINING_STATUS_RUNNING",
   "gate": {
     "min_validation_pass_rate": 0.2,
@@ -9,19 +9,19 @@
     "required_streak": 2
   },
   "summary": {
-    "rounds_total": 23,
+    "rounds_total": 24,
     "current_streak": 0,
     "required_streak": 2,
     "best_quality_score": 0.715879282021521,
-    "stagnation_count": 4,
+    "stagnation_count": 5,
     "stagnation_rounds": 6,
     "hard_cap": 50,
-    "loop_runs": 5
+    "loop_runs": 6
   },
   "latest_round": {
-    "round_index": 23,
-    "ts_utc": "2026-03-06T20:41:41.739998+00:00",
-    "run_id": "iter_r1_e23a684b6a18",
+    "round_index": 24,
+    "ts_utc": "2026-03-06T20:52:23.490490+00:00",
+    "run_id": "iter_r1_b0221eba554b",
     "status_key": "STATUS_STALLED",
     "regime_key": "REGIME_VETO_HOLD",
     "validation_pass_rate": 0.0,
@@ -88,7 +88,7 @@
         "count": 7
       }
     ],
-    "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T204141Z_bedcb5bf.json",
+    "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T205223Z_34cabd69.json",
     "gate_hit": false,
     "quality_score": 0.075
   },
@@ -1491,6 +1491,80 @@
         }
       ],
       "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T204141Z_bedcb5bf.json",
+      "gate_hit": false,
+      "quality_score": 0.075
+    },
+    {
+      "round_index": 24,
+      "ts_utc": "2026-03-06T20:52:23.490490+00:00",
+      "run_id": "iter_r1_b0221eba554b",
+      "status_key": "STATUS_STALLED",
+      "regime_key": "REGIME_VETO_HOLD",
+      "validation_pass_rate": 0.0,
+      "all_window_alpha": -8.350314790341695,
+      "deploy_ready": false,
+      "deploy_symbols": 0,
+      "deploy_rules": 0,
+      "trades_total_all_window": 0,
+      "trades_avg_all_window": 0.0,
+      "pbo": 0.5,
+      "dsr": -2.2293078072747154,
+      "precision": 0.0,
+      "f1": 0.0,
+      "pr_auc": 0.44906511505211444,
+      "precision_floor": 0.6,
+      "precision_floor_compliance_rate": 0.6000000000000001,
+      "failsafe_veto_all_rate": 0.5833333333333334,
+      "veto_rate": 0.9819601880011058,
+      "threshold_selected": 0.5550000000000002,
+      "primary_bottleneck": "validation_quality",
+      "recommended_action": "strengthen_robustness_and_reduce_overfit",
+      "decision_rationale": "validation_pass_rate=0.0000, median_final_score=0.4254 below convergence target",
+      "round_profile": "r2_trade_floor_90",
+      "config_snapshot": {
+        "trade_floor": 90,
+        "rsi_windows": [
+          14,
+          21
+        ],
+        "rsi_lower_bounds": [
+          30,
+          35
+        ],
+        "rsi_upper_bounds": [
+          65,
+          70
+        ]
+      },
+      "objective_balance_score": 0.075,
+      "rejection_top_reason_key": "REASON_DSR_BELOW_MIN",
+      "rejection_breakdown": [
+        {
+          "reason_key": "REASON_DSR_BELOW_MIN",
+          "count": 12
+        },
+        {
+          "reason_key": "REASON_CV_FAIL",
+          "count": 8
+        },
+        {
+          "reason_key": "REASON_FINAL_SCORE_LOW",
+          "count": 8
+        },
+        {
+          "reason_key": "REASON_LOW_PRECISION",
+          "count": 7
+        },
+        {
+          "reason_key": "REASON_HIGH_PBO",
+          "count": 7
+        },
+        {
+          "reason_key": "REASON_WF_FAIL",
+          "count": 7
+        }
+      ],
+      "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T205223Z_34cabd69.json",
       "gate_hit": false,
       "quality_score": 0.075
     }

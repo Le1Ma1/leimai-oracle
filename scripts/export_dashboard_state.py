@@ -885,15 +885,22 @@ def main() -> int:
     public_visual_path = PUBLIC_STATE_ROOT / "visual_state.json"
     public_training_path = PUBLIC_STATE_ROOT / "training_roadmap.json"
     public_runtime_path = PUBLIC_STATE_ROOT / "training_runtime.json"
+    write_public_snapshots = _env_text("DASHBOARD_PUBLIC_SNAPSHOT_WRITE", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
     write_json(monitor_evolution_path, evolution_validation)
     write_json(monitor_visual_path, visual_state)
     write_json(monitor_training_path, training_roadmap)
     write_json(monitor_runtime_path, training_runtime)
-    write_json(public_evolution_path, evolution_validation)
-    write_json(public_visual_path, visual_state)
-    write_json(public_training_path, training_roadmap)
-    write_json(public_runtime_path, training_runtime)
+    if write_public_snapshots:
+        write_json(public_evolution_path, evolution_validation)
+        write_json(public_visual_path, visual_state)
+        write_json(public_training_path, training_roadmap)
+        write_json(public_runtime_path, training_runtime)
     supabase_sync = _supabase_state_sync(
         {
             "evolution_validation.json": evolution_validation,
@@ -916,6 +923,7 @@ def main() -> int:
                 "public_visual": str(public_visual_path),
                 "public_training": str(public_training_path),
                 "public_runtime": str(public_runtime_path),
+                "public_snapshot_written": write_public_snapshots,
                 "run_id": evolution_validation.get("run_id"),
                 "all_window_alpha": evolution_validation.get("metrics", {}).get("all_window_alpha"),
                 "status_key": visual_state.get("status_key"),
