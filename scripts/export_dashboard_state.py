@@ -610,14 +610,14 @@ def _extract_started_at(live_status: dict[str, Any], loop_state: dict[str, Any])
 def _runtime_status_key(*, pipeline_state: str, loop_status: str, has_active_process: bool) -> str:
     state = str(pipeline_state or "").strip().lower()
     loop = str(loop_status or "").strip().upper()
-    if loop == "TRAINING_STATUS_CONVERGED":
+    if state in {"running", "iterate", "iterating", "validation", "validating", "finalizing"}:
+        return "RUNTIME_RUNNING"
+    if loop == "TRAINING_STATUS_CONVERGED" and not has_active_process:
         return "RUNTIME_COMPLETED"
-    if loop in {"TRAINING_STATUS_STAGNATED", "TRAINING_STATUS_HALTED"}:
+    if loop in {"TRAINING_STATUS_STAGNATED", "TRAINING_STATUS_HALTED"} and not has_active_process:
         return "RUNTIME_STALLED"
     if state == "stalled":
         return "RUNTIME_STALLED"
-    if state in {"running", "iterate", "iterating", "validation", "validating", "finalizing"}:
-        return "RUNTIME_RUNNING"
     if has_active_process:
         return "RUNTIME_RUNNING"
     return "RUNTIME_IDLE"
