@@ -1,7 +1,7 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "last_synced_at": "2026-03-06T21:01:24Z",
-  "run_id": "iter_r2_e1d55011f291",
+  "last_synced_at": "2026-03-06T21:27:34Z",
+  "run_id": "iter_r2_bc43867bb9da",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
   "heartbeat_ok": true,

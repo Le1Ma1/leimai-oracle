@@ -171,6 +171,9 @@ export interface TrainingRuntime {
   tasks_done: number;
   tasks_total: number;
   tasks_pct: number;
+  progress_completed: boolean;
+  gate_blocked: boolean;
+  gate_block_reason_key: RuntimeStallReasonKey | string;
   stalled_reason_key: RuntimeStallReasonKey | string;
   completion_reason_key: RuntimeCompletionReasonKey | string;
   last_event_at_utc: string | null;

@@ -180,8 +180,15 @@ export default function HomePage() {
     if (!runtime) {
       return 0;
     }
+    if (runtime.progress_completed) {
+      return 100;
+    }
     return clamp(Number(runtime.tasks_pct || 0), 0, 100);
   }, [runtime]);
+
+  const gateBlocked = useMemo(() => {
+    return Boolean(runtime?.gate_blocked && String(runtime?.gate_block_reason_key || "").length > 0);
+  }, [runtime?.gate_block_reason_key, runtime?.gate_blocked]);
 
   const runtimeEtaConfidence = useMemo(() => {
     const key = String(runtime?.eta_confidence || "low").toLowerCase();
@@ -418,14 +425,19 @@ export default function HomePage() {
             <span>
               {t(locale, "tasks")}: {runtime?.tasks_done ?? 0}/{runtime?.tasks_total ?? 0}
             </span>
-            <span>{formatPct((runtime?.tasks_pct ?? 0) / 100)}</span>
+            <span>{formatPct(runtimeProgressPct / 100)}</span>
           </div>
           <div className="progressBar">
             <span style={{ width: `${runtimeProgressPct}%` }} />
           </div>
         </div>
 
-        {runtime?.runtime_status_key === "RUNTIME_STALLED" ? (
+        {gateBlocked ? (
+          <div className="missionAlert warn">
+            <strong>{t(locale, "stallReason")}:</strong> {t(locale, runtime?.gate_block_reason_key || "STALL_TARGET_NOT_MET")}
+          </div>
+        ) : null}
+        {!gateBlocked && runtime?.runtime_status_key === "RUNTIME_STALLED" ? (
           <div className="missionAlert warn">
             <strong>{t(locale, "stallReason")}:</strong> {t(locale, runtime.stalled_reason_key || "STALL_UNKNOWN")}
           </div>

@@ -579,6 +579,13 @@ def _runtime_completion_reason_key(loop_status: str) -> str:
     return "COMPLETION_UNKNOWN"
 
 
+def _gate_block_reason_key(promotion_block_reason: str) -> str:
+    block = str(promotion_block_reason or "").strip().lower()
+    if block.startswith("target_not_met:"):
+        return "STALL_TARGET_NOT_MET"
+    return ""
+
+
 def _extract_last_event_ts(live_status: dict[str, Any]) -> str:
     events = live_status.get("last_events", [])
     if isinstance(events, list) and events:
@@ -689,12 +696,15 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
     tasks_done = safe_int(progress.get("tasks_done"), 0)
     tasks_total = safe_int(progress.get("tasks_total"), 0)
     tasks_pct = safe_float(progress.get("tasks_pct"), 0.0)
+    progress_completed = bool(tasks_total > 0 and tasks_done >= tasks_total)
     cycle_current = safe_int(cycle.get("current"), 0)
     cycle_total = safe_int(cycle.get("total"), 0)
     cycle_pct = safe_float(cycle.get("pct"), 0.0)
 
     stall_reason = str(live_status.get("stall_reason") or "").strip()
     promotion_block_reason = str(live_status.get("promotion_block_reason") or "").strip()
+    gate_block_reason_key = _gate_block_reason_key(promotion_block_reason)
+    gate_blocked = bool(gate_block_reason_key)
     stalled_reason_key = (
         _runtime_stall_reason_key(
             stall_reason=stall_reason,
@@ -735,6 +745,9 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "tasks_done": tasks_done,
         "tasks_total": tasks_total,
         "tasks_pct": tasks_pct,
+        "progress_completed": progress_completed,
+        "gate_blocked": gate_blocked,
+        "gate_block_reason_key": gate_block_reason_key,
         "stalled_reason_key": stalled_reason_key,
         "completion_reason_key": completion_reason_key,
         "last_event_at_utc": last_event_at_utc or None,
