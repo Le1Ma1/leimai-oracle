@@ -1,8 +1,8 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "generated_at_utc": "2026-03-06T20:46:51Z",
-  "source_generated_at_utc": "2026-03-06T20:39:36.458432+00:00",
-  "run_id": "iter_r2_8e008ecc254a",
+  "generated_at_utc": "2026-03-06T20:50:22Z",
+  "source_generated_at_utc": "2026-03-06T20:45:05.820645+00:00",
+  "run_id": "iter_r1_b0221eba554b",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
   "metrics": {
