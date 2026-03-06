@@ -1,0 +1,253 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(196, 146, 46, 0.18), transparent 58%),
+    radial-gradient(1000px 400px at 10% -25%, rgba(117, 61, 168, 0.22), transparent 62%),
+    #060606;
+  color: #f2e8d5;
+  font-family: "Inter", "Noto Sans TC", sans-serif;
+}
+
+.dashboard {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.6vw, 2rem);
+  letter-spacing: 0.02em;
+  font-weight: 700;
+}
+
+.header p {
+  margin: 8px 0 0;
+  color: rgba(242, 232, 213, 0.72);
+  font-size: 0.95rem;
+}
+
+.localeButton {
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  color: #ffe5a8;
+  background: linear-gradient(135deg, rgba(15, 15, 15, 0.95), rgba(37, 28, 10, 0.92));
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.card {
+  border: 1px solid rgba(255, 214, 127, 0.24);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(150deg, rgba(14, 14, 14, 0.95), rgba(6, 6, 6, 0.96));
+  box-shadow:
+    0 0 30px rgba(212, 175, 55, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.label {
+  display: block;
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  margin-bottom: 8px;
+}
+
+.value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #ffe4af;
+}
+
+.subtle {
+  margin-top: 8px;
+  display: block;
+  color: rgba(248, 230, 200, 0.62);
+  font-size: 0.75rem;
+}
+
+.heartbeatWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pulse {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  display: inline-block;
+  position: relative;
+}
+
+.pulse::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: inherit;
+  opacity: 0.28;
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+.pulse.ok {
+  background: #42ffa5;
+}
+
+.pulse.ok::after {
+  background: rgba(66, 255, 165, 0.24);
+}
+
+.pulse.stale {
+  background: #ff6a7a;
+}
+
+.pulse.stale::after {
+  background: rgba(255, 106, 122, 0.24);
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.6;
+  }
+  80% {
+    transform: scale(1.15);
+    opacity: 0.05;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+.ceoBlock {
+  border: 1px solid rgba(255, 214, 127, 0.24);
+  border-radius: 14px;
+  background: linear-gradient(140deg, rgba(10, 10, 10, 0.94), rgba(8, 8, 8, 0.96));
+}
+
+.ceoBlock > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ceoBlock > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ceoBlock > summary span {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #ffe5b6;
+}
+
+.ceoBlock > summary small {
+  color: rgba(248, 230, 200, 0.66);
+}
+
+.ceoGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 0 16px 16px;
+}
+
+.chartCard {
+  min-height: 350px;
+}
+
+.diagnostics {
+  grid-column: 1 / -1;
+}
+
+.cardHeader {
+  color: #ffe7bd;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.diagnosticsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.diagnosticsGrid strong {
+  font-size: 1rem;
+  color: #ffdca2;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.9rem;
+}
+
+.errorBox,
+.empty {
+  border: 1px solid rgba(255, 118, 134, 0.38);
+  background: rgba(63, 17, 25, 0.4);
+  color: #ffc9d0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 1100px) {
+  .topGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ceoGrid {
+    grid-template-columns: 1fr;
+  }
+  .diagnosticsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard {
+    padding: 20px 14px 30px;
+  }
+  .header {
+    flex-direction: column;
+  }
+  .topGrid {
+    grid-template-columns: 1fr;
+  }
+  .diagnosticsGrid {
+    grid-template-columns: 1fr;
+  }
+}

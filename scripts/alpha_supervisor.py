@@ -85,6 +85,15 @@ def _run(cmd: list[str], env: dict[str, str]) -> None:
         raise RuntimeError(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
 
 
+def _export_dashboard_state(repo_root: Path, env: dict[str, str]) -> None:
+    cmd = ["python", "scripts/export_dashboard_state.py"]
+    proc = subprocess.run(cmd, cwd=str(repo_root), env=env, check=False)
+    if proc.returncode != 0:
+        print(f"[warn] dashboard state export skipped (code={proc.returncode})", file=sys.stderr)
+        return
+    print("[info] dashboard state exported (evolution_validation.json + visual_state.json)")
+
+
 def _start_progress_monitor(repo_root: Path, interval: float) -> tuple[subprocess.Popen[str], Any, Any]:
     logs_root = repo_root / "engine" / "artifacts" / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
@@ -706,6 +715,7 @@ def main() -> int:
             )
 
         _print_summary(summary_payload=latest_summary_payload, deploy_payload=latest_deploy_payload)
+        _export_dashboard_state(repo_root=repo_root, env=base_env)
         return 0
     finally:
         _stop_progress_monitor(proc=monitor_proc, out_file=monitor_out, err_file=monitor_err)
