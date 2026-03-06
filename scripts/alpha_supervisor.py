@@ -94,7 +94,7 @@ def _export_dashboard_state(repo_root: Path, env: dict[str, str]) -> None:
     print("[info] dashboard state exported (evolution_validation.json + visual_state.json + training_roadmap.json + training_runtime.json)")
 
 
-def _start_progress_monitor(repo_root: Path, interval: float) -> tuple[subprocess.Popen[str], Any, Any]:
+def _start_progress_monitor(repo_root: Path, interval: float, export_interval: float) -> tuple[subprocess.Popen[str], Any, Any]:
     logs_root = repo_root / "engine" / "artifacts" / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -107,6 +107,8 @@ def _start_progress_monitor(repo_root: Path, interval: float) -> tuple[subproces
         "scripts/progress_monitor.py",
         "--interval",
         str(max(0.2, float(interval))),
+        "--export-dashboard-state-interval",
+        str(max(0.0, float(export_interval))),
     ]
     proc = subprocess.Popen(
         cmd,
@@ -115,7 +117,7 @@ def _start_progress_monitor(repo_root: Path, interval: float) -> tuple[subproces
         stderr=err_file,
         text=True,
     )
-    print(f"[monitor] started pid={proc.pid} interval={interval}s")
+    print(f"[monitor] started pid={proc.pid} interval={interval}s export_interval={export_interval}s")
     print(f"[monitor] out_log={out_path}")
     print(f"[monitor] err_log={err_path}")
     return proc, out_file, err_file
@@ -559,6 +561,12 @@ def main() -> int:
         help="Start/stop progress monitor automatically during supervision.",
     )
     parser.add_argument("--monitor-interval", type=float, default=2.0, help="Progress monitor refresh interval seconds.")
+    parser.add_argument(
+        "--monitor-export-interval",
+        type=float,
+        default=10.0,
+        help="Dashboard state export interval seconds while monitor is running (0 disables).",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -617,6 +625,7 @@ def main() -> int:
             monitor_proc, monitor_out, monitor_err = _start_progress_monitor(
                 repo_root=repo_root,
                 interval=max(0.2, float(args.monitor_interval)),
+                export_interval=max(0.0, float(args.monitor_export_interval)),
             )
 
     try:

@@ -10,6 +10,7 @@ const POLL_INTERVAL_MS = 5000;
 
 type ToastLevel = "info" | "warn" | "success";
 type ToastItem = { id: number; level: ToastLevel; message: string };
+type StateFetch<T> = { payload: T; sourceKey: string };
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -66,12 +67,29 @@ function toastLevelByNotify(key: string): ToastLevel {
   return "info";
 }
 
+async function fetchStateFile<T>(name: string, stamp: string): Promise<StateFetch<T>> {
+  const candidates = [`/api/state/${name}?ts=${stamp}`, `/state/${name}?ts=${stamp}`];
+  for (const url of candidates) {
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) {
+      continue;
+    }
+    const sourceKey = String(
+      resp.headers.get("x-state-source") || (url.startsWith("/api/state/") ? "SOURCE_API" : "SOURCE_STATIC")
+    );
+    const payload = (await resp.json()) as T;
+    return { payload, sourceKey };
+  }
+  throw new Error(`STATE_FETCH_FAILED:${name}`);
+}
+
 export default function HomePage() {
   const [locale, setLocale] = useState<LocaleCode>("en-US");
   const [visualState, setVisualState] = useState<VisualState | null>(null);
   const [evolution, setEvolution] = useState<EvolutionValidation | null>(null);
   const [roadmap, setRoadmap] = useState<TrainingRoadmap | null>(null);
   const [runtime, setRuntime] = useState<TrainingRuntime | null>(null);
+  const [stateSourceKey, setStateSourceKey] = useState<string>("SOURCE_UNKNOWN");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [notificationPermission, setNotificationPermission] = useState<string>("default");
   const [error, setError] = useState<string>("");
@@ -103,32 +121,26 @@ export default function HomePage() {
     const fetchState = async () => {
       try {
         const stamp = `${Date.now()}`;
-        const [vRes, eRes, rRes, rtRes] = await Promise.all([
-          fetch(`/state/visual_state.json?ts=${stamp}`, { cache: "no-store" }),
-          fetch(`/state/evolution_validation.json?ts=${stamp}`, { cache: "no-store" }),
-          fetch(`/state/training_roadmap.json?ts=${stamp}`, { cache: "no-store" }),
-          fetch(`/state/training_runtime.json?ts=${stamp}`, { cache: "no-store" })
+        const [vData, eData, rData, rtData] = await Promise.all([
+          fetchStateFile<VisualState>("visual_state.json", stamp),
+          fetchStateFile<EvolutionValidation>("evolution_validation.json", stamp),
+          fetchStateFile<TrainingRoadmap>("training_roadmap.json", stamp),
+          fetchStateFile<TrainingRuntime>("training_runtime.json", stamp)
         ]);
-        if (!vRes.ok || !eRes.ok || !rRes.ok || !rtRes.ok) {
-          throw new Error("STATE_FETCH_FAILED");
-        }
-        const vPayload = (await vRes.json()) as VisualState;
-        const ePayload = (await eRes.json()) as EvolutionValidation;
-        const rPayload = (await rRes.json()) as TrainingRoadmap;
-        const rtPayload = (await rtRes.json()) as TrainingRuntime;
 
         if (disposed) {
           return;
         }
 
-        setVisualState(vPayload);
-        setEvolution(ePayload);
-        setRoadmap(rPayload);
-        setRuntime(rtPayload);
+        setVisualState(vData.payload);
+        setEvolution(eData.payload);
+        setRoadmap(rData.payload);
+        setRuntime(rtData.payload);
+        setStateSourceKey(rtData.sourceKey || vData.sourceKey || eData.sourceKey || rData.sourceKey || "SOURCE_UNKNOWN");
         setError("");
 
-        const seq = Number(rtPayload.notify_seq ?? 0);
-        const notifyEvent = String(rtPayload.notify_event_key || "");
+        const seq = Number(rtData.payload.notify_seq ?? 0);
+        const notifyEvent = String(rtData.payload.notify_event_key || "");
         if (notifyEvent && Number.isFinite(seq) && seq > lastNotifySeqRef.current) {
           lastNotifySeqRef.current = seq;
           const message = t(locale, notifyEvent);
@@ -391,6 +403,10 @@ export default function HomePage() {
           <article className="card">
             <span className="label">{t(locale, "runId")}</span>
             <strong className="value mono">{runtime?.run_id || t(locale, "na")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "stateSource")}</span>
+            <strong className="value">{t(locale, stateSourceKey || "SOURCE_UNKNOWN")}</strong>
           </article>
         </div>
 

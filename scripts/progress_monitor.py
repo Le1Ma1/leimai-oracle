@@ -18,6 +18,8 @@ RECENT_RATE_WINDOW = 8
 RECENT_EVENT_COUNT = 20
 MAX_HISTORY_ROWS = 480
 LOG_STALE_SECONDS = 180
+DEFAULT_EXPORT_INTERVAL_SECONDS = 10.0
+DEFAULT_EXPORT_TIMEOUT_SECONDS = 45.0
 WRITE_RETRY_ATTEMPTS = 8
 WRITE_RETRY_SLEEP_SECONDS = 0.05
 WRITE_RETRY_BACKOFF = 1.8
@@ -821,9 +823,40 @@ def _append_history(path: Path, status: dict[str, Any]) -> bool:
     return _write_json(path, history)
 
 
+def _export_dashboard_state(repo_root: Path, timeout_sec: float) -> tuple[bool, str]:
+    cmd = ["python", "scripts/export_dashboard_state.py"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(10.0, float(timeout_sec)),
+        )
+    except Exception as error:
+        return False, str(error)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or f"exit_code_{proc.returncode}").strip()
+        return False, detail[:280]
+    return True, ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate live monitor status JSON from engine logs.")
     parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval seconds.")
+    parser.add_argument(
+        "--export-dashboard-state-interval",
+        type=float,
+        default=DEFAULT_EXPORT_INTERVAL_SECONDS,
+        help="Export dashboard JSON interval seconds (0 disables export).",
+    )
+    parser.add_argument(
+        "--export-dashboard-timeout-sec",
+        type=float,
+        default=DEFAULT_EXPORT_TIMEOUT_SECONDS,
+        help="Timeout seconds for dashboard export command.",
+    )
     parser.add_argument("--once", action="store_true", help="Write one snapshot and exit.")
     parser.add_argument("--repo-root", default=None, help="Optional repository root override.")
     args = parser.parse_args()
@@ -840,7 +873,11 @@ def main() -> int:
     print(f"[monitor] writing={status_path}")
 
     last_write_ok_utc: str | None = None
+    last_export_ok_utc: str | None = None
+    last_export_error: str = ""
     consecutive_write_failures = 0
+    consecutive_export_failures = 0
+    last_export_monotonic = 0.0
     had_once_failure = False
 
     while True:
@@ -849,6 +886,9 @@ def main() -> int:
             status["monitor_health"] = {
                 "last_write_ok_utc": last_write_ok_utc,
                 "consecutive_write_failures": consecutive_write_failures,
+                "last_export_ok_utc": last_export_ok_utc,
+                "consecutive_export_failures": consecutive_export_failures,
+                "last_export_error": last_export_error,
             }
 
             status_ok = _write_json(status_path, status)
@@ -866,6 +906,29 @@ def main() -> int:
                     f"updated_at={status.get('updated_at_utc')}",
                     flush=True,
                 )
+
+            export_interval = max(0.0, float(args.export_dashboard_state_interval))
+            if export_interval > 0:
+                now_monotonic = time.monotonic()
+                if (now_monotonic - last_export_monotonic) >= export_interval:
+                    ok, error_detail = _export_dashboard_state(
+                        repo_root=repo_root,
+                        timeout_sec=float(args.export_dashboard_timeout_sec),
+                    )
+                    last_export_monotonic = now_monotonic
+                    if ok:
+                        last_export_ok_utc = status.get("updated_at_utc")
+                        last_export_error = ""
+                        consecutive_export_failures = 0
+                    else:
+                        consecutive_export_failures += 1
+                        last_export_error = error_detail
+                        had_once_failure = True
+                        print(
+                            "[monitor][export_failed] "
+                            f"failures={consecutive_export_failures} detail={error_detail}",
+                            flush=True,
+                        )
         except KeyboardInterrupt:
             break
         except Exception as error:

@@ -272,6 +272,8 @@ def alpha_supervisor_cmd(args: argparse.Namespace) -> list[str]:
         str(args.validation_mode),
         "--monitor-interval",
         f"{max(0.2, float(args.monitor_interval)):.2f}",
+        "--monitor-export-interval",
+        f"{max(0.0, float(args.monitor_export_interval)):.2f}",
     ]
     if bool(args.skip_ingest):
         cmd.append("--skip-ingest")
@@ -309,6 +311,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-ingest", dest="skip_ingest", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--with-monitor", dest="with_monitor", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--monitor-interval", type=float, default=2.0)
+    parser.add_argument("--monitor-export-interval", type=float, default=10.0)
     parser.add_argument("--cooldown-sec", type=float, default=2.0)
     parser.add_argument("--dry-run", action="store_true", default=False)
     return parser.parse_args()

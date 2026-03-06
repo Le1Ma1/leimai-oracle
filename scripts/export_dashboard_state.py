@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
+
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +56,150 @@ def read_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _env_text(name: str, default: str = "") -> str:
+    return str(os.getenv(name, default) or "").strip()
+
+
+def _load_env_files() -> None:
+    if load_dotenv is None:
+        return
+    for file_path in (ROOT / ".env", ROOT / "engine" / ".env", ROOT / "support" / ".env"):
+        try:
+            load_dotenv(dotenv_path=file_path, override=False)
+        except Exception:
+            continue
+
+
+def _http_request(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None = None,
+    timeout_sec: float = 15.0,
+) -> tuple[int, bytes]:
+    req = urlrequest.Request(url=url, data=body, headers=headers, method=method.upper())
+    try:
+        with urlrequest.urlopen(req, timeout=max(2.0, float(timeout_sec))) as resp:
+            return int(resp.getcode() or 200), resp.read()
+    except urlerror.HTTPError as exc:
+        try:
+            payload = exc.read()
+        except Exception:
+            payload = b""
+        return int(exc.code or 0), payload
+    except Exception:
+        return 0, b""
+
+
+def _supabase_state_sync(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    supabase_url = _env_text("SUPABASE_URL", "").rstrip("/")
+    service_key = _env_text("SUPABASE_SERVICE_ROLE_KEY", "")
+    bucket = _env_text("SUPABASE_STATE_BUCKET", "monitor-state") or "monitor-state"
+    prefix = _env_text("SUPABASE_STATE_PREFIX", "state").strip("/")
+    sync_flag = _env_text("SUPABASE_STATE_SYNC", "").lower()
+    sync_enabled = sync_flag not in {"0", "false", "no", "off"}
+
+    if not sync_enabled:
+        return {
+            "enabled": False,
+            "synced": False,
+            "reason": "sync_disabled",
+            "bucket": bucket,
+            "prefix": prefix,
+            "uploaded": 0,
+            "failed": 0,
+        }
+    if not supabase_url or not service_key:
+        return {
+            "enabled": False,
+            "synced": False,
+            "reason": "missing_supabase_credentials",
+            "bucket": bucket,
+            "prefix": prefix,
+            "uploaded": 0,
+            "failed": 0,
+        }
+
+    base_headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+    }
+    create_bucket_body = json.dumps(
+        {
+            "id": bucket,
+            "name": bucket,
+            "public": False,
+            "file_size_limit": None,
+            "allowed_mime_types": ["application/json"],
+        }
+    ).encode("utf-8")
+    bucket_status, _ = _http_request(
+        method="POST",
+        url=f"{supabase_url}/storage/v1/bucket",
+        headers={**base_headers, "Content-Type": "application/json"},
+        body=create_bucket_body,
+    )
+    bucket_ready = bucket_status in {200, 201, 409}
+    if not bucket_ready:
+        list_status, list_payload = _http_request(
+            method="GET",
+            url=f"{supabase_url}/storage/v1/bucket",
+            headers=base_headers,
+        )
+        if list_status == 200 and list_payload:
+            try:
+                rows = json.loads(list_payload.decode("utf-8", errors="replace"))
+            except Exception:
+                rows = []
+            if isinstance(rows, list):
+                bucket_ready = any(isinstance(item, dict) and str(item.get("id") or "") == bucket for item in rows)
+
+    if not bucket_ready:
+        return {
+            "enabled": True,
+            "synced": False,
+            "reason": f"bucket_create_failed:{bucket_status}",
+            "bucket": bucket,
+            "prefix": prefix,
+            "uploaded": 0,
+            "failed": len(files),
+        }
+
+    uploaded: list[str] = []
+    failed: list[str] = []
+    encoded_bucket = urlparse.quote(bucket, safe="")
+    for name, payload in files.items():
+        object_path = f"{prefix}/{name}" if prefix else name
+        encoded_path = urlparse.quote(object_path, safe="/")
+        endpoint = f"{supabase_url}/storage/v1/object/{encoded_bucket}/{encoded_path}"
+        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        headers = {
+            **base_headers,
+            "Content-Type": "application/json",
+            "x-upsert": "true",
+        }
+        status, _ = _http_request(method="POST", url=endpoint, headers=headers, body=body)
+        if status < 200 or status >= 300:
+            status, _ = _http_request(method="PUT", url=endpoint, headers=headers, body=body)
+        if 200 <= status < 300:
+            uploaded.append(name)
+        else:
+            failed.append(f"{name}:{status}")
+
+    return {
+        "enabled": True,
+        "synced": len(failed) == 0,
+        "reason": "" if len(failed) == 0 else "partial_failure",
+        "bucket": bucket,
+        "prefix": prefix,
+        "uploaded": len(uploaded),
+        "failed": len(failed),
+        "uploaded_files": uploaded,
+        "failed_files": failed,
+    }
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -705,6 +858,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    _load_env_files()
     args = parse_args()
     validation_path = latest_validation_path(args.validation_path or None)
     base_dir = validation_path.parent
@@ -740,6 +894,14 @@ def main() -> int:
     write_json(public_visual_path, visual_state)
     write_json(public_training_path, training_roadmap)
     write_json(public_runtime_path, training_runtime)
+    supabase_sync = _supabase_state_sync(
+        {
+            "evolution_validation.json": evolution_validation,
+            "visual_state.json": visual_state,
+            "training_roadmap.json": training_roadmap,
+            "training_runtime.json": training_runtime,
+        }
+    )
 
     print(
         json.dumps(
@@ -759,6 +921,7 @@ def main() -> int:
                 "status_key": visual_state.get("status_key"),
                 "training_status_key": training_roadmap.get("status_key"),
                 "runtime_status_key": training_runtime.get("runtime_status_key"),
+                "supabase_state_sync": supabase_sync,
             },
             ensure_ascii=False,
         )
