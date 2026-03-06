@@ -2,17 +2,17 @@
 
 :root {
   --bg: #06070d;
-  --panel: rgba(10, 12, 20, 0.82);
-  --line: rgba(120, 222, 255, 0.3);
-  --line-strong: rgba(120, 222, 255, 0.45);
+  --panel: rgba(8, 10, 12, 0.80);
+  --line: rgba(255, 255, 255, 0.25);
+  --line-strong: rgba(255, 255, 255, 0.36);
   --text: #e9f3ff;
   --muted: rgba(196, 214, 232, 0.74);
   --accent: #78deff;
   --accent-rgb: 120, 222, 255;
   --accent-shadow: rgba(120, 222, 255, 0.24);
   --glass-blur-px: 11;
-  --neon-near-alpha: 0.62;
-  --neon-far-alpha: 0.3;
+  --neon-near-alpha: 0.52;
+  --neon-far-alpha: 0.26;
   --lock-bg-alpha: 0.56;
   --lock-blur-px: 16;
   --gold-glow: rgba(120, 222, 255, 0.11);

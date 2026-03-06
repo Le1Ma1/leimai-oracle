@@ -1,10 +1,10 @@
 {
-  "ts_utc": "2026-03-05T19:37:25Z",
+  "ts_utc": "2026-03-06T03:09:27Z",
   "base_url": "http://127.0.0.1:4310",
   "visual": {
-    "contrast_min": 17.51,
+    "contrast_min": 11.54,
     "readability_score": 100.0,
-    "cta_prominence_score": 38.0,
+    "cta_prominence_score": 69.0,
     "cta_threshold": 35.0,
     "cta_required": false,
     "visual_model": "fallback",
