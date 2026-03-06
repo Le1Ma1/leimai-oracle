@@ -67,7 +67,30 @@ jobs:
         run: |
           python -m engine.src.generate_reports
 
-      - name: Generate offline oracle snapshots
+      - name: Snapshot preflight
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SNAPSHOT_REPORT_LIMIT: "80"
+          VISUAL_TIMEOUT_SEC: "20"
+          BINANCE_SPOT_BASE_URL: https://api.binance.com
+        run: |
+          mkdir -p logs
+          python - <<'PY'
+          import json
+          import os
+          payload = {
+              "event": "SNAPSHOT_PREFLIGHT",
+              "has_supabase_url": bool(os.getenv("SUPABASE_URL", "").strip()),
+              "has_service_role_key": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
+              "snapshot_report_limit": os.getenv("SNAPSHOT_REPORT_LIMIT", ""),
+              "visual_timeout_sec": os.getenv("VISUAL_TIMEOUT_SEC", ""),
+              "binance_spot_base_url": os.getenv("BINANCE_SPOT_BASE_URL", ""),
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+
+      - name: Generate offline oracle snapshots (retry transient)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -75,7 +98,31 @@ jobs:
           VISUAL_TIMEOUT_SEC: "20"
           SNAPSHOT_REPORT_LIMIT: "80"
         run: |
-          python scripts/visual_snapshot.py --mode report --limit 80
+          set -eo pipefail
+          mkdir -p logs
+          run_snapshot() {
+            python scripts/visual_snapshot.py --mode report --limit 80
+          }
+          run_snapshot 2>&1 | tee logs/report_snapshot_step.log || SNAP_EXIT=$?
+          if [ "${SNAP_EXIT:-0}" -ne 0 ]; then
+            if grep -Eiq "report_fetch_failed_transient|report_fetch_timeout_transient|http_429|http_5[0-9]{2}|timeout|timed out|connection reset|temporar" logs/report_snapshot_step.log; then
+              echo "Transient snapshot failure detected; retrying once..."
+              sleep 8
+              run_snapshot 2>&1 | tee -a logs/report_snapshot_step.log
+            else
+              exit "${SNAP_EXIT}"
+            fi
+          fi
+
+      - name: Upload snapshot diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-snapshot-diagnostics-${{ github.run_id }}
+          path: |
+            logs/report_snapshot_step.log
+            logs/report_snapshot_diagnostics.json
+          if-no-files-found: warn
 
       - name: Submit sitemap to Google Search Console
         continue-on-error: true

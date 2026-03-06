@@ -44,6 +44,13 @@ class EngineConfig:
     optimization_target_deploy_symbol_ratio: float
     trade_floor: int
     window_trade_floor_overrides: tuple[tuple[str, int], ...]
+    baseline_primary_timeframe: str
+    baseline_confirm_timeframes: tuple[str, ...]
+    baseline_low_dof_mode: bool
+    baseline_feature_cap: int
+    baseline_feature_allowlist: tuple[str, ...]
+    rl_enabled: bool
+    rl_unlock_requires_baseline: bool
     rsi_windows: tuple[int, ...]
     rsi_strategies: tuple[str, ...]
     rsi_lower_bounds: tuple[int, ...]
@@ -63,6 +70,31 @@ class EngineConfig:
     validation_purge_bars: int
     validation_stress_friction_bps: tuple[int, ...]
     validation_sample_step: int
+    meta_label_enabled: bool
+    meta_label_model: str
+    meta_label_objective: str
+    meta_label_penalty: str
+    meta_label_c: float
+    meta_label_max_iter: int
+    meta_label_class_weight: str
+    meta_label_tp_mult: float
+    meta_label_sl_mult: float
+    meta_label_vertical_horizon_bars: int
+    meta_label_vol_window: int
+    meta_label_min_events: int
+    meta_label_threshold_min: float
+    meta_label_threshold_max: float
+    meta_label_threshold_step: float
+    meta_label_precision_floor: float
+    meta_label_threshold_objective: str
+    meta_label_prob_threshold_fallback: float
+    meta_label_feature_cap: int
+    meta_label_feature_allowlist: tuple[str, ...]
+    meta_label_cpcv_splits: int
+    meta_label_cpcv_test_groups: int
+    meta_label_cpcv_purge_bars: int
+    meta_label_cpcv_embargo_bars: int
+    meta_label_cpcv_max_combinations: int
     max_deploy_rules_per_symbol: int
 
 
@@ -73,6 +105,16 @@ def _parse_positive_int(name: str, default: int) -> int:
     value = int(raw)
     if value <= 0:
         raise ValueError(f"{name} must be positive.")
+    return value
+
+
+def _parse_non_negative_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative.")
     return value
 
 
@@ -148,15 +190,6 @@ def _validate_rsi_bounds(lower_bounds: tuple[int, ...], upper_bounds: tuple[int,
         for upper in upper_bounds:
             if lower >= upper:
                 raise ValueError("All RSI lower bounds must be strictly lower than upper bounds.")
-
-
-def _validate_optimization_timeframes_1m_only(timeframes: tuple[str, ...]) -> None:
-    if timeframes != ("1m",):
-        joined = ",".join(timeframes)
-        raise ValueError(
-            "ENGINE_OPTIMIZATION_TIMEFRAMES is locked to 1m-only. "
-            f"Current value: {joined!r}"
-        )
 
 
 def _validate_subset_exact(values: tuple[str, ...], allowed: set[str], name: str) -> None:
@@ -240,10 +273,15 @@ def load_config() -> EngineConfig:
         "lmo_core_timing_efficiency",
     }
     allowed_rule_engine_modes = {"indicator", "feature_native"}
-    allowed_validation_strictness = {"institutional", "balanced", "fast"}
+    allowed_validation_strictness = {"institutional", "balanced", "fast", "recovery"}
+    allowed_meta_label_model = {"logreg"}
+    allowed_meta_label_objective = {"classification_binary"}
+    allowed_meta_label_penalty = {"l1", "l2"}
+    allowed_meta_label_class_weight = {"balanced", "none"}
+    allowed_meta_label_threshold_objective = {"f1", "f05"}
 
     aggregate_timeframes = _parse_csv_str("ENGINE_AGGREGATE_TIMEFRAMES", ("1m", "5m", "15m", "1h", "4h", "1d", "1w"))
-    optimization_timeframes = _parse_csv_str("ENGINE_OPTIMIZATION_TIMEFRAMES", ("1m",))
+    optimization_timeframes = _parse_csv_str("ENGINE_OPTIMIZATION_TIMEFRAMES", ("15m",))
     feature_timeframes = _parse_csv_str("ENGINE_FEATURE_TIMEFRAMES", ("5m", "15m", "1h", "4h", "1d", "1w"))
     optimization_windows = _parse_csv_str("ENGINE_OPTIMIZATION_WINDOWS", ("all", "30d", "90d", "360d"))
     optimization_gate_modes = _parse_csv_str("ENGINE_OPTIMIZATION_GATE_MODES", ("gated", "ungated"))
@@ -285,7 +323,86 @@ def load_config() -> EngineConfig:
     _validate_subset_exact(single_indicators, allowed_single_indicators, "ENGINE_SINGLE_INDICATORS")
     _validate_subset_exact(feature_cores, allowed_feature_cores, "ENGINE_FEATURE_CORES")
     _validate_rsi_bounds(rsi_lower_bounds, rsi_upper_bounds)
-    _validate_optimization_timeframes_1m_only(optimization_timeframes)
+
+    baseline_primary_timeframe = os.getenv("ENGINE_BASELINE_PRIMARY_TIMEFRAME", "15m").strip().lower()
+    if baseline_primary_timeframe not in allowed_timeframes:
+        raise ValueError(
+            f"ENGINE_BASELINE_PRIMARY_TIMEFRAME contains unsupported value: {baseline_primary_timeframe}"
+        )
+
+    baseline_confirm_timeframes = _parse_csv_str("ENGINE_BASELINE_CONFIRM_TIMEFRAMES", ("5m",))
+    _validate_subset(baseline_confirm_timeframes, allowed_timeframes, "ENGINE_BASELINE_CONFIRM_TIMEFRAMES")
+
+    baseline_feature_allowlist = _parse_csv_str(
+        "ENGINE_BASELINE_FEATURE_ALLOWLIST",
+        (
+            "trend__logret__15m",
+            "flow_liquidity__shock_density__1m",
+            "risk_volatility__realized_vol_60__1m",
+        ),
+    )
+    baseline_feature_cap = _parse_positive_int("ENGINE_BASELINE_FEATURE_CAP", 3)
+    if baseline_feature_cap > 12:
+        raise ValueError("ENGINE_BASELINE_FEATURE_CAP must be <= 12.")
+
+    meta_label_model = os.getenv("ENGINE_META_LABEL_MODEL", "logreg").strip().lower()
+    if meta_label_model not in allowed_meta_label_model:
+        raise ValueError(f"ENGINE_META_LABEL_MODEL contains unsupported value: {meta_label_model}")
+    meta_label_objective = os.getenv("ENGINE_META_LABEL_OBJECTIVE", "classification_binary").strip().lower()
+    if meta_label_objective not in allowed_meta_label_objective:
+        raise ValueError(f"ENGINE_META_LABEL_OBJECTIVE contains unsupported value: {meta_label_objective}")
+    meta_label_penalty = os.getenv("ENGINE_META_LABEL_PENALTY", "l1").strip().lower()
+    if meta_label_penalty not in allowed_meta_label_penalty:
+        raise ValueError(f"ENGINE_META_LABEL_PENALTY contains unsupported value: {meta_label_penalty}")
+    meta_label_threshold_objective = os.getenv("ENGINE_META_LABEL_THRESHOLD_OBJECTIVE", "f05").strip().lower()
+    if meta_label_threshold_objective not in allowed_meta_label_threshold_objective:
+        raise ValueError(
+            f"ENGINE_META_LABEL_THRESHOLD_OBJECTIVE contains unsupported value: {meta_label_threshold_objective}"
+        )
+    meta_label_feature_allowlist = _parse_csv_str(
+        "ENGINE_META_LABEL_FEATURE_ALLOWLIST",
+        baseline_feature_allowlist,
+    )
+    meta_label_feature_cap = _parse_positive_int("ENGINE_META_LABEL_FEATURE_CAP", baseline_feature_cap)
+    if meta_label_feature_cap > 16:
+        raise ValueError("ENGINE_META_LABEL_FEATURE_CAP must be <= 16.")
+    meta_label_enabled = _parse_bool("ENGINE_META_LABEL_ENABLED", True)
+    meta_label_c = _parse_float("ENGINE_META_LABEL_C", 0.25)
+    if meta_label_c <= 0.0:
+        raise ValueError("ENGINE_META_LABEL_C must be positive.")
+    meta_label_max_iter = _parse_positive_int("ENGINE_META_LABEL_MAX_ITER", 2500)
+    meta_label_class_weight = os.getenv("ENGINE_META_LABEL_CLASS_WEIGHT", "balanced").strip().lower()
+    if meta_label_class_weight not in allowed_meta_label_class_weight:
+        raise ValueError(f"ENGINE_META_LABEL_CLASS_WEIGHT contains unsupported value: {meta_label_class_weight}")
+    meta_label_tp_mult = _parse_float("ENGINE_META_LABEL_TP_MULT", 1.5)
+    if meta_label_tp_mult <= 0.0:
+        raise ValueError("ENGINE_META_LABEL_TP_MULT must be positive.")
+    meta_label_sl_mult = _parse_float("ENGINE_META_LABEL_SL_MULT", 1.0)
+    if meta_label_sl_mult <= 0.0:
+        raise ValueError("ENGINE_META_LABEL_SL_MULT must be positive.")
+    meta_label_vertical_horizon_bars = _parse_positive_int("ENGINE_META_LABEL_VERTICAL_HORIZON_BARS", 16)
+    meta_label_vol_window = _parse_positive_int("ENGINE_META_LABEL_VOL_WINDOW", 20)
+    meta_label_min_events = _parse_positive_int("ENGINE_META_LABEL_MIN_EVENTS", 80)
+    meta_label_threshold_min = _parse_ratio("ENGINE_META_LABEL_THRESHOLD_MIN", 0.50)
+    meta_label_threshold_max = _parse_ratio("ENGINE_META_LABEL_THRESHOLD_MAX", 0.95)
+    if meta_label_threshold_max < meta_label_threshold_min:
+        raise ValueError("ENGINE_META_LABEL_THRESHOLD_MAX must be >= ENGINE_META_LABEL_THRESHOLD_MIN.")
+    meta_label_threshold_step = _parse_float("ENGINE_META_LABEL_THRESHOLD_STEP", 0.01)
+    if meta_label_threshold_step <= 0.0:
+        raise ValueError("ENGINE_META_LABEL_THRESHOLD_STEP must be positive.")
+    meta_label_precision_floor = _parse_ratio("ENGINE_META_LABEL_PRECISION_FLOOR", 0.60)
+    meta_label_prob_threshold_fallback = _parse_ratio("ENGINE_META_LABEL_PROB_THRESHOLD_FALLBACK", 0.55)
+    meta_label_cpcv_splits = _parse_positive_int("ENGINE_META_LABEL_CPCV_SPLITS", 6)
+    meta_label_cpcv_test_groups = _parse_positive_int("ENGINE_META_LABEL_CPCV_TEST_GROUPS", 2)
+    meta_label_cpcv_purge_bars = _parse_non_negative_int(
+        "ENGINE_META_LABEL_CPCV_PURGE_BARS",
+        max(1, min(int(meta_label_vertical_horizon_bars), int(meta_label_vol_window))),
+    )
+    meta_label_cpcv_embargo_bars = _parse_non_negative_int(
+        "ENGINE_META_LABEL_CPCV_EMBARGO_BARS",
+        max(int(meta_label_vertical_horizon_bars), int(meta_label_cpcv_purge_bars)),
+    )
+    meta_label_cpcv_max_combinations = _parse_positive_int("ENGINE_META_LABEL_CPCV_MAX_COMBINATIONS", 24)
 
     universe_source = os.getenv("ENGINE_UNIVERSE_SOURCE", "coingecko_market_cap").strip().lower()
     if universe_source not in allowed_universe_source:
@@ -340,6 +457,13 @@ def load_config() -> EngineConfig:
         optimization_target_deploy_symbol_ratio=_parse_ratio("ENGINE_OPT_TARGET_DEPLOY_SYMBOL_RATIO", 0.30),
         trade_floor=_parse_positive_int("ENGINE_TRADE_FLOOR", 100),
         window_trade_floor_overrides=window_trade_floor_overrides,
+        baseline_primary_timeframe=baseline_primary_timeframe,
+        baseline_confirm_timeframes=baseline_confirm_timeframes,
+        baseline_low_dof_mode=_parse_bool("ENGINE_BASELINE_LOW_DOF_MODE", True),
+        baseline_feature_cap=baseline_feature_cap,
+        baseline_feature_allowlist=baseline_feature_allowlist,
+        rl_enabled=_parse_bool("ENGINE_RL_ENABLED", False),
+        rl_unlock_requires_baseline=_parse_bool("ENGINE_RL_UNLOCK_REQUIRES_BASELINE", True),
         rsi_windows=rsi_windows,
         rsi_strategies=rsi_strategies,
         rsi_lower_bounds=rsi_lower_bounds,
@@ -359,5 +483,30 @@ def load_config() -> EngineConfig:
         validation_purge_bars=_parse_positive_int("ENGINE_VALIDATION_PURGE_BARS", 120),
         validation_stress_friction_bps=validation_stress_friction_bps,
         validation_sample_step=_parse_positive_int("ENGINE_VALIDATION_SAMPLE_STEP", 5),
+        meta_label_enabled=meta_label_enabled,
+        meta_label_model=meta_label_model,
+        meta_label_objective=meta_label_objective,
+        meta_label_penalty=meta_label_penalty,
+        meta_label_c=meta_label_c,
+        meta_label_max_iter=meta_label_max_iter,
+        meta_label_class_weight=meta_label_class_weight,
+        meta_label_tp_mult=meta_label_tp_mult,
+        meta_label_sl_mult=meta_label_sl_mult,
+        meta_label_vertical_horizon_bars=meta_label_vertical_horizon_bars,
+        meta_label_vol_window=meta_label_vol_window,
+        meta_label_min_events=meta_label_min_events,
+        meta_label_threshold_min=meta_label_threshold_min,
+        meta_label_threshold_max=meta_label_threshold_max,
+        meta_label_threshold_step=meta_label_threshold_step,
+        meta_label_precision_floor=meta_label_precision_floor,
+        meta_label_threshold_objective=meta_label_threshold_objective,
+        meta_label_prob_threshold_fallback=meta_label_prob_threshold_fallback,
+        meta_label_feature_cap=meta_label_feature_cap,
+        meta_label_feature_allowlist=meta_label_feature_allowlist,
+        meta_label_cpcv_splits=meta_label_cpcv_splits,
+        meta_label_cpcv_test_groups=meta_label_cpcv_test_groups,
+        meta_label_cpcv_purge_bars=meta_label_cpcv_purge_bars,
+        meta_label_cpcv_embargo_bars=meta_label_cpcv_embargo_bars,
+        meta_label_cpcv_max_combinations=meta_label_cpcv_max_combinations,
         max_deploy_rules_per_symbol=_parse_positive_int("ENGINE_MAX_DEPLOY_RULES_PER_SYMBOL", 2),
     )

@@ -31,6 +31,15 @@ Gate and credibility thresholds (feature-native):
 - `ENGINE_CREDIBILITY_REJECT_THRESHOLD`
 - `ENGINE_CREDIBLE_MAX_PENALTY`
 
+Time-Bar Meta-Label Baseline v2 (binary only, no regression):
+- `ENGINE_META_LABEL_ENABLED`
+- `ENGINE_META_LABEL_MODEL=logreg` (phase-1 locked)
+- `ENGINE_META_LABEL_OBJECTIVE=classification_binary` (regression forbidden)
+- `ENGINE_META_LABEL_PENALTY` / `ENGINE_META_LABEL_C` / `ENGINE_META_LABEL_CLASS_WEIGHT`
+- `ENGINE_META_LABEL_TP_MULT` / `ENGINE_META_LABEL_SL_MULT` / `ENGINE_META_LABEL_VERTICAL_HORIZON_BARS`
+- `ENGINE_META_LABEL_PRECISION_FLOOR` / `ENGINE_META_LABEL_THRESHOLD_OBJECTIVE=f05`
+- `ENGINE_META_LABEL_CPCV_*` (purge/embargo/splits)
+
 ## Run Once
 
 ```bash

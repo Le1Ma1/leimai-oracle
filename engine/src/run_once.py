@@ -33,11 +33,6 @@ def run_pipeline_once(
     symbol_filter: str | None = None,
 ) -> RunReport:
     cfg = config or load_config()
-    if cfg.optimization_timeframes != ("1m",):
-        raise ValueError(
-            "Optimization timeframe is hard-locked to 1m. "
-            f"Current value: {cfg.optimization_timeframes}"
-        )
     started_at = datetime.now(timezone.utc)
     run_id = uuid4().hex
     run_tag = started_at.strftime("%Y%m%dT%H%M%SZ") + "_" + run_id[:8]
@@ -194,45 +189,45 @@ def run_pipeline_once(
                     rows=int(feature_set.shape[0]),
                 )
 
-                timeframe = "1m"
-                price_frame = frame_1m
-                if price_frame.empty:
-                    log_event(
-                        "WINDOW_OPTIMIZED",
-                        run_id=run_id,
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        status="skipped_no_data",
-                    )
-                    continue
-
-                for core_id in strategy_ids:
-                    for gate_mode in cfg.optimization_gate_modes:
-                        result = optimize_signal_core_for_symbol_timeframe(
-                            price_frame=price_frame,
-                            feature_set_1m=feature_set,
-                            cfg=cfg,
-                            symbol=symbol,
-                            timeframe=timeframe,
-                            gate_mode=gate_mode,
-                            core_id=core_id,
-                        )
-                        optimization_results.append(result)
-                        valid_windows = sum(
-                            1 for window in result["windows"] if not window["insufficient_statistical_significance"]
-                        )
+                for timeframe in cfg.optimization_timeframes:
+                    price_frame = frame_1m if timeframe == "1m" else aggregated.get(timeframe, pd.DataFrame())
+                    if price_frame.empty:
                         log_event(
                             "WINDOW_OPTIMIZED",
                             run_id=run_id,
                             symbol=symbol,
                             timeframe=timeframe,
-                            gate_mode=gate_mode,
-                            rule_engine_mode=cfg.rule_engine_mode,
-                            core_id=result["core_id"],
-                            core_name_zh=result["core_name_zh"],
-                            windows=len(result["windows"]),
-                            valid_windows=valid_windows,
+                            status="skipped_no_data",
                         )
+                        continue
+
+                    for core_id in strategy_ids:
+                        for gate_mode in cfg.optimization_gate_modes:
+                            result = optimize_signal_core_for_symbol_timeframe(
+                                price_frame=price_frame,
+                                feature_set_1m=feature_set,
+                                cfg=cfg,
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                gate_mode=gate_mode,
+                                core_id=core_id,
+                            )
+                            optimization_results.append(result)
+                            valid_windows = sum(
+                                1 for window in result["windows"] if not window["insufficient_statistical_significance"]
+                            )
+                            log_event(
+                                "WINDOW_OPTIMIZED",
+                                run_id=run_id,
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                gate_mode=gate_mode,
+                                rule_engine_mode=cfg.rule_engine_mode,
+                                core_id=result["core_id"],
+                                core_name_zh=result["core_name_zh"],
+                                windows=len(result["windows"]),
+                                valid_windows=valid_windows,
+                            )
         except Exception as error:
             failures.append(f"{symbol}: {error}")
             log_event("SYMBOL_FAILED", run_id=run_id, symbol=symbol, error=str(error))

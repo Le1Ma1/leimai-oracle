@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 from typing import Any
 
 import numpy as np
@@ -569,6 +570,33 @@ def _normalize_series_01(series: pd.Series) -> pd.Series:
     return ((s - lo) / (hi - lo)).astype("float64")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    values = tuple(part.strip() for part in str(raw).split(",") if part.strip())
+    return values if values else default
+
+
+def _series_from_candidates(feature_df: pd.DataFrame, candidates: tuple[str, ...]) -> pd.Series:
+    for name in candidates:
+        if name in feature_df.columns:
+            return pd.to_numeric(feature_df[name], errors="coerce").astype("float64").fillna(0.0)
+    return pd.Series(0.0, index=feature_df.index, dtype="float64")
+
+
 def _family_columns(feature_df: pd.DataFrame, family_prefix: str, legacy_prefixes: tuple[str, ...]) -> list[str]:
     family = [column for column in feature_df.columns if column.startswith(f"{family_prefix}__")]
     legacy: list[str] = []
@@ -622,6 +650,101 @@ def build_fusion_components(feature_df: pd.DataFrame, timeframe: str) -> pd.Data
                 "oracle_score",
                 "confidence",
             ]
+        )
+
+    if _env_bool("ENGINE_BASELINE_LOW_DOF_MODE", False):
+        allowlist = _env_csv(
+            "ENGINE_BASELINE_FEATURE_ALLOWLIST",
+            (
+                "trend__logret__15m",
+                "flow_liquidity__shock_density__1m",
+                "risk_volatility__realized_vol_60__1m",
+            ),
+        )
+        trend_allow = tuple(
+            item
+            for item in allowlist
+            if item.startswith("trend__") or item.startswith("htf_logret_") or item in {"ret_1m", "trend__ret_log__1m"}
+        )
+        flow_allow = tuple(item for item in allowlist if item.startswith("flow_liquidity__") or "volume" in item)
+        risk_allow = tuple(
+            item for item in allowlist if item.startswith("risk_volatility__") or item.startswith("htf_range_ratio_")
+        )
+        timing_allow = tuple(item for item in allowlist if item.startswith("timing_execution__") or item.startswith("ttc_"))
+        oscillation_allow = tuple(item for item in allowlist if item.startswith("oscillation__") or item.startswith("htf_breakout_"))
+
+        trend_raw = _series_from_candidates(
+            feature_df,
+            trend_allow + ("trend__logret__15m", "trend__ret_log__1m", "ret_1m"),
+        )
+        flow_raw = _series_from_candidates(
+            feature_df,
+            flow_allow + ("flow_liquidity__shock_density__1m", "flow_liquidity__rel_volume_log__1m"),
+        )
+        risk_raw = _series_from_candidates(
+            feature_df,
+            risk_allow + ("risk_volatility__realized_vol_60__1m", "risk_volatility__range_ratio__1m"),
+        )
+        timing_raw = _series_from_candidates(
+            feature_df,
+            timing_allow + ("timing_execution__ttc_phase__5m", "timing_execution__jump_density__1m"),
+        )
+        oscillation_raw = _series_from_candidates(
+            feature_df,
+            oscillation_allow + ("oscillation__breakout_high_dist__15m", "oscillation__revert_tension_60__1m"),
+        )
+
+        fixed_weights = {
+            "trend": 0.50,
+            "oscillation": 0.00,
+            "risk": 0.20,
+            "flow": 0.25,
+            "timing": 0.05,
+        }
+        family_weights_df = pd.DataFrame(
+            {
+                "trend": fixed_weights["trend"],
+                "oscillation": fixed_weights["oscillation"],
+                "risk": fixed_weights["risk"],
+                "flow": fixed_weights["flow"],
+                "timing": fixed_weights["timing"],
+            },
+            index=feature_df.index,
+        )
+        trend_component = family_weights_df["trend"] * trend_raw
+        oscillation_component = family_weights_df["oscillation"] * oscillation_raw
+        risk_component = -family_weights_df["risk"] * risk_raw.abs()
+        flow_component = family_weights_df["flow"] * flow_raw
+        timing_component = -family_weights_df["timing"] * timing_raw.abs()
+        fusion = trend_component + oscillation_component + risk_component + flow_component + timing_component
+
+        signal_strength = _normalize_series_01(fusion.abs())
+        flow_support = ((flow_raw + 1.0) / 2.0).clip(lower=0.0, upper=1.0)
+        risk_pressure = _normalize_series_01(risk_raw.abs())
+        confidence = (0.55 * signal_strength + 0.25 * flow_support + 0.20 * (1.0 - risk_pressure)).clip(
+            lower=0.0, upper=1.0
+        )
+
+        return pd.DataFrame(
+            {
+                "trend_component": trend_component.astype("float64", copy=False),
+                "oscillation_component": oscillation_component.astype("float64", copy=False),
+                "risk_component": risk_component.astype("float64", copy=False),
+                "flow_component": flow_component.astype("float64", copy=False),
+                "timing_component": timing_component.astype("float64", copy=False),
+                "energy_component": oscillation_component.astype("float64", copy=False),
+                "essence_component": flow_component.astype("float64", copy=False),
+                "ttc_component": timing_component.astype("float64", copy=False),
+                "fusion_score": fusion.astype("float64", copy=False),
+                "oracle_score": fusion.astype("float64", copy=False),
+                "confidence": confidence.astype("float64", copy=False),
+                "family_weight_trend": family_weights_df["trend"].astype("float64", copy=False),
+                "family_weight_oscillation": family_weights_df["oscillation"].astype("float64", copy=False),
+                "family_weight_risk": family_weights_df["risk"].astype("float64", copy=False),
+                "family_weight_flow": family_weights_df["flow"].astype("float64", copy=False),
+                "family_weight_timing": family_weights_df["timing"].astype("float64", copy=False),
+            },
+            index=feature_df.index,
         )
 
     trend_cols = _family_columns(feature_df, "trend", ("htf_logret_", "ret_1m"))

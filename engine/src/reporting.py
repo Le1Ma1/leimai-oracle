@@ -1178,9 +1178,6 @@ def write_optimization_artifacts(
     quality_targets: dict[str, float] | None = None,
     feature_registry: list[dict[str, object]] | None = None,
 ) -> dict[str, str]:
-    if any(result["timeframe"] != "1m" for result in results):
-        raise ValueError("Optimization artifact contract is 1m-only. Non-1m result detected.")
-
     now_utc = datetime.now(timezone.utc)
     date_token = now_utc.strftime("%Y-%m-%d")
     base_dir = artifact_root / "optimization" / "single" / date_token

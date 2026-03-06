@@ -511,6 +511,179 @@ def build_history_contract(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _latest_validation_context(latest: dict[str, Any]) -> dict[str, Any]:
+    default_payload = {
+        "strictness": "unknown",
+        "rows_evaluated": 0,
+        "all_window_pass_ratio": 0.0,
+        "wf_pass_rate_median": 0.0,
+        "cv_pass_rate_median": 0.0,
+        "pbo_median": 1.0,
+        "dsr_median": -10.0,
+        "friction_robustness_median": 0.0,
+        "final_score_median": 0.0,
+        "checks": {},
+        "robustness_ready": False,
+    }
+    iteration_file = str(latest.get("iteration_file") or "")
+    if not iteration_file:
+        return default_payload
+    iteration_payload = read_json(Path(iteration_file))
+    artifacts = iteration_payload.get("final_artifacts", {}) if isinstance(iteration_payload.get("final_artifacts"), dict) else {}
+    validation_path = _resolve_artifact_path(artifacts.get("validation_report"))
+    validation_payload = read_json(validation_path) if validation_path else {}
+    if not validation_payload:
+        return default_payload
+
+    strictness = str(validation_payload.get("strictness") or "unknown")
+    thresholds = validation_payload.get("thresholds", {}) if isinstance(validation_payload.get("thresholds"), dict) else {}
+    rows = validation_payload.get("rows", []) if isinstance(validation_payload.get("rows"), list) else []
+    selected = [
+        row
+        for row in rows
+        if isinstance(row, dict) and str(row.get("window")) == "all" and str(row.get("gate_mode")) == "gated"
+    ]
+    if not selected:
+        selected = [row for row in rows if isinstance(row, dict)]
+    if not selected:
+        return {**default_payload, "strictness": strictness}
+
+    wf_values: list[float] = []
+    cv_values: list[float] = []
+    pbo_values: list[float] = []
+    dsr_values: list[float] = []
+    friction_values: list[float] = []
+    final_values: list[float] = []
+    passed = 0
+    for row in selected:
+        if bool(row.get("passes_validation")):
+            passed += 1
+        wf_values.append(_to_float((row.get("walk_forward") or {}).get("pass_rate"), 0.0))
+        cv_values.append(_to_float((row.get("purged_cv") or {}).get("pass_rate"), 0.0))
+        pbo_values.append(_to_float(row.get("pbo"), 1.0))
+        dsr_values.append(_to_float(row.get("dsr"), -10.0))
+        friction_values.append(_to_float((row.get("friction_stress") or {}).get("robustness"), 0.0))
+        final_values.append(_to_float((row.get("scores") or {}).get("final_score"), 0.0))
+
+    wf_median = float(median(wf_values)) if wf_values else 0.0
+    cv_median = float(median(cv_values)) if cv_values else 0.0
+    pbo_median = float(median(pbo_values)) if pbo_values else 1.0
+    dsr_median = float(median(dsr_values)) if dsr_values else -10.0
+    friction_median = float(median(friction_values)) if friction_values else 0.0
+    final_median = float(median(final_values)) if final_values else 0.0
+    pass_ratio = float(passed / len(selected)) if selected else 0.0
+
+    checks = {
+        "walk_forward": wf_median >= _to_float(thresholds.get("wf_pass_rate_min"), 0.50),
+        "purged_cv": cv_median >= _to_float(thresholds.get("cv_pass_rate_min"), 0.45),
+        "pbo": pbo_median <= _to_float(thresholds.get("pbo_max"), 0.35),
+        "dsr": dsr_median >= _to_float(thresholds.get("dsr_min"), -0.25),
+        "friction": friction_median >= _to_float(thresholds.get("friction_robustness_min"), 0.35),
+        "final_score": final_median >= _to_float(thresholds.get("final_score_min"), 0.45),
+        "pass_ratio": pass_ratio >= 0.50,
+    }
+    robustness_ready = bool(all(checks.values()))
+    return {
+        "strictness": strictness,
+        "rows_evaluated": len(selected),
+        "all_window_pass_ratio": round(pass_ratio, 6),
+        "wf_pass_rate_median": round(wf_median, 6),
+        "cv_pass_rate_median": round(cv_median, 6),
+        "pbo_median": round(pbo_median, 6),
+        "dsr_median": round(dsr_median, 6),
+        "friction_robustness_median": round(friction_median, 6),
+        "final_score_median": round(final_median, 6),
+        "checks": checks,
+        "robustness_ready": robustness_ready,
+    }
+
+
+def _stability_streak(rows: list[dict[str, Any]], targets: Targets) -> int:
+    streak = 0
+    for row in reversed(rows):
+        pass_rate_ok = _to_float(row.get("validation_pass_rate"), 0.0) >= targets.pass_rate
+        alpha_ok = _to_float(row.get("all_window_alpha_vs_spot"), -10.0) >= targets.all_alpha
+        if pass_rate_ok and alpha_ok:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def build_baseline_gate(
+    *,
+    latest: dict[str, Any],
+    rows: list[dict[str, Any]],
+    targets: Targets,
+    history_contract: dict[str, Any],
+    live_status: dict[str, Any],
+) -> dict[str, Any]:
+    validation_ctx = _latest_validation_context(latest)
+    required_streak = max(2, _to_int((live_status.get("targets") or {}).get("thresholds", {}).get("stable_rounds"), 2))
+    streak = _stability_streak(rows, targets)
+
+    check_history = bool(history_contract.get("full_history_ok"))
+    check_alpha = _to_float(latest.get("all_window_alpha_vs_spot"), -10.0) >= max(0.0, targets.all_alpha)
+    check_pass = _to_float(latest.get("validation_pass_rate"), 0.0) >= targets.pass_rate
+    check_robustness = bool(validation_ctx.get("robustness_ready", False))
+    check_streak = streak >= required_streak
+
+    checks = {
+        "history_contract": check_history,
+        "all_window_alpha": check_alpha,
+        "validation_pass_rate": check_pass,
+        "robustness": check_robustness,
+        "stability_streak": check_streak,
+    }
+    blockers = [key for key, ok in checks.items() if not bool(ok)]
+    return {
+        "ready": bool(all(checks.values())),
+        "checks": checks,
+        "blockers": blockers,
+        "stability_streak": streak,
+        "required_stability_streak": required_streak,
+        "validation_context": validation_ctx,
+    }
+
+
+def build_rl_policy(baseline_gate: dict[str, Any]) -> dict[str, Any]:
+    rl_enabled = _env_bool("ENGINE_RL_ENABLED", False)
+    unlock_requires_baseline = _env_bool("ENGINE_RL_UNLOCK_REQUIRES_BASELINE", True)
+    baseline_ready = bool(baseline_gate.get("ready", False))
+
+    if not rl_enabled:
+        return {
+            "rl_enabled": False,
+            "unlock_requires_baseline": unlock_requires_baseline,
+            "status": "locked_disabled",
+            "reason": "ENGINE_RL_ENABLED=false",
+        }
+    if unlock_requires_baseline and not baseline_ready:
+        return {
+            "rl_enabled": True,
+            "unlock_requires_baseline": True,
+            "status": "locked_wait_baseline",
+            "reason": "baseline_gate_not_ready",
+        }
+    return {
+        "rl_enabled": True,
+        "unlock_requires_baseline": unlock_requires_baseline,
+        "status": "eligible_shadow_only",
+        "reason": "baseline_gate_ready",
+    }
+
+
 def build_recommendations(
     live_status: dict[str, Any],
     latest: dict[str, Any],
@@ -518,6 +691,8 @@ def build_recommendations(
     priority_mode: str,
     expectation: dict[str, Any],
     history_contract: dict[str, Any],
+    baseline_gate: dict[str, Any],
+    rl_policy: dict[str, Any],
 ) -> list[str]:
     items: list[str] = []
     pipeline_state = str(live_status.get("pipeline_state") or "")
@@ -541,6 +716,11 @@ def build_recommendations(
         items.append("Expected convergence probability is low; prioritize feature pruning and entry gate tightening before adding complexity.")
     if not bool(history_contract.get("full_history_ok")):
         items.append("Full-history contract is not satisfied; repair all-window start coverage before promotion decisions.")
+    if not bool(baseline_gate.get("ready")):
+        blockers = ",".join(str(item) for item in baseline_gate.get("blockers", []))
+        items.append(f"Baseline gate is not ready; RL and new-model promotion remain locked. blockers={blockers or 'unknown'}")
+    if str(rl_policy.get("status")) != "eligible_shadow_only":
+        items.append(f"RL policy is locked: {rl_policy.get('reason', 'unknown')}.")
 
     items.append("Continue legacy BTC training only: python scripts/btc_phase_runner.py --profile institutional_ramp --wait-existing")
     if priority_mode == "legacy_recovery":
@@ -560,6 +740,8 @@ def write_report_md(
     role_decisions: dict[str, str],
     expectation: dict[str, Any],
     history_contract: dict[str, Any],
+    baseline_gate: dict[str, Any],
+    rl_policy: dict[str, Any],
 ) -> None:
     latest = rows[-1] if rows else {}
     lines: list[str] = []
@@ -590,6 +772,24 @@ def write_report_md(
     lines.append(f"- required_start_utc: `{history_contract.get('required_start_utc')}`")
     lines.append(f"- observed_start_utc: `{history_contract.get('observed_start_utc')}`")
     lines.append(f"- full_history_ok: `{history_contract.get('full_history_ok')}`")
+    lines.append("")
+    lines.append("## Baseline Gate")
+    lines.append("")
+    lines.append(f"- ready: `{baseline_gate.get('ready')}`")
+    lines.append(f"- blockers: `{','.join(baseline_gate.get('blockers', []))}`")
+    lines.append(
+        f"- stability_streak: `{baseline_gate.get('stability_streak')}` / `{baseline_gate.get('required_stability_streak')}`"
+    )
+    validation_context = baseline_gate.get("validation_context", {}) if isinstance(baseline_gate.get("validation_context"), dict) else {}
+    lines.append(f"- robustness_ready: `{validation_context.get('robustness_ready')}`")
+    lines.append(f"- strictness: `{validation_context.get('strictness')}`")
+    lines.append(f"- all_window_pass_ratio: `{_to_float(validation_context.get('all_window_pass_ratio'), 0.0):.4f}`")
+    lines.append("")
+    lines.append("## RL Policy")
+    lines.append("")
+    lines.append(f"- status: `{rl_policy.get('status')}`")
+    lines.append(f"- reason: `{rl_policy.get('reason')}`")
+    lines.append(f"- unlock_requires_baseline: `{rl_policy.get('unlock_requires_baseline')}`")
     lines.append("")
     lines.append("## Role Decisions")
     lines.append("")
@@ -646,6 +846,16 @@ def main() -> int:
     feature_actions = build_feature_actions(latest)
     expectation = build_expectation(rows, targets)
     history_contract = build_history_contract(rows)
+    baseline_gate = build_baseline_gate(
+        latest=latest,
+        rows=rows,
+        targets=targets,
+        history_contract=history_contract,
+        live_status=live_status,
+    )
+    rl_policy = build_rl_policy(baseline_gate)
+    if not baseline_gate.get("ready", False):
+        priority_reasons = list(dict.fromkeys([*priority_reasons, "baseline_gate_not_ready"]))
     recommendations = build_recommendations(
         live_status=live_status,
         latest=latest,
@@ -653,6 +863,8 @@ def main() -> int:
         priority_mode=priority_mode,
         expectation=expectation,
         history_contract=history_contract,
+        baseline_gate=baseline_gate,
+        rl_policy=rl_policy,
     )
 
     payload = {
@@ -666,6 +878,8 @@ def main() -> int:
         "priority_mode": priority_mode,
         "priority_reasons": priority_reasons,
         "history_contract": history_contract,
+        "baseline_gate": baseline_gate,
+        "rl_policy": rl_policy,
         "expectation": expectation,
         "live_status": {
             "pipeline_state": live_status.get("pipeline_state"),
@@ -694,6 +908,8 @@ def main() -> int:
         role_decisions=role_decisions,
         expectation=expectation,
         history_contract=history_contract,
+        baseline_gate=baseline_gate,
+        rl_policy=rl_policy,
     )
 
     print(

@@ -61,6 +61,18 @@ jobs:
             python scripts/platform_governor.py
           fi
 
+      - name: Probe platform sync integrity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OWNER: ${{ vars.GITHUB_OWNER }}
+          GITHUB_REPO: ${{ vars.GITHUB_REPO }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_TEAM_ID }}
+          SUPPORT_BASE_URL: ${{ vars.SUPPORT_BASE_URL }}
+        run: |
+          python scripts/platform_sync_probe.py
+
       - name: Upload governor artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -69,4 +81,5 @@ jobs:
           path: |
             logs/platform_governor_report.json
             logs/platform_governor_actions.jsonl
+            logs/platform_sync_status.json
           if-no-files-found: warn

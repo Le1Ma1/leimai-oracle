@@ -1,0 +1,72 @@
+name: growth-agent-daily
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: growth-agent-daily
+  cancel-in-progress: false
+
+jobs:
+  growth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dotenv
+
+      - name: Run growth agent
+        env:
+          SUPPORT_BASE_URL: ${{ vars.SUPPORT_BASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GROWTH_AGENT_MODE: iterate
+          GROWTH_AGENT_MIN_TOTAL: "88"
+          GROWTH_AGENT_MIN_CONVERSION: "80"
+          GROWTH_AGENT_MIN_RELIABILITY: "95"
+          GROWTH_AGENT_MAX_DRAWDOWN_PCT: "12"
+        run: |
+          python scripts/growth_agent.py --mode iterate
+
+      - name: Upload growth artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: growth-agent-artifacts-${{ github.run_id }}
+          path: |
+            logs/growth_scoreboard.json
+            logs/agent_actions.jsonl
+            logs/growth_history.jsonl
+            logs/rollback_journal.jsonl
+            logs/growth_stable_overrides.json
+            support/web/generated/growth_overrides.json
+          if-no-files-found: warn
+
+      - name: Commit and push growth iteration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add logs/growth_scoreboard.json logs/agent_actions.jsonl logs/growth_history.jsonl support/web/generated/growth_overrides.json
+          if [ -f logs/rollback_journal.jsonl ]; then git add logs/rollback_journal.jsonl; fi
+          if [ -f logs/growth_stable_overrides.json ]; then git add logs/growth_stable_overrides.json; fi
+          if git diff --cached --quiet; then
+            echo "No growth changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(growth): autonomous seo-geo iteration [skip ci]"
+          git push

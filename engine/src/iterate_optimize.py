@@ -134,9 +134,10 @@ def _evaluate_quality(
     symbols: list[str],
     windows: tuple[str, ...],
     cores: tuple[str, ...],
+    timeframes: tuple[str, ...],
 ) -> tuple[dict[str, dict[str, float | int]], bool]:
-    expected_rows_per_gate = len(symbols) * len(cores)
-    expected_window_cells_per_gate = len(symbols) * len(windows) * len(cores)
+    expected_rows_per_gate = len(symbols) * len(cores) * max(1, len(timeframes))
+    expected_window_cells_per_gate = len(symbols) * len(windows) * len(cores) * max(1, len(timeframes))
     quality: dict[str, dict[str, float | int]] = {}
 
     for gate_mode in gate_modes:
@@ -523,30 +524,42 @@ def _run_round(
             feature_set = build_feature_set(df_1m=frame_1m, htf_map=htf_map)
             feature_registry_entries.extend(build_feature_registry(feature_set))
 
-            for core_id in strategy_ids:
-                for gate_mode in run_cfg.optimization_gate_modes:
-                    result = optimize_signal_core_for_symbol_timeframe(
-                        price_frame=frame_1m,
-                        feature_set_1m=feature_set,
-                        cfg=run_cfg,
-                        symbol=symbol,
-                        timeframe="1m",
-                        gate_mode=gate_mode,
-                        core_id=core_id,
-                    )
-                    results.append(result)
-                    valid_windows = sum(
-                        1 for window in result["windows"] if not bool(window["insufficient_statistical_significance"])
-                    )
+            for timeframe in run_cfg.optimization_timeframes:
+                price_frame = frame_1m if timeframe == "1m" else aggregated.get(timeframe, pd.DataFrame())
+                if price_frame.empty:
                     log_event(
-                        "ITERATION_SYMBOL_CORE_DONE",
+                        "ITERATION_SYMBOL_TF_SKIPPED",
                         run_id=run_id,
                         symbol=symbol,
-                        core_id=result["core_id"],
-                        gate_mode=gate_mode,
-                        windows=len(result["windows"]),
-                        valid_windows=valid_windows,
+                        timeframe=timeframe,
+                        reason="no_price_frame",
                     )
+                    continue
+                for core_id in strategy_ids:
+                    for gate_mode in run_cfg.optimization_gate_modes:
+                        result = optimize_signal_core_for_symbol_timeframe(
+                            price_frame=price_frame,
+                            feature_set_1m=feature_set,
+                            cfg=run_cfg,
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            gate_mode=gate_mode,
+                            core_id=core_id,
+                        )
+                        results.append(result)
+                        valid_windows = sum(
+                            1 for window in result["windows"] if not bool(window["insufficient_statistical_significance"])
+                        )
+                        log_event(
+                            "ITERATION_SYMBOL_CORE_DONE",
+                            run_id=run_id,
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            core_id=result["core_id"],
+                            gate_mode=gate_mode,
+                            windows=len(result["windows"]),
+                            valid_windows=valid_windows,
+                        )
         except Exception as error:
             failures.append(f"{symbol}: {error}")
             log_event("ITERATION_SYMBOL_FAILED", run_id=run_id, symbol=symbol, error=str(error))
@@ -580,8 +593,6 @@ def _run_round(
 
 def run_iterative_optimization(max_rounds: int = 4) -> int:
     cfg = load_config()
-    if cfg.optimization_timeframes != ("1m",):
-        raise ValueError("Iterative optimization requires 1m-only optimization timeframe.")
     active_cores = cfg.feature_cores if cfg.rule_engine_mode == "feature_native" else cfg.single_indicators
 
     symbols = _resolve_symbols(cfg)
@@ -646,6 +657,7 @@ def run_iterative_optimization(max_rounds: int = 4) -> int:
             symbols=symbols,
             windows=cfg.optimization_windows,
             cores=active_cores,
+            timeframes=cfg.optimization_timeframes,
         )
         quality_score = _score_quality(metrics)
         score = (

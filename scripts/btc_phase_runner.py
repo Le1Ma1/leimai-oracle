@@ -319,6 +319,8 @@ def _persist_priority_state(
     reasons: list[str],
     progress_report: dict[str, Any],
 ) -> None:
+    baseline_gate = progress_report.get("baseline_gate", {}) if isinstance(progress_report.get("baseline_gate"), dict) else {}
+    rl_policy = progress_report.get("rl_policy", {}) if isinstance(progress_report.get("rl_policy"), dict) else {}
     payload = {
         "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "profile": profile,
@@ -326,6 +328,8 @@ def _persist_priority_state(
         "priority_reasons": reasons,
         "latest": progress_report.get("latest", {}),
         "targets": progress_report.get("targets", {}),
+        "baseline_gate": baseline_gate,
+        "rl_policy": rl_policy,
         "role_decisions": progress_report.get("role_decisions", {}),
     }
     out_path = repo_root / "logs" / "ml_priority_state.json"
@@ -333,11 +337,30 @@ def _persist_priority_state(
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _should_allow_new_model(run_new_model: bool, priority_mode: str, reasons: list[str], legacy_only: bool) -> bool:
+def _as_bool_env(value: Any) -> bool:
+    raw = str(value or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _should_allow_new_model(
+    run_new_model: bool,
+    priority_mode: str,
+    reasons: list[str],
+    legacy_only: bool,
+    *,
+    baseline_ready: bool,
+    rl_enabled: bool,
+) -> bool:
     if not run_new_model:
         return False
     if legacy_only:
         print("[guard] legacy-only mode enabled; skip new model branch.")
+        return False
+    if not rl_enabled:
+        print("[guard] ENGINE_RL_ENABLED is false; skip new model branch.")
+        return False
+    if not baseline_ready:
+        print("[guard] baseline gate is not ready; skip new model branch.")
         return False
     if priority_mode == "legacy_recovery":
         reason_str = ", ".join(reasons[:4]) if reasons else "legacy_priority_guard"
@@ -372,6 +395,11 @@ def main() -> int:
 
     _run_ml_progress_report(repo_root=repo_root)
     progress_report = _read_progress_report(repo_root=repo_root)
+    baseline_gate = progress_report.get("baseline_gate", {}) if isinstance(progress_report.get("baseline_gate"), dict) else {}
+    rl_policy = progress_report.get("rl_policy", {}) if isinstance(progress_report.get("rl_policy"), dict) else {}
+    baseline_ready = bool(baseline_gate.get("ready", False))
+    rl_enabled = _as_bool_env(os.getenv("ENGINE_RL_ENABLED", "false"))
+    rl_enabled = bool(rl_policy.get("rl_enabled", rl_enabled))
     priority_mode, priority_reasons = _derive_priority_from_report(progress_report)
     _persist_priority_state(
         repo_root=repo_root,
@@ -488,7 +516,14 @@ def main() -> int:
             ),
         ]
 
-    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons, legacy_only=legacy_only)
+    run_new_model = _should_allow_new_model(
+        run_new_model,
+        priority_mode,
+        priority_reasons,
+        legacy_only=legacy_only,
+        baseline_ready=baseline_ready,
+        rl_enabled=rl_enabled,
+    )
 
     for phase in phases:
         summary_path = _latest_summary_path(artifact_root=artifact_root)
@@ -534,6 +569,11 @@ def main() -> int:
 
     _run_ml_progress_report(repo_root=repo_root)
     progress_report = _read_progress_report(repo_root=repo_root)
+    baseline_gate = progress_report.get("baseline_gate", {}) if isinstance(progress_report.get("baseline_gate"), dict) else {}
+    rl_policy = progress_report.get("rl_policy", {}) if isinstance(progress_report.get("rl_policy"), dict) else {}
+    baseline_ready = bool(baseline_gate.get("ready", False))
+    rl_enabled = _as_bool_env(os.getenv("ENGINE_RL_ENABLED", "false"))
+    rl_enabled = bool(rl_policy.get("rl_enabled", rl_enabled))
     priority_mode, priority_reasons = _derive_priority_from_report(progress_report)
     _persist_priority_state(
         repo_root=repo_root,
@@ -542,8 +582,19 @@ def main() -> int:
         reasons=priority_reasons,
         progress_report=progress_report,
     )
-    _run_rl_shadow_report(repo_root=repo_root)
-    run_new_model = _should_allow_new_model(run_new_model, priority_mode, priority_reasons, legacy_only=legacy_only)
+    if rl_enabled or baseline_ready:
+        _run_rl_shadow_report(repo_root=repo_root)
+    else:
+        print("[rl] shadow report skipped; RL is disabled and baseline is not ready.")
+
+    run_new_model = _should_allow_new_model(
+        run_new_model,
+        priority_mode,
+        priority_reasons,
+        legacy_only=legacy_only,
+        baseline_ready=baseline_ready,
+        rl_enabled=rl_enabled,
+    )
 
     if run_new_model:
         _run_nonlinear_grid_backtest(repo_root=repo_root)

@@ -55,6 +55,7 @@ class TuneState:
     credibility_reject_threshold: float = 0.75
     credible_max_penalty: float = 0.90
     trade_floor: int = 70
+    validation_mode: str = "standard"
     validation_strictness: str = "balanced"
     validation_sample_step: int = 20
     validation_walk_forward_splits: int = 3
@@ -361,7 +362,13 @@ def _clip(value: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, value)))
 
 
-def _adapt_state(state: TuneState, metrics: CycleMetrics, cycle_index: int, total_cycles: int) -> TuneState:
+def _adapt_state(
+    state: TuneState,
+    metrics: CycleMetrics,
+    cycle_index: int,
+    total_cycles: int,
+    validation_mode: str,
+) -> TuneState:
     next_state = TuneState(**asdict(state))
 
     if metrics.gate_pass_delta_all < -0.05 and metrics.gate_alpha_delta_all <= 0.0:
@@ -382,12 +389,13 @@ def _adapt_state(state: TuneState, metrics: CycleMetrics, cycle_index: int, tota
         )
 
     if metrics.low_credibility_ratio_gated > 0.70:
+        min_trade_floor = 25 if validation_mode == "recovery" else 40
         next_state = TuneState(
             **{
                 **asdict(next_state),
                 "credibility_reject_threshold": _clip(next_state.credibility_reject_threshold + 0.05, 0.55, 0.90),
                 "credible_max_penalty": _clip(next_state.credible_max_penalty + 0.03, 0.70, 0.95),
-                "trade_floor": max(40, int(next_state.trade_floor - 10)),
+                "trade_floor": max(min_trade_floor, int(next_state.trade_floor - 10)),
             }
         )
     elif metrics.low_credibility_ratio_gated < 0.35 and metrics.validation_pass_rate >= 0.20:
@@ -399,43 +407,74 @@ def _adapt_state(state: TuneState, metrics: CycleMetrics, cycle_index: int, tota
             }
         )
 
-    if metrics.validation_pass_rate < 0.10:
-        next_state = TuneState(
-            **{
-                **asdict(next_state),
-                "validation_strictness": "fast",
-                "validation_sample_step": 30,
-                "validation_walk_forward_splits": 2,
-                "validation_cv_folds": 2,
-                "validation_purge_bars": 60,
-                "validation_stress_friction_bps": "10",
-            }
-        )
+    if validation_mode == "recovery":
+        if metrics.validation_pass_rate < 0.10:
+            next_state = TuneState(
+                **{
+                    **asdict(next_state),
+                    "validation_mode": "recovery",
+                    "validation_strictness": "recovery",
+                    "validation_sample_step": 30,
+                    "validation_walk_forward_splits": 2,
+                    "validation_cv_folds": 2,
+                    "validation_purge_bars": 45,
+                    "validation_stress_friction_bps": "10",
+                }
+            )
+        else:
+            next_state = TuneState(
+                **{
+                    **asdict(next_state),
+                    "validation_mode": "recovery",
+                    "validation_strictness": "fast",
+                    "validation_sample_step": 20,
+                    "validation_walk_forward_splits": 2,
+                    "validation_cv_folds": 2,
+                    "validation_purge_bars": 60,
+                    "validation_stress_friction_bps": "10",
+                }
+            )
     else:
-        next_state = TuneState(
-            **{
-                **asdict(next_state),
-                "validation_strictness": "balanced",
-                "validation_sample_step": 20,
-                "validation_walk_forward_splits": 3,
-                "validation_cv_folds": 3,
-                "validation_purge_bars": 90,
-                "validation_stress_friction_bps": "10,20",
-            }
-        )
+        if metrics.validation_pass_rate < 0.10:
+            next_state = TuneState(
+                **{
+                    **asdict(next_state),
+                    "validation_mode": "standard",
+                    "validation_strictness": "fast",
+                    "validation_sample_step": 30,
+                    "validation_walk_forward_splits": 2,
+                    "validation_cv_folds": 2,
+                    "validation_purge_bars": 60,
+                    "validation_stress_friction_bps": "10",
+                }
+            )
+        else:
+            next_state = TuneState(
+                **{
+                    **asdict(next_state),
+                    "validation_mode": "standard",
+                    "validation_strictness": "balanced",
+                    "validation_sample_step": 20,
+                    "validation_walk_forward_splits": 3,
+                    "validation_cv_folds": 3,
+                    "validation_purge_bars": 90,
+                    "validation_stress_friction_bps": "10,20",
+                }
+            )
 
-    if cycle_index == total_cycles - 1:
-        next_state = TuneState(
-            **{
-                **asdict(next_state),
-                "validation_strictness": "institutional",
-                "validation_sample_step": 10,
-                "validation_walk_forward_splits": 4,
-                "validation_cv_folds": 4,
-                "validation_purge_bars": 120,
-                "validation_stress_friction_bps": "10,20,30",
-            }
-        )
+        if cycle_index == total_cycles - 1:
+            next_state = TuneState(
+                **{
+                    **asdict(next_state),
+                    "validation_mode": "standard",
+                    "validation_strictness": "institutional",
+                    "validation_sample_step": 10,
+                    "validation_walk_forward_splits": 4,
+                    "validation_cv_folds": 4,
+                    "validation_purge_bars": 120,
+                    "validation_stress_friction_bps": "10,20,30",
+                }
+            )
     return next_state
 
 
@@ -492,6 +531,13 @@ def main() -> int:
     parser.add_argument("--target-deploy-alpha", type=float, default=0.0, help="Early-stop target for deploy avg alpha vs spot.")
     parser.add_argument("--stable-rounds", type=int, default=2, help="Consecutive target-hit cycles required before early stop.")
     parser.add_argument(
+        "--validation-mode",
+        type=str,
+        choices=("standard", "recovery"),
+        default="standard",
+        help="Validation adaptation profile.",
+    )
+    parser.add_argument(
         "--symbols",
         type=str,
         default=",".join(DEFAULT_SYMBOLS),
@@ -514,29 +560,41 @@ def main() -> int:
         raise ValueError("No symbols selected. Use --symbols with at least one symbol.")
 
     base_env = os.environ.copy()
+    baseline_primary_tf = str(base_env.get("ENGINE_BASELINE_PRIMARY_TIMEFRAME", "15m")).strip().lower() or "15m"
+    baseline_confirm_tfs = str(base_env.get("ENGINE_BASELINE_CONFIRM_TIMEFRAMES", "5m")).strip().lower() or "5m"
+    baseline_feature_allowlist = str(
+        base_env.get(
+            "ENGINE_BASELINE_FEATURE_ALLOWLIST",
+            "trend__logret__15m,flow_liquidity__shock_density__1m,risk_volatility__realized_vol_60__1m",
+        )
+    ).strip()
+    baseline_cores = str(
+        base_env.get(
+            "ENGINE_FEATURE_CORES",
+            "lmo_core_breakout_regime,lmo_core_flow_absorption,lmo_core_risk_compression",
+        )
+    ).strip()
     base_env.update(
         {
             "ENGINE_RULE_ENGINE_MODE": "feature_native",
             "ENGINE_UNIVERSE_SYMBOLS": ",".join(selected_symbols),
             "ENGINE_TOP_N": str(len(selected_symbols)),
-            "ENGINE_OPTIMIZATION_TIMEFRAMES": "1m",
+            "ENGINE_OPTIMIZATION_TIMEFRAMES": baseline_primary_tf,
+            "ENGINE_BASELINE_PRIMARY_TIMEFRAME": baseline_primary_tf,
+            "ENGINE_BASELINE_CONFIRM_TIMEFRAMES": baseline_confirm_tfs,
+            "ENGINE_BASELINE_LOW_DOF_MODE": str(base_env.get("ENGINE_BASELINE_LOW_DOF_MODE", "true")),
+            "ENGINE_BASELINE_FEATURE_CAP": str(base_env.get("ENGINE_BASELINE_FEATURE_CAP", "3")),
+            "ENGINE_BASELINE_FEATURE_ALLOWLIST": baseline_feature_allowlist,
             "ENGINE_OPTIMIZATION_WINDOWS": "all,360d,90d,30d",
             "ENGINE_OPTIMIZATION_GATE_MODES": "gated,ungated",
-            "ENGINE_FEATURE_CORES": ",".join(
-                (
-                    "lmo_core_momentum_pulse",
-                    "lmo_core_mean_reclaim",
-                    "lmo_core_breakout_regime",
-                    "lmo_core_flow_absorption",
-                    "lmo_core_risk_compression",
-                    "lmo_core_timing_efficiency",
-                )
-            ),
+            "ENGINE_FEATURE_CORES": baseline_cores,
             "ENGINE_VALIDATION_ENABLED": "true",
             "ENGINE_OPT_TARGET_VALIDATION_PASS_RATE": "0.40",
             "ENGINE_OPT_TARGET_ALL_WINDOW_ALPHA_FLOOR": "0.00",
             "ENGINE_OPT_TARGET_DEPLOY_ALPHA_FLOOR": "0.00",
             "ENGINE_OPT_TARGET_DEPLOY_SYMBOL_RATIO": "0.20",
+            "ENGINE_RL_ENABLED": str(base_env.get("ENGINE_RL_ENABLED", "false")),
+            "ENGINE_RL_UNLOCK_REQUIRES_BASELINE": str(base_env.get("ENGINE_RL_UNLOCK_REQUIRES_BASELINE", "true")),
         }
     )
 
@@ -565,7 +623,26 @@ def main() -> int:
             else:
                 print("[info] All explicit symbols already have local 1m parquet data.")
 
-        state = TuneState()
+        if args.validation_mode == "recovery":
+            state = TuneState(
+                validation_mode="recovery",
+                validation_strictness="recovery",
+                validation_sample_step=30,
+                validation_walk_forward_splits=2,
+                validation_cv_folds=2,
+                validation_purge_bars=45,
+                validation_stress_friction_bps="10",
+            )
+        else:
+            state = TuneState(
+                validation_mode="standard",
+                validation_strictness="balanced",
+                validation_sample_step=20,
+                validation_walk_forward_splits=3,
+                validation_cv_folds=3,
+                validation_purge_bars=90,
+                validation_stress_friction_bps="10,20",
+            )
         stable_hits = 0
         latest_summary_payload: dict[str, Any] = {}
         latest_deploy_payload: dict[str, Any] = {}
@@ -625,6 +702,7 @@ def main() -> int:
                 metrics=metrics,
                 cycle_index=cycle_index,
                 total_cycles=max(1, int(args.cycles)),
+                validation_mode=str(args.validation_mode),
             )
 
         _print_summary(summary_payload=latest_summary_payload, deploy_payload=latest_deploy_payload)

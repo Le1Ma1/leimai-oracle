@@ -10,11 +10,12 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from .aggregate import aggregate_timeframes
+from .aggregate import RESAMPLE_RULES, aggregate_timeframes
 from .config import EngineConfig
 from .feature_cores import build_feature_core_signals
 from .features import apply_winsor_bounds, build_feature_set, fit_winsor_bounds
 from .jsonio import write_json_atomic
+from .meta_labeling import MetaLabelConfig, run_meta_label_veto
 from .optimization import build_fusion_components
 from .single_indicators import build_indicator_signals
 from .storage import load_latest_partitioned_parquet
@@ -23,6 +24,14 @@ from .types import TimeframeOptimizationResult
 WINDOW_ORDER = {"all": 0, "360d": 1, "90d": 2, "30d": 3}
 WINDOW_SELECTION_WEIGHT = {"all": 1.0, "360d": 0.85, "90d": 0.65, "30d": 0.50}
 STRICTNESS_THRESHOLDS: dict[str, dict[str, float]] = {
+    "recovery": {
+        "wf_pass_rate_min": 0.35,
+        "cv_pass_rate_min": 0.30,
+        "pbo_max": 0.60,
+        "dsr_min": -1.80,
+        "friction_robustness_min": 0.15,
+        "final_score_min": 0.30,
+    },
     "institutional": {
         "wf_pass_rate_min": 0.50,
         "cv_pass_rate_min": 0.45,
@@ -86,6 +95,42 @@ def _coerce_bool_series(value: object, index: pd.DatetimeIndex) -> pd.Series:
 
 def _window_sort_key(window_name: str) -> tuple[int, str]:
     return (WINDOW_ORDER.get(window_name, 999), window_name)
+
+
+def _to_meta_label_config(cfg: EngineConfig) -> MetaLabelConfig:
+    model = str(cfg.meta_label_model).strip().lower()
+    objective = str(cfg.meta_label_objective).strip().lower()
+    if model != "logreg":
+        raise ValueError(f"Unsupported meta label model: {cfg.meta_label_model}")
+    if objective != "classification_binary":
+        raise ValueError("Regression objective is forbidden for phase-1 meta-label pipeline.")
+    return MetaLabelConfig(
+        enabled=bool(cfg.meta_label_enabled),
+        model=model,
+        objective=objective,
+        penalty=str(cfg.meta_label_penalty).strip().lower(),
+        c=float(cfg.meta_label_c),
+        max_iter=int(cfg.meta_label_max_iter),
+        class_weight=str(cfg.meta_label_class_weight).strip().lower(),
+        tp_mult=float(cfg.meta_label_tp_mult),
+        sl_mult=float(cfg.meta_label_sl_mult),
+        vertical_horizon_bars=int(cfg.meta_label_vertical_horizon_bars),
+        vol_window=int(cfg.meta_label_vol_window),
+        min_events=int(cfg.meta_label_min_events),
+        threshold_min=float(cfg.meta_label_threshold_min),
+        threshold_max=float(cfg.meta_label_threshold_max),
+        threshold_step=float(cfg.meta_label_threshold_step),
+        precision_floor=float(cfg.meta_label_precision_floor),
+        threshold_objective=str(cfg.meta_label_threshold_objective).strip().lower(),
+        prob_threshold_fallback=float(cfg.meta_label_prob_threshold_fallback),
+        feature_cap=int(cfg.meta_label_feature_cap),
+        feature_allowlist=tuple(str(item) for item in cfg.meta_label_feature_allowlist),
+        cpcv_splits=int(cfg.meta_label_cpcv_splits),
+        cpcv_test_groups=int(cfg.meta_label_cpcv_test_groups),
+        cpcv_purge_bars=int(cfg.meta_label_cpcv_purge_bars),
+        cpcv_embargo_bars=int(cfg.meta_label_cpcv_embargo_bars),
+        cpcv_max_combinations=int(cfg.meta_label_cpcv_max_combinations),
+    )
 
 
 def _compute_buy_hold_return(close: pd.Series) -> float:
@@ -402,24 +447,87 @@ def _build_validation_row(
     result: TimeframeOptimizationResult,
     window: dict[str, object],
     close_window: pd.Series,
+    high_window: pd.Series,
+    low_window: pd.Series,
+    feature_window: pd.DataFrame,
     entry_window: pd.Series,
     exit_window: pd.Series,
     cfg: EngineConfig,
+    meta_cfg: MetaLabelConfig,
 ) -> dict[str, object]:
     best_long = window.get("best_long")
     if not isinstance(best_long, dict):
         raise ValueError("best_long is required for validation rows")
-    best_metrics = best_long.get("metrics", {})
-    strategy_return = float(_safe_float(best_metrics.get("friction_adjusted_return")))
+
+    entry_effective = _coerce_bool_series(entry_window, close_window.index)
+    threshold_payload: dict[str, object] = {
+        "precision_floor": float(meta_cfg.precision_floor),
+        "objective": meta_cfg.threshold_objective,
+        "selected": None,
+        "valid_threshold_count": 0,
+        "failsafe_veto_all": False,
+    }
+    classification_payload: dict[str, object] = {}
+    cpcv_payload: dict[str, object] = {}
+    meta_reason = "disabled_by_config"
+    meta_events_total = 0
+    labels_positive = 0
+    labels_negative = 0
+    label_provenance: dict[str, int] = {}
+    feature_columns: list[str] = []
+    coefficients: dict[str, float] = {}
+    if meta_cfg.enabled:
+        meta_result = run_meta_label_veto(
+            close=close_window,
+            high=high_window,
+            low=low_window,
+            entry=entry_window,
+            feature_df=feature_window,
+            friction_bps=cfg.friction_bps,
+            cfg=meta_cfg,
+        )
+        entry_effective = _coerce_bool_series(meta_result.get("entry_meta"), close_window.index)
+        threshold_obj = meta_result.get("threshold")
+        if isinstance(threshold_obj, dict):
+            threshold_payload = threshold_obj
+        classification_obj = meta_result.get("classification")
+        if isinstance(classification_obj, dict):
+            classification_payload = classification_obj
+        cpcv_obj = meta_result.get("cpcv")
+        if isinstance(cpcv_obj, dict):
+            cpcv_payload = cpcv_obj
+        meta_reason = str(meta_result.get("reason", "unknown"))
+        meta_events_total = int(meta_result.get("events_total", 0) or 0)
+        labels_positive = int(meta_result.get("labels_positive", 0) or 0)
+        labels_negative = int(meta_result.get("labels_negative", 0) or 0)
+        provenance_obj = meta_result.get("label_provenance")
+        if isinstance(provenance_obj, dict):
+            label_provenance = {str(key): int(value) for key, value in provenance_obj.items()}
+        cols_obj = meta_result.get("feature_columns")
+        if isinstance(cols_obj, list):
+            feature_columns = [str(item) for item in cols_obj]
+        coef_obj = meta_result.get("coefficients")
+        if isinstance(coef_obj, dict):
+            coefficients = {str(key): float(_safe_float(value)) for key, value in coef_obj.items()}
+
+    window_metrics = _compute_metrics(
+        close=close_window,
+        entry=entry_effective,
+        exit_=exit_window,
+        friction_bps=cfg.friction_bps,
+    )
+    strategy_return = float(_safe_float(window_metrics.get("friction_adjusted_return")))
     benchmark_buy_hold = float(_safe_float(window.get("benchmark_buy_hold_return"), default=_compute_buy_hold_return(close_window)))
     alpha_vs_spot = float(strategy_return - benchmark_buy_hold)
-    trades = int(best_metrics.get("trades", 0) or 0)
-    win_rate = float(_safe_float(best_metrics.get("win_rate")))
-    max_drawdown = float(_safe_float(best_metrics.get("max_drawdown")))
+    trades = int(window_metrics.get("trades", 0) or 0)
+    win_rate = float(_safe_float(window_metrics.get("win_rate")))
+    max_drawdown = float(_safe_float(window_metrics.get("max_drawdown")))
+    entry_raw_count = int(entry_window.sum())
+    entry_meta_count = int(entry_effective.sum())
 
     close_eval, entry_eval, exit_eval = _sample_window_series(
         close=close_window,
-        entry=entry_window,
+        entry=entry_effective,
         exit_=exit_window,
         step=max(1, int(cfg.validation_sample_step)),
     )
@@ -485,6 +593,9 @@ def _build_validation_row(
         friction_robustness=friction_robustness,
         final_score=scores["final_score"],
     )
+    if bool(meta_cfg.enabled) and bool(threshold_payload.get("failsafe_veto_all", False)):
+        passes_validation = False
+        failed_reasons = [*failed_reasons, "meta_precision_floor"]
 
     return {
         "symbol": result["symbol"],
@@ -527,8 +638,23 @@ def _build_validation_row(
             "robustness": float(friction_robustness),
         },
         "scores": scores,
+        "entry_signals_raw": entry_raw_count,
+        "entry_signals_meta": entry_meta_count,
+        "meta_label": {
+            "enabled": bool(meta_cfg.enabled),
+            "events_total": meta_events_total,
+            "labels_positive": labels_positive,
+            "labels_negative": labels_negative,
+            "label_provenance": label_provenance,
+            "threshold": threshold_payload,
+            "classification": classification_payload,
+            "cpcv": cpcv_payload,
+            "feature_columns": feature_columns,
+            "coefficients": coefficients,
+            "reason": meta_reason,
+        },
         "passes_validation": bool(passes_validation),
-        "failed_reasons": failed_reasons,
+        "failed_reasons": sorted(set(failed_reasons)),
         "source_window": {
             "start_utc": str(window.get("start_utc", "")),
             "end_utc": str(window.get("end_utc", "")),
@@ -560,6 +686,90 @@ def _summarize_rows(rows: list[dict[str, object]], key_name: str) -> list[dict[s
             }
         )
     return out
+
+
+def _summarize_meta_label(rows: list[dict[str, object]]) -> dict[str, object]:
+    meta_rows: list[dict[str, object]] = []
+    for row in rows:
+        payload = row.get("meta_label")
+        if not isinstance(payload, dict):
+            continue
+        if not bool(payload.get("enabled")):
+            continue
+        meta_rows.append(payload)
+
+    if not meta_rows:
+        return {
+            "enabled": False,
+            "rows_total": len(rows),
+            "rows_with_meta": 0,
+            "events_total": 0,
+            "failsafe_veto_all_count": 0,
+            "failsafe_veto_all_rate": 0.0,
+            "precision_floor": 0.0,
+            "classification_median": {
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+                "f05": 0.0,
+                "pr_auc": 0.0,
+            },
+            "cpcv_median": {
+                "precision_floor_compliance_rate": 0.0,
+                "veto_all_rate": 0.0,
+            },
+        }
+
+    precision_vals: list[float] = []
+    recall_vals: list[float] = []
+    f1_vals: list[float] = []
+    f05_vals: list[float] = []
+    pr_auc_vals: list[float] = []
+    cpcv_compliance_vals: list[float] = []
+    cpcv_veto_vals: list[float] = []
+    failsafe_count = 0
+    events_total = 0
+    precision_floor = 0.0
+
+    for payload in meta_rows:
+        threshold = payload.get("threshold")
+        if isinstance(threshold, dict):
+            if bool(threshold.get("failsafe_veto_all", False)):
+                failsafe_count += 1
+            precision_floor = max(precision_floor, float(_safe_float(threshold.get("precision_floor"), 0.0)))
+        events_total += int(payload.get("events_total", 0) or 0)
+        classification = payload.get("classification")
+        if isinstance(classification, dict):
+            precision_vals.append(float(_safe_float(classification.get("precision"), 0.0)))
+            recall_vals.append(float(_safe_float(classification.get("recall"), 0.0)))
+            f1_vals.append(float(_safe_float(classification.get("f1"), 0.0)))
+            f05_vals.append(float(_safe_float(classification.get("f05"), 0.0)))
+            pr_auc_vals.append(float(_safe_float(classification.get("pr_auc"), 0.0)))
+        cpcv = payload.get("cpcv")
+        if isinstance(cpcv, dict):
+            cpcv_compliance_vals.append(float(_safe_float(cpcv.get("precision_floor_compliance_rate"), 0.0)))
+            cpcv_veto_vals.append(float(_safe_float(cpcv.get("veto_all_rate"), 0.0)))
+
+    return {
+        "enabled": True,
+        "rows_total": len(rows),
+        "rows_with_meta": len(meta_rows),
+        "events_total": int(events_total),
+        "failsafe_veto_all_count": int(failsafe_count),
+        "failsafe_veto_all_rate": float(failsafe_count / max(1, len(meta_rows))),
+        "precision_floor": float(precision_floor),
+        "classification_median": {
+            "precision": float(np.median(precision_vals)) if precision_vals else 0.0,
+            "recall": float(np.median(recall_vals)) if recall_vals else 0.0,
+            "f1": float(np.median(f1_vals)) if f1_vals else 0.0,
+            "f05": float(np.median(f05_vals)) if f05_vals else 0.0,
+            "pr_auc": float(np.median(pr_auc_vals)) if pr_auc_vals else 0.0,
+        },
+        "cpcv_median": {
+            "precision_floor_compliance_rate": float(np.median(cpcv_compliance_vals)) if cpcv_compliance_vals else 0.0,
+            "veto_all_rate": float(np.median(cpcv_veto_vals)) if cpcv_veto_vals else 0.0,
+        },
+    }
 
 
 def _build_deploy_pool(rows: list[dict[str, object]], max_rules_per_symbol: int) -> dict[str, object]:
@@ -763,6 +973,7 @@ def _write_validation_payloads(
         "pass_rate": float(passed_count / total_count) if total_count > 0 else 0.0,
         "summary_by_gate_mode": _summarize_rows(validation_rows, "gate_mode"),
         "summary_by_window": _summarize_rows(validation_rows, "window"),
+        "meta_label_summary": _summarize_meta_label(validation_rows),
         "rows": validation_rows,
     }
     deploy_payload = {
@@ -918,6 +1129,21 @@ def _build_light_validation_rows(
                         "robustness": float(friction_robustness),
                     },
                     "scores": scores,
+                    "entry_signals_raw": trades,
+                    "entry_signals_meta": trades,
+                    "meta_label": {
+                        "enabled": False,
+                        "events_total": 0,
+                        "labels_positive": 0,
+                        "labels_negative": 0,
+                        "label_provenance": {},
+                        "threshold": {},
+                        "classification": {},
+                        "cpcv": {},
+                        "feature_columns": [],
+                        "coefficients": {},
+                        "reason": "light_mode_skipped",
+                    },
                     "passes_validation": bool(passes_validation),
                     "failed_reasons": failed_reasons,
                     "source_window": {
@@ -951,10 +1177,12 @@ def write_validation_artifacts(
     date_token = now_utc.strftime("%Y-%m-%d")
     base_dir = artifact_root / "optimization" / "single" / date_token
     strictness = cfg.validation_strictness if cfg.validation_strictness in STRICTNESS_THRESHOLDS else "institutional"
+    meta_cfg = _to_meta_label_config(cfg)
 
     symbol_frame_cache: dict[str, pd.DataFrame] = {}
+    symbol_timeframe_cache: dict[tuple[str, str], pd.DataFrame] = {}
     symbol_feature_cache: dict[str, pd.DataFrame] = {}
-    signal_cache: dict[str, tuple[pd.Series, pd.Series]] = {}
+    signal_cache: dict[str, tuple[pd.Series, pd.Series, pd.DataFrame]] = {}
 
     def _load_symbol_inputs(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         if symbol not in symbol_frame_cache:
@@ -976,29 +1204,69 @@ def write_validation_artifacts(
 
         return symbol_frame_cache[symbol], symbol_feature_cache[symbol]
 
+    def _load_symbol_frame(symbol: str, timeframe: str) -> pd.DataFrame:
+        if timeframe == "1m":
+            frame_1m, _ = _load_symbol_inputs(symbol)
+            return frame_1m
+        cache_key = (symbol, timeframe)
+        if cache_key in symbol_timeframe_cache:
+            return symbol_timeframe_cache[cache_key]
+        frame_1m, _ = _load_symbol_inputs(symbol)
+        aggregated = aggregate_timeframes(df_1m=frame_1m, timeframes=(timeframe,))
+        symbol_timeframe_cache[cache_key] = aggregated.get(timeframe, pd.DataFrame())
+        return symbol_timeframe_cache[cache_key]
+
+    def _align_features_for_timeframe(
+        feature_set_1m: pd.DataFrame,
+        timeframe: str,
+        target_index: pd.DatetimeIndex,
+    ) -> pd.DataFrame:
+        if feature_set_1m.empty:
+            return pd.DataFrame(index=target_index.copy())
+        if timeframe == "1m":
+            return feature_set_1m.reindex(target_index, method="ffill").fillna(0.0)
+        rule = RESAMPLE_RULES.get(timeframe)
+        if rule is None:
+            return feature_set_1m.reindex(target_index, method="ffill").fillna(0.0)
+        feature_tf = feature_set_1m.resample(rule, label="left", closed="left").last()
+        return feature_tf.reindex(target_index, method="ffill").fillna(0.0)
+
     def _build_signals(
         *,
         symbol: str,
+        timeframe: str,
         gate_mode: str,
         signal_source: str,
         indicator_id: str,
         rule_key: str,
         params: dict[str, int | float],
         window_start_utc: pd.Timestamp | None = None,
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, pd.DataFrame]:
         params_token = json.dumps(params, sort_keys=True, ensure_ascii=True)
         start_token = window_start_utc.isoformat() if isinstance(window_start_utc, pd.Timestamp) else "none"
-        cache_key = "|".join([symbol, gate_mode, signal_source, indicator_id, rule_key, params_token, start_token])
+        cache_key = "|".join([symbol, timeframe, gate_mode, signal_source, indicator_id, rule_key, params_token, start_token])
         if cache_key in signal_cache:
-            entry_cached, exit_cached = signal_cache[cache_key]
-            frame, _ = _load_symbol_inputs(symbol)
-            return frame["close"].astype("float64"), entry_cached, exit_cached
+            entry_cached, exit_cached, feature_cached = signal_cache[cache_key]
+            frame = _load_symbol_frame(symbol, timeframe)
+            return (
+                frame["close"].astype("float64"),
+                frame["high"].astype("float64"),
+                frame["low"].astype("float64"),
+                entry_cached,
+                exit_cached,
+                feature_cached,
+            )
 
-        frame, feature_set = _load_symbol_inputs(symbol)
+        frame = _load_symbol_frame(symbol, timeframe)
+        _, feature_set = _load_symbol_inputs(symbol)
         close = frame["close"].astype("float64")
         high = frame["high"].astype("float64")
         low = frame["low"].astype("float64")
-        aligned_features = feature_set.reindex(close.index, method="ffill").fillna(0.0)
+        aligned_features = _align_features_for_timeframe(
+            feature_set_1m=feature_set,
+            timeframe=timeframe,
+            target_index=close.index,
+        )
         if isinstance(window_start_utc, pd.Timestamp):
             train_feature_frame = aligned_features.loc[aligned_features.index < window_start_utc]
             winsor_bounds = fit_winsor_bounds(train_feature_frame) if not train_feature_frame.empty else {}
@@ -1024,7 +1292,7 @@ def write_validation_artifacts(
         entry = _coerce_bool_series(entry, close.index)
         exit_ = _coerce_bool_series(exit_, close.index)
         if gate_mode == "gated":
-            fusion_components = build_fusion_components(feature_df=aligned_features, timeframe="1m").reindex(close.index).fillna(0.0)
+            fusion_components = build_fusion_components(feature_df=aligned_features, timeframe=timeframe).reindex(close.index).fillna(0.0)
             oracle = fusion_components.get("oracle_score", fusion_components["fusion_score"]).reindex(close.index).fillna(0.0)
             confidence = fusion_components.get(
                 "confidence",
@@ -1038,12 +1306,13 @@ def write_validation_artifacts(
             )
             entry = (entry & (oracle >= entry_threshold) & (confidence >= confidence_threshold)).fillna(False)
 
-        signal_cache[cache_key] = (entry, exit_)
-        return close, entry, exit_
+        signal_cache[cache_key] = (entry, exit_, aligned_features)
+        return close, high, low, entry, exit_, aligned_features
 
     validation_rows: list[dict[str, object]] = []
     for result in results:
         symbol = str(result["symbol"])
+        timeframe = str(result.get("timeframe", "1m"))
         for window in result.get("windows", []):
             best_long = window.get("best_long")
             if not isinstance(best_long, dict):
@@ -1053,8 +1322,9 @@ def write_validation_artifacts(
             params = best_long.get("params", {})
             if not isinstance(params, dict):
                 params = {}
-            close_full, entry_full, exit_full = _build_signals(
+            close_full, high_full, low_full, entry_full, exit_full, feature_full = _build_signals(
                 symbol=symbol,
+                timeframe=timeframe,
                 gate_mode=str(result["gate_mode"]),
                 signal_source=str(best_long.get("signal_source", result.get("strategy_mode", "indicator"))),
                 indicator_id=str(result["indicator_id"]),
@@ -1065,6 +1335,9 @@ def write_validation_artifacts(
             close_window = close_full.loc[(close_full.index >= start_utc) & (close_full.index <= end_utc)]
             if close_window.empty:
                 continue
+            high_window = high_full.reindex(close_window.index).ffill().bfill().fillna(close_window)
+            low_window = low_full.reindex(close_window.index).ffill().bfill().fillna(close_window)
+            feature_window = feature_full.reindex(close_window.index, method="ffill").fillna(0.0)
             entry_window = entry_full.reindex(close_window.index).fillna(False)
             exit_window = exit_full.reindex(close_window.index).fillna(False)
             validation_rows.append(
@@ -1072,9 +1345,13 @@ def write_validation_artifacts(
                     result=result,
                     window=window,
                     close_window=close_window,
+                    high_window=high_window,
+                    low_window=low_window,
+                    feature_window=feature_window,
                     entry_window=entry_window,
                     exit_window=exit_window,
                     cfg=cfg,
+                    meta_cfg=meta_cfg,
                 )
             )
 

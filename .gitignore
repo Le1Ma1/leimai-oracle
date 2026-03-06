@@ -5,12 +5,16 @@
 __pycache__/
 *.pyc
 
+tmp_*
+tmp_logs_*/
+tmp_logs_live_*/
+tmp_pg_*/
+
 engine/data/
 engine/artifacts/
 logs/.home_vibe_tmp.png
 logs/.detail_vibe_tmp.png
-support/web/generated/snapshots/*.png
-!support/web/generated/snapshots/.gitkeep
+logs/platform_sync_status.json
 
 node_modules/
 .next/
