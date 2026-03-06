@@ -91,6 +91,13 @@ PROFILE_OVERRIDE_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
+FLOW_GATE_DEFAULTS = {
+    "max_veto_rate": 0.85,
+    "max_failsafe_veto_all_rate": 0.40,
+    "min_trades_total_all_window": 1,
+    "required_streak": 1,
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -554,6 +561,13 @@ def _normalize_profile_key(raw: Any) -> str:
     return f"PROFILE_{slug.upper()}"
 
 
+def _normalize_stage_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if text == "STAGE_ALPHA_RECOVERY":
+        return "STAGE_ALPHA_RECOVERY"
+    return "STAGE_FLOW_RECOVERY"
+
+
 def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     profile_rows: dict[str, dict[str, Any]] = {}
     for row in rounds:
@@ -747,6 +761,7 @@ def _latest_loop_profile_override(loop_state: dict[str, Any]) -> dict[str, Any]:
     profile_name = str(last.get("profile_name") or "")
     return {
         "profile_name": profile_name,
+        "profile_key": _normalize_profile_key(profile_name),
         "overrides": overrides,
     }
 
@@ -769,6 +784,20 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
             "min_all_window_alpha": safe_float(loop_state["gate"].get("min_all_window_alpha"), gate["min_all_window_alpha"]),
             "require_deploy_ready": bool(loop_state["gate"].get("require_deploy_ready", gate["require_deploy_ready"])),
             "required_streak": max(1, safe_int(loop_state["gate"].get("required_streak"), gate["required_streak"])),
+        }
+    flow_gate = dict(FLOW_GATE_DEFAULTS)
+    if isinstance(loop_state.get("flow_gate"), dict):
+        flow_gate = {
+            "max_veto_rate": safe_float(loop_state["flow_gate"].get("max_veto_rate"), FLOW_GATE_DEFAULTS["max_veto_rate"]),
+            "max_failsafe_veto_all_rate": safe_float(
+                loop_state["flow_gate"].get("max_failsafe_veto_all_rate"),
+                FLOW_GATE_DEFAULTS["max_failsafe_veto_all_rate"],
+            ),
+            "min_trades_total_all_window": max(
+                1,
+                safe_int(loop_state["flow_gate"].get("min_trades_total_all_window"), FLOW_GATE_DEFAULTS["min_trades_total_all_window"]),
+            ),
+            "required_streak": max(1, safe_int(loop_state["flow_gate"].get("required_streak"), FLOW_GATE_DEFAULTS["required_streak"])),
         }
 
     rounds = _collect_iteration_rounds(max_rounds=240, gate=gate)
@@ -793,7 +822,16 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
     stagnation_count = safe_int(loop_state.get("stagnation_count"), 0)
     hard_cap = safe_int(loop_state.get("hard_cap"), 50)
     loop_runs = safe_int(loop_state.get("loop_runs"), 0)
+    flow_gate_streak = safe_int(loop_state.get("flow_gate_streak"), 0)
+    flow_gate_achieved = bool(loop_state.get("flow_gate_achieved", False))
+    stage_key = _normalize_stage_key(loop_state.get("stage_key"))
+    if flow_gate_achieved:
+        stage_key = "STAGE_ALPHA_RECOVERY"
+    next_profile_name = str(loop_state.get("next_profile_name") or "")
     diagnosis = _diagnose_latest_round(latest_round=latest_round, gate=gate)
+    next_profile_key = _normalize_profile_key(next_profile_name)
+    if next_profile_key == "PROFILE_UNKNOWN":
+        next_profile_key = str(diagnosis.get("recommended_profile_key") or "PROFILE_BASELINE")
     profile_comparison = _build_profile_comparison(rounds)
     last_loop_profile = _latest_loop_profile_override(loop_state)
 
@@ -811,7 +849,15 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
             "stagnation_rounds": stagnation_rounds,
             "hard_cap": hard_cap,
             "loop_runs": loop_runs,
+            "flow_gate_streak": flow_gate_streak,
+            "flow_gate_required_streak": safe_int(flow_gate.get("required_streak"), 1),
+            "flow_gate_achieved": flow_gate_achieved,
         },
+        "flow_gate": flow_gate,
+        "recovery_stage_key": stage_key,
+        "next_profile_key": next_profile_key,
+        "next_profile_name": next_profile_name,
+        "early_gate_hit": flow_gate_achieved,
         "diagnosis": diagnosis,
         "profile_comparison": profile_comparison,
         "latest_loop_profile": last_loop_profile,
@@ -852,6 +898,8 @@ def _runtime_completion_reason_key(loop_status: str) -> str:
         return "COMPLETION_STAGNATED"
     if status == "TRAINING_STATUS_HALTED":
         return "COMPLETION_HALTED"
+    if status == "TRAINING_STATUS_STAGNATED_FLOW_LOCK":
+        return "COMPLETION_STAGNATED"
     return "COMPLETION_UNKNOWN"
 
 
@@ -897,7 +945,7 @@ def _runtime_status_key(*, pipeline_state: str, loop_status: str, has_active_pro
         return "RUNTIME_RUNNING"
     if loop == "TRAINING_STATUS_CONVERGED" and not has_active_process:
         return "RUNTIME_COMPLETED"
-    if loop in {"TRAINING_STATUS_STAGNATED", "TRAINING_STATUS_HALTED"} and not has_active_process:
+    if loop in {"TRAINING_STATUS_STAGNATED", "TRAINING_STATUS_HALTED", "TRAINING_STATUS_STAGNATED_FLOW_LOCK"} and not has_active_process:
         return "RUNTIME_STALLED"
     if state == "stalled":
         return "RUNTIME_STALLED"
@@ -1009,6 +1057,23 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         first = top_bottlenecks[0]
         if isinstance(first, dict):
             top_reason_key = str(first.get("reason_key") or "")
+    recovery_stage_key = _normalize_stage_key(training_roadmap.get("recovery_stage_key"))
+    next_profile_key = str(training_roadmap.get("next_profile_key") or diagnosis.get("recommended_profile_key") or "PROFILE_BASELINE")
+    early_gate_hit = bool(training_roadmap.get("early_gate_hit", False))
+    flow_gate = training_roadmap.get("flow_gate")
+    flow_gate = flow_gate if isinstance(flow_gate, dict) else dict(FLOW_GATE_DEFAULTS)
+    flow_gate_thresholds = {
+        "max_veto_rate": safe_float(flow_gate.get("max_veto_rate"), FLOW_GATE_DEFAULTS["max_veto_rate"]),
+        "max_failsafe_veto_all_rate": safe_float(
+            flow_gate.get("max_failsafe_veto_all_rate"),
+            FLOW_GATE_DEFAULTS["max_failsafe_veto_all_rate"],
+        ),
+        "min_trades_total_all_window": max(
+            1,
+            safe_int(flow_gate.get("min_trades_total_all_window"), FLOW_GATE_DEFAULTS["min_trades_total_all_window"]),
+        ),
+        "required_streak": max(1, safe_int(flow_gate.get("required_streak"), FLOW_GATE_DEFAULTS["required_streak"])),
+    }
 
     last_event_at_utc = _extract_last_event_ts(live_status)
     notify_event_key, notify_seq = _notify_event_key(
@@ -1043,6 +1108,10 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "diagnosis_recommended_profile_key": str(diagnosis.get("recommended_profile_key") or ""),
         "diagnosis_top_reason_key": top_reason_key,
         "diagnosis_confidence": safe_float(diagnosis.get("confidence"), 0.0),
+        "recovery_stage_key": recovery_stage_key,
+        "next_profile_key": next_profile_key,
+        "early_gate_hit": early_gate_hit,
+        "flow_gate_thresholds": flow_gate_thresholds,
         "last_event_at_utc": last_event_at_utc or None,
         "last_sync_at_utc": str(visual_state.get("last_synced_at") or latest_synced),
         "notify_event_key": notify_event_key,

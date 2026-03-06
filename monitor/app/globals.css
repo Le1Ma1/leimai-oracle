@@ -118,6 +118,12 @@ body {
   margin-bottom: 12px;
 }
 
+.missionGateRule {
+  margin-bottom: 10px;
+  color: rgba(248, 230, 200, 0.68);
+  font-size: 0.78rem;
+}
+
 .missionProgressMeta {
   display: flex;
   justify-content: space-between;

@@ -21,6 +21,7 @@ export type TrainingStatusKey =
   | "TRAINING_STATUS_CONVERGED"
   | "TRAINING_STATUS_STALLED"
   | "TRAINING_STATUS_STAGNATED"
+  | "TRAINING_STATUS_STAGNATED_FLOW_LOCK"
   | "TRAINING_STATUS_HALTED";
 
 export type RuntimeStatusKey = "RUNTIME_RUNNING" | "RUNTIME_STALLED" | "RUNTIME_COMPLETED" | "RUNTIME_IDLE";
@@ -40,6 +41,8 @@ export type RuntimeCompletionReasonKey =
   | "COMPLETION_UNKNOWN";
 
 export type RuntimeNotifyKey = "NOTIFY_RUN_STARTED" | "NOTIFY_STALLED" | "NOTIFY_COMPLETED" | "NOTIFY_RESUMED";
+
+export type RecoveryStageKey = "STAGE_FLOW_RECOVERY" | "STAGE_ALPHA_RECOVERY" | string;
 
 export type ProfileKey =
   | "PROFILE_BASELINE"
@@ -164,7 +167,20 @@ export interface TrainingRoadmap {
     stagnation_rounds: number;
     hard_cap: number;
     loop_runs: number;
+    flow_gate_streak: number;
+    flow_gate_required_streak: number;
+    flow_gate_achieved: boolean;
   };
+  flow_gate?: {
+    max_veto_rate: number;
+    max_failsafe_veto_all_rate: number;
+    min_trades_total_all_window: number;
+    required_streak: number;
+  };
+  recovery_stage_key?: RecoveryStageKey | string;
+  next_profile_key?: ProfileKey | string;
+  next_profile_name?: string;
+  early_gate_hit?: boolean;
   diagnosis?: {
     objective_key: DiagnosisObjectiveKey;
     recommended_profile_key: ProfileKey;
@@ -225,6 +241,15 @@ export interface TrainingRuntime {
   diagnosis_recommended_profile_key: ProfileKey | string;
   diagnosis_top_reason_key: RejectionReason | string;
   diagnosis_confidence: number;
+  recovery_stage_key: RecoveryStageKey | string;
+  next_profile_key: ProfileKey | string;
+  early_gate_hit: boolean;
+  flow_gate_thresholds: {
+    max_veto_rate: number;
+    max_failsafe_veto_all_rate: number;
+    min_trades_total_all_window: number;
+    required_streak: number;
+  };
   last_event_at_utc: string | null;
   last_sync_at_utc: string;
   notify_event_key: RuntimeNotifyKey | string;

@@ -16,6 +16,11 @@ OPT_ROOT = ROOT / "engine" / "artifacts" / "optimization" / "single"
 CONTROL_ROOT = ROOT / "engine" / "artifacts" / "control"
 STATE_PATH = CONTROL_ROOT / "training_loop_state.json"
 
+STAGE_FLOW_RECOVERY = "STAGE_FLOW_RECOVERY"
+STAGE_ALPHA_RECOVERY = "STAGE_ALPHA_RECOVERY"
+
+STATUS_FLOW_LOCK = "TRAINING_STATUS_STAGNATED_FLOW_LOCK"
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -108,6 +113,22 @@ def extract_meta_metrics(validation: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def compute_veto_rate(validation: dict[str, Any], fallback: float = 1.0) -> float:
+    rows = validation.get("rows", [])
+    if not isinstance(rows, list):
+        return max(0.0, min(1.0, fallback))
+    raw_total = 0
+    kept_total = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_total += safe_int(row.get("entry_signals_raw"), 0)
+        kept_total += safe_int(row.get("entry_signals_meta"), 0)
+    if raw_total <= 0:
+        return max(0.0, min(1.0, fallback))
+    return max(0.0, min(1.0, 1.0 - (kept_total / raw_total)))
+
+
 def extract_pbo_dsr(validation: dict[str, Any]) -> tuple[float, float]:
     rows = validation.get("rows", [])
     if not isinstance(rows, list) or not rows:
@@ -140,6 +161,7 @@ def collect_latest_metrics() -> dict[str, Any]:
     deploy_ready = bool(failure.get("deploy_ready", False))
     deploy_symbols = safe_int(failure.get("deploy_symbols"), 0)
     deploy_rules = safe_int(failure.get("deploy_rules"), 0)
+    veto_rate = compute_veto_rate(validation, fallback=safe_float(meta_metrics.get("failsafe_veto_all_rate"), 1.0))
 
     return {
         "run_id": run_id,
@@ -154,6 +176,7 @@ def collect_latest_metrics() -> dict[str, Any]:
         "trades_avg_all_window": trades_avg,
         "pbo": pbo,
         "dsr": dsr,
+        "veto_rate": veto_rate,
         **meta_metrics,
     }
 
@@ -210,11 +233,23 @@ PROFILE_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
+def _flow_gate_hit(metrics: dict[str, Any], flow_gate: dict[str, Any]) -> bool:
+    trades_total = safe_int(metrics.get("trades_total_all_window"), 0)
+    veto_rate = safe_float(metrics.get("veto_rate"), 1.0)
+    failsafe_rate = safe_float(metrics.get("failsafe_veto_all_rate"), 1.0)
+    return bool(
+        trades_total >= max(1, safe_int(flow_gate.get("min_trades_total_all_window"), 1))
+        and veto_rate <= safe_float(flow_gate.get("max_veto_rate"), 0.85)
+        and failsafe_rate <= safe_float(flow_gate.get("max_failsafe_veto_all_rate"), 0.40)
+    )
+
+
 def choose_meta_overrides(
     *,
     last_metrics: dict[str, Any] | None,
     loop_index: int,
     stagnation_count: int,
+    stage_key: str,
 ) -> tuple[str, dict[str, str]]:
     overrides: dict[str, str] = {
         "ENGINE_META_LABEL_THRESHOLD_STEP": "0.005",
@@ -229,10 +264,10 @@ def choose_meta_overrides(
         return profile_name, merged
 
     if last_metrics is None:
-        return _with_profile("r1_baseline")
+        return _with_profile("r2_event_expansion")
 
     veto_rate = max(
-        safe_float(last_metrics.get("veto_all_rate"), 0.0),
+        safe_float(last_metrics.get("veto_rate"), 0.0),
         safe_float(last_metrics.get("failsafe_veto_all_rate"), 0.0),
     )
     trades_total = safe_int(last_metrics.get("trades_total_all_window"), 0)
@@ -240,13 +275,20 @@ def choose_meta_overrides(
     pass_rate = safe_float(last_metrics.get("validation_pass_rate"), 0.0)
     alpha_all = safe_float(last_metrics.get("all_window_alpha"), 0.0)
 
-    if stagnation_count >= 2:
-        cycle = ["r2_event_expansion", "r4_alpha_rescue", "r3_precision_recovery"]
-        return _with_profile(cycle[(loop_index + stagnation_count) % len(cycle)])
+    if stage_key == STAGE_FLOW_RECOVERY:
+        if stagnation_count >= 2:
+            cycle = ["r2_event_expansion", "r4_alpha_rescue", "r3_precision_recovery"]
+            return _with_profile(cycle[(loop_index + stagnation_count) % len(cycle)])
+        if trades_total <= 0 or veto_rate > 0.95:
+            return _with_profile("r2_event_expansion")
+        if floor_comp < 0.60:
+            return _with_profile("r3_precision_recovery")
+        return _with_profile("r4_alpha_rescue")
 
-    if trades_total <= 0 or veto_rate > 0.95:
-        return _with_profile("r2_event_expansion")
-    if floor_comp < 0.40:
+    if stagnation_count >= 2:
+        cycle = ["r4_alpha_rescue", "r1_baseline", "r3_precision_recovery"]
+        return _with_profile(cycle[(loop_index + stagnation_count) % len(cycle)])
+    if floor_comp < 0.60:
         return _with_profile("r3_precision_recovery")
     if pass_rate < 0.20 or alpha_all <= 0.0:
         return _with_profile("r4_alpha_rescue")
@@ -314,6 +356,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--required-streak", type=int, default=2)
     parser.add_argument("--stagnation-rounds", type=int, default=6)
     parser.add_argument("--hard-cap", type=int, default=50)
+    parser.add_argument("--flow-gate-max-veto-rate", type=float, default=0.85)
+    parser.add_argument("--flow-gate-max-failsafe-rate", type=float, default=0.40)
+    parser.add_argument("--flow-gate-min-trades", type=int, default=1)
+    parser.add_argument("--flow-gate-required-streak", type=int, default=1)
     parser.add_argument("--resume", dest="resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-ingest", dest="skip_ingest", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--with-monitor", dest="with_monitor", action=argparse.BooleanOptionalAction, default=True)
@@ -332,11 +378,22 @@ def main() -> int:
         "require_deploy_ready": bool(args.require_deploy_ready),
         "required_streak": max(1, int(args.required_streak)),
     }
+    flow_gate = {
+        "max_veto_rate": max(0.0, min(1.0, float(args.flow_gate_max_veto_rate))),
+        "max_failsafe_veto_all_rate": max(0.0, min(1.0, float(args.flow_gate_max_failsafe_rate))),
+        "min_trades_total_all_window": max(1, int(args.flow_gate_min_trades)),
+        "required_streak": max(1, int(args.flow_gate_required_streak)),
+    }
 
     state: dict[str, Any] = {
         "generated_at_utc": now_iso(),
         "status_key": "TRAINING_STATUS_RUNNING",
         "gate": gate,
+        "flow_gate": flow_gate,
+        "stage_key": STAGE_FLOW_RECOVERY,
+        "flow_gate_streak": 0,
+        "flow_gate_achieved": False,
+        "next_profile_name": "r2_event_expansion",
         "hard_cap": max(1, int(args.hard_cap)),
         "stagnation_rounds": max(1, int(args.stagnation_rounds)),
         "loop_runs": 0,
@@ -350,6 +407,7 @@ def main() -> int:
         if loaded:
             state.update(loaded)
             state["gate"] = gate
+            state["flow_gate"] = flow_gate
             state["hard_cap"] = max(1, int(args.hard_cap))
             state["stagnation_rounds"] = max(1, int(args.stagnation_rounds))
 
@@ -365,6 +423,10 @@ def main() -> int:
     current_streak = safe_int(state.get("current_streak"), 0)
     stagnation_count = safe_int(state.get("stagnation_count"), 0)
     loop_runs = safe_int(state.get("loop_runs"), 0)
+    stage_key = str(state.get("stage_key") or STAGE_FLOW_RECOVERY)
+    flow_gate_streak = safe_int(state.get("flow_gate_streak"), 0)
+    flow_gate_achieved = bool(state.get("flow_gate_achieved", False)) or stage_key == STAGE_ALPHA_RECOVERY
+    next_profile_name = str(state.get("next_profile_name") or "r2_event_expansion")
 
     try:
         if bool(args.dry_run):
@@ -376,10 +438,12 @@ def main() -> int:
 
         while loop_runs < hard_cap:
             loop_index = loop_runs + 1
+            stage_key = STAGE_ALPHA_RECOVERY if flow_gate_achieved else STAGE_FLOW_RECOVERY
             profile_name, overrides = choose_meta_overrides(
                 last_metrics=last_metrics,
                 loop_index=loop_index,
                 stagnation_count=stagnation_count,
+                stage_key=stage_key,
             )
             env = os.environ.copy()
             env.update(overrides)
@@ -390,6 +454,11 @@ def main() -> int:
             q_score = quality_score(metrics)
             this_gate_hit = gate_hit(metrics=metrics, gate=gate)
             current_streak = (current_streak + 1) if this_gate_hit else 0
+            this_flow_gate_hit = _flow_gate_hit(metrics=metrics, flow_gate=flow_gate)
+            flow_gate_streak = (flow_gate_streak + 1) if this_flow_gate_hit else 0
+            if flow_gate_streak >= safe_int(flow_gate.get("required_streak"), 1):
+                flow_gate_achieved = True
+            next_stage_key = STAGE_ALPHA_RECOVERY if flow_gate_achieved else STAGE_FLOW_RECOVERY
 
             improved = q_score > (best_quality + 1e-8)
             if improved:
@@ -403,9 +472,13 @@ def main() -> int:
                 "started_at_utc": started_at,
                 "ended_at_utc": now_iso(),
                 "profile_name": profile_name,
+                "stage_key": stage_key,
                 "overrides": overrides,
                 "metrics": metrics,
                 "gate_hit": this_gate_hit,
+                "flow_gate_hit": this_flow_gate_hit,
+                "flow_gate_streak": flow_gate_streak,
+                "flow_gate_achieved": flow_gate_achieved,
                 "quality_score": q_score,
                 "improved": improved,
                 "current_streak": current_streak,
@@ -418,10 +491,21 @@ def main() -> int:
             rounds.append(round_entry)
 
             loop_runs = loop_index
+            next_profile_name, _ = choose_meta_overrides(
+                last_metrics=metrics,
+                loop_index=loop_index + 1,
+                stagnation_count=stagnation_count,
+                stage_key=next_stage_key,
+            )
             state.update(
                 {
                     "generated_at_utc": now_iso(),
                     "status_key": "TRAINING_STATUS_RUNNING",
+                    "stage_key": next_stage_key,
+                    "flow_gate_streak": flow_gate_streak,
+                    "flow_gate_achieved": flow_gate_achieved,
+                    "next_profile_name": next_profile_name,
+                    "last_profile_name": profile_name,
                     "loop_runs": loop_runs,
                     "best_quality_score": best_quality,
                     "current_streak": current_streak,
@@ -454,13 +538,13 @@ def main() -> int:
                 return 0
 
             if stagnation_count >= stagnation_rounds:
-                state["status_key"] = "TRAINING_STATUS_STAGNATED"
+                state["status_key"] = STATUS_FLOW_LOCK if not flow_gate_achieved else "TRAINING_STATUS_STAGNATED"
                 write_json(STATE_PATH, state)
                 export_dashboard()
                 print(
                     json.dumps(
                         {
-                            "event": "TRAIN_LOOP_STAGNATED",
+                            "event": "TRAIN_LOOP_FLOW_LOCK" if state["status_key"] == STATUS_FLOW_LOCK else "TRAIN_LOOP_STAGNATED",
                             "loop_runs": loop_runs,
                             "stagnation_count": stagnation_count,
                             "run_id": metrics.get("run_id", ""),
@@ -472,13 +556,19 @@ def main() -> int:
 
             time.sleep(max(0.0, float(args.cooldown_sec)))
 
-        state["status_key"] = "TRAINING_STATUS_HALTED"
+        state["status_key"] = STATUS_FLOW_LOCK if not flow_gate_achieved else "TRAINING_STATUS_HALTED"
         state["generated_at_utc"] = now_iso()
         write_json(STATE_PATH, state)
         export_dashboard()
         print(
             json.dumps(
-                {"event": "TRAIN_LOOP_HARD_CAP_REACHED", "loop_runs": loop_runs, "hard_cap": hard_cap},
+                {
+                    "event": "TRAIN_LOOP_FLOW_LOCK"
+                    if state["status_key"] == STATUS_FLOW_LOCK
+                    else "TRAIN_LOOP_HARD_CAP_REACHED",
+                    "loop_runs": loop_runs,
+                    "hard_cap": hard_cap,
+                },
                 ensure_ascii=False,
             )
         )

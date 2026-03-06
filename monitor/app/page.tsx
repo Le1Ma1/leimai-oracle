@@ -417,6 +417,18 @@ export default function HomePage() {
             <span className="label">{t(locale, "stateSource")}</span>
             <strong className="value">{t(locale, stateSourceKey || "SOURCE_UNKNOWN")}</strong>
           </article>
+          <article className="card">
+            <span className="label">{t(locale, "recoveryStage")}</span>
+            <strong className="value">{t(locale, runtime?.recovery_stage_key || roadmap?.recovery_stage_key || "STAGE_FLOW_RECOVERY")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "nextProfile")}</span>
+            <strong className="value">{t(locale, runtime?.next_profile_key || roadmap?.next_profile_key || "PROFILE_BASELINE")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "earlyGateStatus")}</span>
+            <strong className="value">{runtime?.early_gate_hit ? t(locale, "earlyGateHit") : t(locale, "earlyGateMiss")}</strong>
+          </article>
         </div>
 
         <div className="missionProgress">
@@ -432,6 +444,12 @@ export default function HomePage() {
           <div className="progressBar">
             <span style={{ width: `${runtimeProgressPct}%` }} />
           </div>
+        </div>
+
+        <div className="missionGateRule">
+          {t(locale, "earlyGateStatus")}: veto ≤ {formatPct(runtime?.flow_gate_thresholds?.max_veto_rate ?? Number.NaN)} | failsafe ≤{" "}
+          {formatPct(runtime?.flow_gate_thresholds?.max_failsafe_veto_all_rate ?? Number.NaN)} | trades ≥{" "}
+          {runtime?.flow_gate_thresholds?.min_trades_total_all_window ?? "--"}
         </div>
 
         {gateBlocked ? (
