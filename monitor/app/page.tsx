@@ -346,6 +346,7 @@ export default function HomePage() {
   );
   const diagnosis = roadmap?.diagnosis || null;
   const profileComparisonRows = useMemo(() => roadmap?.profile_comparison?.rows || [], [roadmap?.profile_comparison?.rows]);
+  const profileEffectivenessRows = useMemo(() => roadmap?.profile_effectiveness || [], [roadmap?.profile_effectiveness]);
 
   return (
     <main className="dashboard">
@@ -422,8 +423,24 @@ export default function HomePage() {
             <strong className="value">{t(locale, runtime?.recovery_stage_key || roadmap?.recovery_stage_key || "STAGE_FLOW_RECOVERY")}</strong>
           </article>
           <article className="card">
+            <span className="label">{t(locale, "recoveryMilestone")}</span>
+            <strong className="value">{t(locale, runtime?.recovery_milestone_key || roadmap?.recovery_milestone_key || "M1_TRADES")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "activeObjective")}</span>
+            <strong className="value">{t(locale, runtime?.active_objective_key || roadmap?.active_objective_key || "OBJECTIVE_FLOW_UNLOCK")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "candidateTier")}</span>
+            <strong className="value">{t(locale, runtime?.candidate_tier || roadmap?.candidate_tier || "CANDIDATE_TIER_EXPLORATORY")}</strong>
+          </article>
+          <article className="card">
             <span className="label">{t(locale, "nextProfile")}</span>
             <strong className="value">{t(locale, runtime?.next_profile_key || roadmap?.next_profile_key || "PROFILE_BASELINE")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "nextProfileReason")}</span>
+            <strong className="value">{t(locale, runtime?.next_profile_route_reason_key || roadmap?.next_profile_route_reason_key || "ROUTE_STABILITY_SCAN")}</strong>
           </article>
           <article className="card">
             <span className="label">{t(locale, "earlyGateStatus")}</span>
@@ -449,7 +466,8 @@ export default function HomePage() {
         <div className="missionGateRule">
           {t(locale, "earlyGateStatus")}: veto ≤ {formatPct(runtime?.flow_gate_thresholds?.max_veto_rate ?? Number.NaN)} | failsafe ≤{" "}
           {formatPct(runtime?.flow_gate_thresholds?.max_failsafe_veto_all_rate ?? Number.NaN)} | trades ≥{" "}
-          {runtime?.flow_gate_thresholds?.min_trades_total_all_window ?? "--"}
+          {runtime?.flow_gate_thresholds?.min_trades_total_all_window ?? "--"} | {t(locale, "flowStageReason")}:{" "}
+          {t(locale, runtime?.flow_stage_reason_key || roadmap?.flow_stage_reason_key || "FLOW_REASON_NEED_TRADES")}
         </div>
 
         {gateBlocked ? (
@@ -688,6 +706,41 @@ export default function HomePage() {
                         <td>{formatPct(row.avg_veto_pressure)}</td>
                         <td>{formatNumber(row.avg_quality_score, 3)}</td>
                         <td>{formatPct(row.gate_hit_rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty">{t(locale, "na")}</div>
+            )}
+          </article>
+
+          <article className="card profileTableCard">
+            <div className="cardHeader">{t(locale, "profileEffectivenessTitle")}</div>
+            <div className="analysisHint">{t(locale, "profileEffectivenessHint")}</div>
+            {profileEffectivenessRows.length ? (
+              <div className="profileTableWrap">
+                <table className="profileTable">
+                  <thead>
+                    <tr>
+                      <th>{t(locale, "profileName")}</th>
+                      <th>{t(locale, "roundCount")}</th>
+                      <th>{t(locale, "effectScore")}</th>
+                      <th>{t(locale, "deltaVeto")}</th>
+                      <th>{t(locale, "deltaTrades")}</th>
+                      <th>{t(locale, "deltaAlpha")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {profileEffectivenessRows.slice(0, 6).map((row) => (
+                      <tr key={`${row.profile_key}-${row.recent_rounds}`}>
+                        <td>{t(locale, row.profile_key || "PROFILE_UNKNOWN")}</td>
+                        <td>{row.recent_rounds}</td>
+                        <td>{formatNumber(row.score, 3)}</td>
+                        <td>{formatPct(row.delta_veto)}</td>
+                        <td>{formatPct(row.delta_trades)}</td>
+                        <td>{formatSigned(row.delta_alpha)}</td>
                       </tr>
                     ))}
                   </tbody>

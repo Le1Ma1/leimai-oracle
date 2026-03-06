@@ -43,6 +43,26 @@ export type RuntimeCompletionReasonKey =
 export type RuntimeNotifyKey = "NOTIFY_RUN_STARTED" | "NOTIFY_STALLED" | "NOTIFY_COMPLETED" | "NOTIFY_RESUMED";
 
 export type RecoveryStageKey = "STAGE_FLOW_RECOVERY" | "STAGE_ALPHA_RECOVERY" | string;
+export type CandidateTierKey = "CANDIDATE_TIER_EXPLORATORY" | "CANDIDATE_TIER_STRICT" | string;
+export type RecoveryMilestoneKey =
+  | "M1_TRADES"
+  | "M2_VETO_93"
+  | "M3_VETO_85_FAILSAFE_40"
+  | "M3_PASSED"
+  | string;
+export type FlowStageReasonKey =
+  | "FLOW_REASON_NEED_TRADES"
+  | "FLOW_REASON_NEED_VETO_93"
+  | "FLOW_REASON_NEED_VETO_85_FAILSAFE_40"
+  | "FLOW_REASON_PASSED"
+  | string;
+export type RouteReasonKey =
+  | "ROUTE_TRADE_DENSITY_LOW"
+  | "ROUTE_PRECISION_UNMET"
+  | "ROUTE_ALPHA_NEGATIVE"
+  | "ROUTE_STABILITY_SCAN"
+  | "ROUTE_PROFILE_EFFECTIVENESS_OVERRIDE"
+  | string;
 
 export type ProfileKey =
   | "PROFILE_BASELINE"
@@ -54,6 +74,8 @@ export type ProfileKey =
   | string;
 
 export type DiagnosisObjectiveKey =
+  | "OBJECTIVE_FLOW_UNLOCK"
+  | "OBJECTIVE_ALPHA_RECOVERY"
   | "OBJECTIVE_RECOVER_TRADE_FLOW"
   | "OBJECTIVE_RESTORE_PRECISION_COMPLIANCE"
   | "OBJECTIVE_REDUCE_ALL_WINDOW_LOSS"
@@ -170,6 +192,8 @@ export interface TrainingRoadmap {
     flow_gate_streak: number;
     flow_gate_required_streak: number;
     flow_gate_achieved: boolean;
+    last_flow_score: number;
+    last_objective_score: number;
   };
   flow_gate?: {
     max_veto_rate: number;
@@ -178,8 +202,14 @@ export interface TrainingRoadmap {
     required_streak: number;
   };
   recovery_stage_key?: RecoveryStageKey | string;
+  active_objective_key?: DiagnosisObjectiveKey | string;
+  candidate_tier?: CandidateTierKey | string;
+  flow_stage_progress?: number;
+  flow_stage_reason_key?: FlowStageReasonKey | string;
+  recovery_milestone_key?: RecoveryMilestoneKey | string;
   next_profile_key?: ProfileKey | string;
   next_profile_name?: string;
+  next_profile_route_reason_key?: RouteReasonKey | string;
   early_gate_hit?: boolean;
   diagnosis?: {
     objective_key: DiagnosisObjectiveKey;
@@ -206,8 +236,19 @@ export interface TrainingRoadmap {
       gate_hit_rate: number;
     }>;
   };
+  profile_effectiveness?: Array<{
+    profile_key: ProfileKey | string;
+    recent_rounds: number;
+    delta_veto: number;
+    delta_trades: number;
+    delta_alpha: number;
+    score: number;
+  }>;
   latest_loop_profile?: {
     profile_name: string;
+    profile_key: ProfileKey | string;
+    profile_route_reason_key: RouteReasonKey | string;
+    candidate_tier: CandidateTierKey | string;
     overrides: Record<string, string>;
   };
   latest_round: TrainingRound | Record<string, never>;
@@ -242,7 +283,13 @@ export interface TrainingRuntime {
   diagnosis_top_reason_key: RejectionReason | string;
   diagnosis_confidence: number;
   recovery_stage_key: RecoveryStageKey | string;
+  active_objective_key: DiagnosisObjectiveKey | string;
+  candidate_tier: CandidateTierKey | string;
+  flow_stage_progress: number;
+  flow_stage_reason_key: FlowStageReasonKey | string;
+  recovery_milestone_key: RecoveryMilestoneKey | string;
   next_profile_key: ProfileKey | string;
+  next_profile_route_reason_key: RouteReasonKey | string;
   early_gate_hit: boolean;
   flow_gate_thresholds: {
     max_veto_rate: number;

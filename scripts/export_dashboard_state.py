@@ -568,6 +568,62 @@ def _normalize_stage_key(raw: Any) -> str:
     return "STAGE_FLOW_RECOVERY"
 
 
+def _normalize_objective_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if text == "OBJECTIVE_ALPHA_RECOVERY":
+        return "OBJECTIVE_ALPHA_RECOVERY"
+    if text == "OBJECTIVE_FLOW_UNLOCK":
+        return "OBJECTIVE_FLOW_UNLOCK"
+    return "OBJECTIVE_FLOW_UNLOCK"
+
+
+def _normalize_milestone_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    allowed = {
+        "M1_TRADES",
+        "M2_VETO_93",
+        "M3_VETO_85_FAILSAFE_40",
+        "M3_PASSED",
+    }
+    if text in allowed:
+        return text
+    return "M1_TRADES"
+
+
+def _normalize_flow_reason_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    allowed = {
+        "FLOW_REASON_NEED_TRADES",
+        "FLOW_REASON_NEED_VETO_93",
+        "FLOW_REASON_NEED_VETO_85_FAILSAFE_40",
+        "FLOW_REASON_PASSED",
+    }
+    if text in allowed:
+        return text
+    return "FLOW_REASON_NEED_TRADES"
+
+
+def _normalize_route_reason_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    allowed = {
+        "ROUTE_TRADE_DENSITY_LOW",
+        "ROUTE_PRECISION_UNMET",
+        "ROUTE_ALPHA_NEGATIVE",
+        "ROUTE_STABILITY_SCAN",
+        "ROUTE_PROFILE_EFFECTIVENESS_OVERRIDE",
+    }
+    if text in allowed:
+        return text
+    return "ROUTE_STABILITY_SCAN"
+
+
+def _normalize_candidate_tier(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if text == "CANDIDATE_TIER_STRICT":
+        return "CANDIDATE_TIER_STRICT"
+    return "CANDIDATE_TIER_EXPLORATORY"
+
+
 def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     profile_rows: dict[str, dict[str, Any]] = {}
     for row in rounds:
@@ -625,6 +681,75 @@ def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         "rows": rows,
         "sampled_rounds": len(rounds),
     }
+
+
+def _build_profile_effectiveness(loop_state: dict[str, Any], *, window: int = 8) -> list[dict[str, Any]]:
+    rounds = loop_state.get("rounds", [])
+    if not isinstance(rounds, list) or len(rounds) < 2:
+        return []
+
+    recent = rounds[-max(2, int(window)) :]
+    bucket: dict[str, dict[str, Any]] = {}
+    prev_metrics: dict[str, Any] | None = None
+
+    for row in recent:
+        if not isinstance(row, dict):
+            continue
+        metrics = row.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        profile_name = str(row.get("profile_name") or "")
+        profile_key = _normalize_profile_key(profile_name)
+        if prev_metrics is None:
+            prev_metrics = metrics
+            continue
+
+        prev_veto = safe_float(prev_metrics.get("veto_rate"), 1.0)
+        cur_veto = safe_float(metrics.get("veto_rate"), 1.0)
+        prev_trades = safe_float(prev_metrics.get("trades_total_all_window"), 0.0)
+        cur_trades = safe_float(metrics.get("trades_total_all_window"), 0.0)
+        prev_alpha = safe_float(prev_metrics.get("all_window_alpha"), 0.0)
+        cur_alpha = safe_float(metrics.get("all_window_alpha"), 0.0)
+
+        delta_veto = max(-1.0, min(1.0, prev_veto - cur_veto))
+        delta_trades = max(-1.0, min(1.0, (cur_trades - prev_trades) / max(1.0, prev_trades)))
+        delta_alpha = max(-1.0, min(1.0, (cur_alpha - prev_alpha) / 2.0))
+        score = float((0.50 * delta_veto) + (0.30 * delta_trades) + (0.20 * delta_alpha))
+
+        agg = bucket.setdefault(
+            profile_key,
+            {
+                "profile_key": profile_key,
+                "rounds": 0,
+                "delta_veto": 0.0,
+                "delta_trades": 0.0,
+                "delta_alpha": 0.0,
+                "score": 0.0,
+            },
+        )
+        agg["rounds"] += 1
+        agg["delta_veto"] += delta_veto
+        agg["delta_trades"] += delta_trades
+        agg["delta_alpha"] += delta_alpha
+        agg["score"] += score
+        prev_metrics = metrics
+
+    rows: list[dict[str, Any]] = []
+    for profile_key, agg in bucket.items():
+        count = max(1, safe_int(agg.get("rounds"), 1))
+        rows.append(
+            {
+                "profile_key": profile_key,
+                "recent_rounds": count,
+                "delta_veto": safe_float(agg.get("delta_veto"), 0.0) / count,
+                "delta_trades": safe_float(agg.get("delta_trades"), 0.0) / count,
+                "delta_alpha": safe_float(agg.get("delta_alpha"), 0.0) / count,
+                "score": safe_float(agg.get("score"), 0.0) / count,
+            }
+        )
+
+    rows.sort(key=lambda item: safe_float(item.get("score"), 0.0), reverse=True)
+    return rows
 
 
 def _diagnose_latest_round(*, latest_round: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
@@ -759,9 +884,13 @@ def _latest_loop_profile_override(loop_state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(overrides, dict):
         overrides = {}
     profile_name = str(last.get("profile_name") or "")
+    route_reason_key = _normalize_route_reason_key(last.get("profile_route_reason_key"))
+    candidate_tier = _normalize_candidate_tier(last.get("candidate_tier"))
     return {
         "profile_name": profile_name,
         "profile_key": _normalize_profile_key(profile_name),
+        "profile_route_reason_key": route_reason_key,
+        "candidate_tier": candidate_tier,
         "overrides": overrides,
     }
 
@@ -827,13 +956,22 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
     stage_key = _normalize_stage_key(loop_state.get("stage_key"))
     if flow_gate_achieved:
         stage_key = "STAGE_ALPHA_RECOVERY"
+    active_objective_key = _normalize_objective_key(loop_state.get("active_objective_key"))
+    candidate_tier = _normalize_candidate_tier(loop_state.get("candidate_tier"))
+    flow_stage_progress = max(0, min(3, safe_int(loop_state.get("flow_stage_progress"), 0)))
+    flow_stage_reason_key = _normalize_flow_reason_key(loop_state.get("flow_stage_reason_key"))
+    recovery_milestone_key = _normalize_milestone_key(loop_state.get("recovery_milestone_key"))
     next_profile_name = str(loop_state.get("next_profile_name") or "")
+    next_profile_route_reason_key = _normalize_route_reason_key(loop_state.get("next_profile_route_reason_key"))
     diagnosis = _diagnose_latest_round(latest_round=latest_round, gate=gate)
     next_profile_key = _normalize_profile_key(next_profile_name)
     if next_profile_key == "PROFILE_UNKNOWN":
         next_profile_key = str(diagnosis.get("recommended_profile_key") or "PROFILE_BASELINE")
     profile_comparison = _build_profile_comparison(rounds)
+    profile_effectiveness = _build_profile_effectiveness(loop_state, window=8)
     last_loop_profile = _latest_loop_profile_override(loop_state)
+    last_flow_score = safe_float(loop_state.get("last_flow_score"), 0.0)
+    last_objective_score = safe_float(loop_state.get("last_objective_score"), 0.0)
 
     return {
         "artifact_version": "phase1_training_roadmap_v1",
@@ -852,14 +990,23 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
             "flow_gate_streak": flow_gate_streak,
             "flow_gate_required_streak": safe_int(flow_gate.get("required_streak"), 1),
             "flow_gate_achieved": flow_gate_achieved,
+            "last_flow_score": last_flow_score,
+            "last_objective_score": last_objective_score,
         },
         "flow_gate": flow_gate,
         "recovery_stage_key": stage_key,
+        "active_objective_key": active_objective_key,
+        "candidate_tier": candidate_tier,
+        "flow_stage_progress": flow_stage_progress,
+        "flow_stage_reason_key": flow_stage_reason_key,
+        "recovery_milestone_key": recovery_milestone_key,
         "next_profile_key": next_profile_key,
         "next_profile_name": next_profile_name,
+        "next_profile_route_reason_key": next_profile_route_reason_key,
         "early_gate_hit": flow_gate_achieved,
         "diagnosis": diagnosis,
         "profile_comparison": profile_comparison,
+        "profile_effectiveness": profile_effectiveness,
         "latest_loop_profile": last_loop_profile,
         "latest_round": latest_round,
         "best_round": best_round,
@@ -1058,7 +1205,13 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         if isinstance(first, dict):
             top_reason_key = str(first.get("reason_key") or "")
     recovery_stage_key = _normalize_stage_key(training_roadmap.get("recovery_stage_key"))
+    active_objective_key = _normalize_objective_key(training_roadmap.get("active_objective_key"))
+    candidate_tier = _normalize_candidate_tier(training_roadmap.get("candidate_tier"))
+    flow_stage_progress = max(0, min(3, safe_int(training_roadmap.get("flow_stage_progress"), 0)))
+    flow_stage_reason_key = _normalize_flow_reason_key(training_roadmap.get("flow_stage_reason_key"))
+    recovery_milestone_key = _normalize_milestone_key(training_roadmap.get("recovery_milestone_key"))
     next_profile_key = str(training_roadmap.get("next_profile_key") or diagnosis.get("recommended_profile_key") or "PROFILE_BASELINE")
+    next_profile_route_reason_key = _normalize_route_reason_key(training_roadmap.get("next_profile_route_reason_key"))
     early_gate_hit = bool(training_roadmap.get("early_gate_hit", False))
     flow_gate = training_roadmap.get("flow_gate")
     flow_gate = flow_gate if isinstance(flow_gate, dict) else dict(FLOW_GATE_DEFAULTS)
@@ -1109,7 +1262,13 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "diagnosis_top_reason_key": top_reason_key,
         "diagnosis_confidence": safe_float(diagnosis.get("confidence"), 0.0),
         "recovery_stage_key": recovery_stage_key,
+        "active_objective_key": active_objective_key,
+        "candidate_tier": candidate_tier,
+        "flow_stage_progress": flow_stage_progress,
+        "flow_stage_reason_key": flow_stage_reason_key,
+        "recovery_milestone_key": recovery_milestone_key,
         "next_profile_key": next_profile_key,
+        "next_profile_route_reason_key": next_profile_route_reason_key,
         "early_gate_hit": early_gate_hit,
         "flow_gate_thresholds": flow_gate_thresholds,
         "last_event_at_utc": last_event_at_utc or None,
