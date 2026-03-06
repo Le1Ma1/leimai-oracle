@@ -1,11 +1,11 @@
 {
   "artifact_version": "phase1_training_runtime_v1",
-  "generated_at_utc": "2026-03-06T20:30:51Z",
+  "generated_at_utc": "2026-03-06T20:33:59Z",
   "runtime_status_key": "RUNTIME_STALLED",
   "phase_key": "PHASE_WAITING",
   "run_id": "iter_r2_892268132d53",
   "started_at_utc": "2026-03-04T18:07:35Z",
-  "elapsed_sec": 181396,
+  "elapsed_sec": 181584,
   "remaining_sec": null,
   "eta_utc": null,
   "eta_confidence": "low",
@@ -18,7 +18,7 @@
   "stalled_reason_key": "STALL_NO_NEW_EVENTS",
   "completion_reason_key": "",
   "last_event_at_utc": "2026-03-04T20:04:59Z",
-  "last_sync_at_utc": "2026-03-06T20:30:51Z",
+  "last_sync_at_utc": "2026-03-06T20:33:59Z",
   "notify_event_key": "",
   "notify_seq": 1
 }
