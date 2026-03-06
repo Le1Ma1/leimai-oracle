@@ -91,7 +91,7 @@ def _export_dashboard_state(repo_root: Path, env: dict[str, str]) -> None:
     if proc.returncode != 0:
         print(f"[warn] dashboard state export skipped (code={proc.returncode})", file=sys.stderr)
         return
-    print("[info] dashboard state exported (evolution_validation.json + visual_state.json)")
+    print("[info] dashboard state exported (evolution_validation.json + visual_state.json + training_roadmap.json + training_runtime.json)")
 
 
 def _start_progress_monitor(repo_root: Path, interval: float) -> tuple[subprocess.Popen[str], Any, Any]:

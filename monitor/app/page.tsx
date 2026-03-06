@@ -1,11 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { detectDefaultLocale, getNextLocale, t } from "../lib/i18n";
-import type { EvolutionValidation, LocaleCode, VisualState } from "../lib/types";
+import type { EvolutionValidation, LocaleCode, TrainingRoadmap, TrainingRuntime, VisualState } from "../lib/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
+const POLL_INTERVAL_MS = 5000;
+
+type ToastLevel = "info" | "warn" | "success";
+type ToastItem = { id: number; level: ToastLevel; message: string };
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -32,6 +36,17 @@ function formatNumber(value: number, digits = 2): string {
   return value.toFixed(digits);
 }
 
+function formatDuration(seconds: number | null | undefined): string {
+  if (!Number.isFinite(Number(seconds)) || seconds === null || seconds === undefined) {
+    return "--";
+  }
+  const total = Math.max(0, Math.floor(Number(seconds)));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function freshness(lastSynced: string): { fresh: boolean; seconds: number } {
   const ts = Date.parse(lastSynced);
   if (!Number.isFinite(ts)) {
@@ -41,34 +56,106 @@ function freshness(lastSynced: string): { fresh: boolean; seconds: number } {
   return { fresh: seconds <= 600, seconds };
 }
 
+function toastLevelByNotify(key: string): ToastLevel {
+  if (key === "NOTIFY_STALLED") {
+    return "warn";
+  }
+  if (key === "NOTIFY_COMPLETED") {
+    return "success";
+  }
+  return "info";
+}
+
 export default function HomePage() {
   const [locale, setLocale] = useState<LocaleCode>("en-US");
   const [visualState, setVisualState] = useState<VisualState | null>(null);
   const [evolution, setEvolution] = useState<EvolutionValidation | null>(null);
+  const [roadmap, setRoadmap] = useState<TrainingRoadmap | null>(null);
+  const [runtime, setRuntime] = useState<TrainingRuntime | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [notificationPermission, setNotificationPermission] = useState<string>("default");
   const [error, setError] = useState<string>("");
+  const lastNotifySeqRef = useRef<number>(0);
+
+  const pushToast = (message: string, level: ToastLevel) => {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts((prev) => [...prev, { id, level, message }].slice(-4));
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((row) => row.id !== id));
+    }, 6500);
+  };
 
   useEffect(() => {
     setLocale(detectDefaultLocale());
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotificationPermission(Notification.permission);
+      if (Notification.permission === "default") {
+        void Notification.requestPermission().then((permission) => {
+          setNotificationPermission(permission);
+        });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
     const fetchState = async () => {
       try {
         const stamp = `${Date.now()}`;
-        const [vRes, eRes] = await Promise.all([
+        const [vRes, eRes, rRes, rtRes] = await Promise.all([
           fetch(`/state/visual_state.json?ts=${stamp}`, { cache: "no-store" }),
-          fetch(`/state/evolution_validation.json?ts=${stamp}`, { cache: "no-store" })
+          fetch(`/state/evolution_validation.json?ts=${stamp}`, { cache: "no-store" }),
+          fetch(`/state/training_roadmap.json?ts=${stamp}`, { cache: "no-store" }),
+          fetch(`/state/training_runtime.json?ts=${stamp}`, { cache: "no-store" })
         ]);
-        if (!vRes.ok || !eRes.ok) {
+        if (!vRes.ok || !eRes.ok || !rRes.ok || !rtRes.ok) {
           throw new Error("STATE_FETCH_FAILED");
         }
         const vPayload = (await vRes.json()) as VisualState;
         const ePayload = (await eRes.json()) as EvolutionValidation;
+        const rPayload = (await rRes.json()) as TrainingRoadmap;
+        const rtPayload = (await rtRes.json()) as TrainingRuntime;
+
+        if (disposed) {
+          return;
+        }
+
         setVisualState(vPayload);
         setEvolution(ePayload);
+        setRoadmap(rPayload);
+        setRuntime(rtPayload);
+        setError("");
+
+        const seq = Number(rtPayload.notify_seq ?? 0);
+        const notifyEvent = String(rtPayload.notify_event_key || "");
+        if (notifyEvent && Number.isFinite(seq) && seq > lastNotifySeqRef.current) {
+          lastNotifySeqRef.current = seq;
+          const message = t(locale, notifyEvent);
+          const level = toastLevelByNotify(notifyEvent);
+          pushToast(message, level);
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            try {
+              void new Notification(t(locale, "missionTitle"), { body: message });
+            } catch {
+              // Ignore notification API errors.
+            }
+          }
+        }
       } catch (fetchError) {
-        setError(fetchError instanceof Error ? fetchError.message : "UNKNOWN_ERROR");
+        if (!disposed) {
+          setError(fetchError instanceof Error ? fetchError.message : "UNKNOWN_ERROR");
+        }
       }
     };
+
     void fetchState();
-  }, []);
+    const timer = window.setInterval(fetchState, POLL_INTERVAL_MS);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [locale]);
 
   const heartbeat = useMemo(() => {
     if (!visualState) {
@@ -76,6 +163,21 @@ export default function HomePage() {
     }
     return freshness(visualState.last_synced_at);
   }, [visualState]);
+
+  const runtimeProgressPct = useMemo(() => {
+    if (!runtime) {
+      return 0;
+    }
+    return clamp(Number(runtime.tasks_pct || 0), 0, 100);
+  }, [runtime]);
+
+  const runtimeEtaConfidence = useMemo(() => {
+    const key = String(runtime?.eta_confidence || "low").toLowerCase();
+    if (key === "high" || key === "medium" || key === "low") {
+      return t(locale, key);
+    }
+    return t(locale, "low");
+  }, [locale, runtime?.eta_confidence]);
 
   const radarOption = useMemo(() => {
     const metrics = evolution?.metrics;
@@ -113,7 +215,7 @@ export default function HomePage() {
         }
       ]
     };
-  }, [evolution?.metrics]);
+  }, [evolution?.metrics, locale]);
 
   const rejectionOption = useMemo(() => {
     const breakdown = evolution?.rejection_breakdown || visualState?.rejection_breakdown || [];
@@ -140,6 +242,90 @@ export default function HomePage() {
     };
   }, [evolution?.rejection_breakdown, locale, visualState?.rejection_breakdown]);
 
+  const roadmapTrendOption = useMemo(() => {
+    const rows = roadmap?.rounds || [];
+    if (!rows.length) {
+      return null;
+    }
+    const recent = rows.slice(-24);
+    const labels = recent.map((row) => `R${row.round_index}`);
+    const passSeries = recent.map((row) => clamp(row.validation_pass_rate * 100, 0, 100));
+    const alphaSeries = recent.map((row) => row.all_window_alpha);
+    const vetoSeries = recent.map((row) => clamp(Math.max(row.veto_rate, row.failsafe_veto_all_rate) * 100, 0, 100));
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis" },
+      legend: {
+        top: 2,
+        textStyle: { color: "rgba(248, 230, 200, 0.75)", fontSize: 11 },
+        data: [t(locale, "passRate"), t(locale, "alphaAll"), t(locale, "vetoPressure")]
+      },
+      grid: { left: 48, right: 48, top: 34, bottom: 24 },
+      xAxis: {
+        type: "category",
+        data: labels,
+        axisLine: { lineStyle: { color: "rgba(248, 230, 200, 0.24)" } },
+        axisLabel: { color: "rgba(248, 230, 200, 0.7)", fontSize: 11 }
+      },
+      yAxis: [
+        {
+          type: "value",
+          min: 0,
+          max: 100,
+          axisLine: { lineStyle: { color: "rgba(248, 230, 200, 0.24)" } },
+          splitLine: { lineStyle: { color: "rgba(248, 230, 200, 0.12)" } },
+          axisLabel: { color: "rgba(248, 230, 200, 0.7)", formatter: "{value}%" }
+        },
+        {
+          type: "value",
+          axisLine: { lineStyle: { color: "rgba(248, 230, 200, 0.24)" } },
+          splitLine: { show: false },
+          axisLabel: { color: "rgba(248, 230, 200, 0.7)" }
+        }
+      ],
+      series: [
+        {
+          name: t(locale, "passRate"),
+          type: "line",
+          smooth: true,
+          yAxisIndex: 0,
+          data: passSeries,
+          lineStyle: { color: "#ffd38a", width: 2 },
+          itemStyle: { color: "#ffd38a" }
+        },
+        {
+          name: t(locale, "alphaAll"),
+          type: "line",
+          smooth: true,
+          yAxisIndex: 1,
+          data: alphaSeries,
+          lineStyle: { color: "#9bb7ff", width: 2 },
+          itemStyle: { color: "#9bb7ff" }
+        },
+        {
+          name: t(locale, "vetoPressure"),
+          type: "line",
+          smooth: true,
+          yAxisIndex: 0,
+          data: vetoSeries,
+          lineStyle: { color: "#ff8a8a", width: 1.8, type: "dashed" },
+          itemStyle: { color: "#ff8a8a" }
+        }
+      ]
+    };
+  }, [locale, roadmap?.rounds]);
+
+  const recentRoadmapRounds = useMemo(() => (roadmap?.rounds || []).slice(-8).reverse(), [roadmap?.rounds]);
+  const latestRoadmapRound = useMemo(
+    () => (roadmap?.latest_round && "run_id" in roadmap.latest_round ? roadmap.latest_round : null),
+    [roadmap?.latest_round]
+  );
+  const bestRoadmapRound = useMemo(
+    () => (roadmap?.best_round && "run_id" in roadmap.best_round ? roadmap.best_round : null),
+    [roadmap?.best_round]
+  );
+
   return (
     <main className="dashboard">
       <header className="header">
@@ -153,6 +339,87 @@ export default function HomePage() {
       </header>
 
       {error ? <div className="errorBox">{error}</div> : null}
+
+      <section className="missionBlock">
+        <div className="missionHead">
+          <div>
+            <div className="missionTitle">{t(locale, "missionTitle")}</div>
+            <div className="missionHint">{t(locale, "missionHint")}</div>
+          </div>
+          <div className="missionActions">
+            <button
+              className="notifyButton"
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined" && "Notification" in window) {
+                  void Notification.requestPermission().then((permission) => {
+                    setNotificationPermission(permission);
+                  });
+                }
+              }}
+            >
+              {t(locale, "enableNotify")}
+            </button>
+            {notificationPermission === "denied" ? <span className="notifyDenied">{t(locale, "notifyDenied")}</span> : null}
+          </div>
+        </div>
+
+        <div className="missionGrid">
+          <article className="card">
+            <span className="label">{t(locale, "runtimeStatus")}</span>
+            <strong className="value">{t(locale, runtime?.runtime_status_key || "RUNTIME_IDLE")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "runtimePhase")}</span>
+            <strong className="value">{t(locale, runtime?.phase_key || "PHASE_WAITING")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "runElapsed")}</span>
+            <strong className="value mono">{formatDuration(runtime?.elapsed_sec ?? null)}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "runRemaining")}</span>
+            <strong className="value mono">{formatDuration(runtime?.remaining_sec ?? null)}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "etaAt")}</span>
+            <strong className="value mono">{runtime?.eta_utc || t(locale, "na")}</strong>
+            <small className="subtle">
+              {t(locale, "etaConfidence")}: {runtimeEtaConfidence}
+            </small>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "runId")}</span>
+            <strong className="value mono">{runtime?.run_id || t(locale, "na")}</strong>
+          </article>
+        </div>
+
+        <div className="missionProgress">
+          <div className="missionProgressMeta">
+            <span>
+              {t(locale, "cycle")}: {runtime?.cycle_current ?? 0}/{runtime?.cycle_total ?? 0}
+            </span>
+            <span>
+              {t(locale, "tasks")}: {runtime?.tasks_done ?? 0}/{runtime?.tasks_total ?? 0}
+            </span>
+            <span>{formatPct((runtime?.tasks_pct ?? 0) / 100)}</span>
+          </div>
+          <div className="progressBar">
+            <span style={{ width: `${runtimeProgressPct}%` }} />
+          </div>
+        </div>
+
+        {runtime?.runtime_status_key === "RUNTIME_STALLED" ? (
+          <div className="missionAlert warn">
+            <strong>{t(locale, "stallReason")}:</strong> {t(locale, runtime.stalled_reason_key || "STALL_UNKNOWN")}
+          </div>
+        ) : null}
+        {runtime?.runtime_status_key === "RUNTIME_COMPLETED" ? (
+          <div className="missionAlert ok">
+            <strong>{t(locale, "completionReason")}:</strong> {t(locale, runtime.completion_reason_key || "COMPLETION_UNKNOWN")}
+          </div>
+        ) : null}
+      </section>
 
       <section className="topGrid">
         <article className="card">
@@ -179,6 +446,125 @@ export default function HomePage() {
             {t(locale, "lastSynced")}: {visualState?.last_synced_at || t(locale, "na")}
           </small>
         </article>
+      </section>
+
+      <section className="roadmapBlock">
+        <div className="roadmapHead">
+          <div>
+            <div className="roadmapTitle">{t(locale, "roadmapTitle")}</div>
+            <div className="roadmapHint">{t(locale, "roadmapHint")}</div>
+            <div className="roadmapGate">
+              {t(locale, "gateLabel")}: pass &gt;= {formatPct(roadmap?.gate?.min_validation_pass_rate ?? Number.NaN)} | alpha &gt;{" "}
+              {formatNumber(roadmap?.gate?.min_all_window_alpha ?? Number.NaN, 2)} | deploy={" "}
+              {roadmap?.gate?.require_deploy_ready ? t(locale, "readyYes") : t(locale, "readyNo")}
+            </div>
+          </div>
+          <div className="roadmapStamp">
+            {t(locale, "generatedAt")}: {roadmap?.generated_at_utc || t(locale, "na")}
+          </div>
+        </div>
+
+        <div className="roadmapStats">
+          <article className="card">
+            <span className="label">{t(locale, "trainingStatus")}</span>
+            <strong className="value">{t(locale, roadmap?.status_key || "TRAINING_STATUS_RUNNING")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "streak")}</span>
+            <strong className="value">
+              {roadmap?.summary?.current_streak ?? 0}/{roadmap?.summary?.required_streak ?? 0}
+            </strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "roundsTotal")}</span>
+            <strong className="value">{roadmap?.summary?.rounds_total ?? 0}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "bestQuality")}</span>
+            <strong className="value">{formatNumber(roadmap?.summary?.best_quality_score ?? Number.NaN, 3)}</strong>
+          </article>
+        </div>
+
+        <div className="roadmapGrid">
+          <article className="card chartCard">
+            <div className="cardHeader">{t(locale, "roadmapTrend")}</div>
+            {roadmapTrendOption ? (
+              <ReactECharts option={roadmapTrendOption} style={{ height: 320 }} />
+            ) : (
+              <div className="empty">{t(locale, "roundsEmpty")}</div>
+            )}
+          </article>
+          <article className="card roadmapList">
+            <div className="cardHeader">{t(locale, "roadmapHistory")}</div>
+            {recentRoadmapRounds.length ? (
+              <ul className="roundList">
+                {recentRoadmapRounds.map((row) => (
+                  <li key={`${row.run_id}-${row.round_index}`} className={`roundItem ${row.gate_hit ? "hit" : "miss"}`}>
+                    <div className="roundTop">
+                      <span className="roundBadge">R{row.round_index}</span>
+                      <span className="mono">{row.run_id || t(locale, "na")}</span>
+                      <span className={`gateBadge ${row.gate_hit ? "ok" : "bad"}`}>
+                        {row.gate_hit ? t(locale, "gateHit") : t(locale, "gateMiss")}
+                      </span>
+                    </div>
+                    <div className="roundMetrics">
+                      <span>
+                        {t(locale, "passRate")}: {formatPct(row.validation_pass_rate)}
+                      </span>
+                      <span>
+                        {t(locale, "alphaAll")}: {formatSigned(row.all_window_alpha)}
+                      </span>
+                      <span>
+                        {t(locale, "vetoPressure")}: {formatPct(Math.max(row.veto_rate, row.failsafe_veto_all_rate))}
+                      </span>
+                    </div>
+                    <div className="roundMeta">
+                      <span>
+                        {t(locale, "bottleneck")}: {row.primary_bottleneck || t(locale, "na")}
+                      </span>
+                      <span>
+                        {t(locale, "action")}: {row.recommended_action || t(locale, "na")}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="empty">{t(locale, "roundsEmpty")}</div>
+            )}
+          </article>
+          <article className="card diagnostics">
+            <div className="cardHeader">
+              {t(locale, "latestRound")} / {t(locale, "bestRound")}
+            </div>
+            <div className="diagnosticsGrid">
+              <div>
+                <span className="label">{t(locale, "latestRound")}</span>
+                <strong className="mono">{latestRoadmapRound?.run_id || t(locale, "na")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "bestRound")}</span>
+                <strong className="mono">{bestRoadmapRound?.run_id || t(locale, "na")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "qualityScore")}</span>
+                <strong>{formatNumber(bestRoadmapRound?.quality_score ?? Number.NaN, 3)}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "profile")}</span>
+                <strong>{latestRoadmapRound?.round_profile || t(locale, "na")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "deployReady")}</span>
+                <strong>{latestRoadmapRound?.deploy_ready ? t(locale, "readyYes") : t(locale, "readyNo")}</strong>
+              </div>
+              <div>
+                <span className="label">{t(locale, "runId")}</span>
+                <strong className="mono">{visualState?.run_id || t(locale, "na")}</strong>
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
 
       <details className="ceoBlock" open>
@@ -230,6 +616,21 @@ export default function HomePage() {
           </article>
         </section>
       </details>
+
+      <div className="toastStack">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toastItem ${toast.level}`}>
+            <span>{toast.message}</span>
+            <button
+              type="button"
+              className="toastClose"
+              onClick={() => setToasts((prev) => prev.filter((item) => item.id !== toast.id))}
+            >
+              {t(locale, "toastClose")}
+            </button>
+          </div>
+        ))}
+      </div>
     </main>
   );
 }

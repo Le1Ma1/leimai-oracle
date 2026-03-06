@@ -56,11 +56,247 @@ body {
   cursor: pointer;
 }
 
+.missionBlock {
+  margin-bottom: 18px;
+  border: 1px solid rgba(255, 214, 127, 0.24);
+  border-radius: 14px;
+  padding: 14px 16px 16px;
+  background: linear-gradient(145deg, rgba(9, 12, 18, 0.95), rgba(7, 8, 11, 0.96));
+}
+
+.missionHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.missionTitle {
+  color: #ffe7bd;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.missionHint {
+  margin-top: 4px;
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.84rem;
+}
+
+.missionActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.notifyButton {
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  color: #ffe5a8;
+  background: linear-gradient(135deg, rgba(14, 14, 14, 0.95), rgba(28, 20, 10, 0.92));
+  border-radius: 9px;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notifyDenied {
+  font-size: 0.74rem;
+  color: #ffb7c0;
+}
+
+.missionGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.missionProgress {
+  margin-bottom: 12px;
+}
+
+.missionProgressMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  color: rgba(248, 230, 200, 0.78);
+  font-size: 0.8rem;
+}
+
+.progressBar {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(248, 230, 200, 0.12);
+  border: 1px solid rgba(248, 230, 200, 0.18);
+}
+
+.progressBar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #59d79f, #f2c56d);
+  transition: width 0.35s ease-out;
+}
+
+.missionAlert {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.86rem;
+}
+
+.missionAlert.warn {
+  border: 1px solid rgba(255, 128, 128, 0.45);
+  background: rgba(63, 18, 18, 0.42);
+  color: #ffc9c9;
+}
+
+.missionAlert.ok {
+  border: 1px solid rgba(116, 212, 167, 0.45);
+  background: rgba(18, 63, 45, 0.4);
+  color: #c8ffe1;
+}
+
 .topGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 18px;
+}
+
+.roadmapBlock {
+  margin-bottom: 18px;
+  border: 1px solid rgba(255, 214, 127, 0.24);
+  border-radius: 14px;
+  padding: 14px 16px 16px;
+  background: linear-gradient(145deg, rgba(12, 12, 12, 0.94), rgba(8, 8, 8, 0.96));
+}
+
+.roadmapHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.roadmapTitle {
+  color: #ffe7bd;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.roadmapHint {
+  margin-top: 4px;
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.86rem;
+}
+
+.roadmapGate {
+  margin-top: 8px;
+  color: rgba(248, 230, 200, 0.72);
+  font-size: 0.78rem;
+}
+
+.roadmapStamp {
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.78rem;
+}
+
+.roadmapStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.roadmapGrid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 14px;
+}
+
+.roadmapList {
+  min-height: 350px;
+}
+
+.roundList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.roundItem {
+  border: 1px solid rgba(255, 214, 127, 0.2);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(10, 10, 10, 0.72);
+}
+
+.roundItem.hit {
+  border-color: rgba(80, 220, 142, 0.35);
+}
+
+.roundItem.miss {
+  border-color: rgba(255, 122, 122, 0.28);
+}
+
+.roundTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.roundBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  color: #ffe5b6;
+  border: 1px solid rgba(255, 214, 127, 0.34);
+}
+
+.gateBadge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.gateBadge.ok {
+  color: #9effc9;
+  background: rgba(60, 154, 103, 0.28);
+}
+
+.gateBadge.bad {
+  color: #ffc2c2;
+  background: rgba(154, 60, 60, 0.28);
+}
+
+.roundMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  color: rgba(248, 230, 200, 0.82);
+  font-size: 0.78rem;
+}
+
+.roundMeta {
+  display: grid;
+  margin-top: 6px;
+  gap: 4px;
+  color: rgba(248, 230, 200, 0.66);
+  font-size: 0.75rem;
 }
 
 .card {
@@ -225,9 +461,63 @@ body {
   margin-bottom: 14px;
 }
 
+.toastStack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 10px;
+  z-index: 70;
+  width: min(360px, calc(100vw - 24px));
+}
+
+.toastItem {
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 214, 127, 0.22);
+  background: rgba(8, 8, 8, 0.92);
+  color: #f5e9d2;
+  font-size: 0.82rem;
+}
+
+.toastItem.warn {
+  border-color: rgba(255, 128, 128, 0.45);
+}
+
+.toastItem.success {
+  border-color: rgba(116, 212, 167, 0.45);
+}
+
+.toastClose {
+  border: 1px solid rgba(255, 214, 127, 0.28);
+  border-radius: 7px;
+  background: transparent;
+  color: #f5e9d2;
+  font-size: 0.7rem;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+
 @media (max-width: 1100px) {
+  .missionGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
   .topGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .roadmapStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .roadmapGrid {
+    grid-template-columns: 1fr;
+  }
+  .roundMetrics {
+    grid-template-columns: 1fr;
   }
   .ceoGrid {
     grid-template-columns: 1fr;
@@ -245,6 +535,24 @@ body {
     flex-direction: column;
   }
   .topGrid {
+    grid-template-columns: 1fr;
+  }
+  .missionHead {
+    flex-direction: column;
+  }
+  .missionActions {
+    align-items: flex-start;
+  }
+  .missionGrid {
+    grid-template-columns: 1fr;
+  }
+  .missionProgressMeta {
+    flex-direction: column;
+  }
+  .roadmapHead {
+    flex-direction: column;
+  }
+  .roadmapStats {
     grid-template-columns: 1fr;
   }
   .diagnosticsGrid {
