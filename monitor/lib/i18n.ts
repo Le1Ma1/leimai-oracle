@@ -409,6 +409,36 @@ const packs: Record<LocaleCode, LocalePack> = {
   }
 };
 
+const extraUiPacks: Record<LocaleCode, Dict> = {
+  "zh-TW": {
+    flowFunnelTitle: "流量漏斗",
+    flowFunnelHint: "raw -> barrier -> meta -> trades",
+    rejectionTimelineTitle: "拒絕原因時間線",
+    rejectionTimelineHint: "最近 16 輪主要阻擋原因"
+  },
+  "en-US": {
+    flowFunnelTitle: "Flow Funnel",
+    flowFunnelHint: "raw -> barrier -> meta -> trades",
+    rejectionTimelineTitle: "Rejection Timeline",
+    rejectionTimelineHint: "Top blocking reason across last 16 rounds"
+  }
+};
+
+const extraEnumPacks: Record<LocaleCode, Dict> = {
+  "zh-TW": {
+    BATCH_REASON_EVENT_GENERATOR_DRY: "Event Generator 乾涸",
+    FLOW_GATE_A1_PENDING: "A1 待通過",
+    FLOW_GATE_A2_PENDING: "A2 待通過",
+    FLOW_GATE_A2_PASSED: "A2 已通過"
+  },
+  "en-US": {
+    BATCH_REASON_EVENT_GENERATOR_DRY: "Event generator dry",
+    FLOW_GATE_A1_PENDING: "A1 pending",
+    FLOW_GATE_A2_PENDING: "A2 pending",
+    FLOW_GATE_A2_PASSED: "A2 passed"
+  }
+};
+
 const ASIA_LANG_PREFIXES = ["zh", "ja", "ko", "th", "vi", "id", "ms", "ar", "hi"];
 
 export function detectDefaultLocale(): LocaleCode {
@@ -428,7 +458,7 @@ export function detectDefaultLocale(): LocaleCode {
 
 export function t(locale: LocaleCode, key: string): string {
   const pack = packs[locale] || packs["en-US"];
-  return pack.ui[key] ?? pack.enums[key] ?? key;
+  return pack.ui[key] ?? pack.enums[key] ?? extraUiPacks[locale]?.[key] ?? extraEnumPacks[locale]?.[key] ?? key;
 }
 
 export function getNextLocale(locale: LocaleCode): LocaleCode {

@@ -1,6 +1,6 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "last_synced_at": "2026-03-07T05:49:24Z",
+  "last_synced_at": "2026-03-07T07:23:29Z",
   "run_id": "iter_r1_35249b06bafb",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
@@ -13,6 +13,15 @@
     "failsafe_veto_all_rate": 0.5833333333333334,
     "veto_rate": 0.983895493502903,
     "threshold_selected": 0.5950000000000002
+  },
+  "flow_funnel": {
+    "raw_signals": 11338,
+    "barrier_labeled": 11338,
+    "meta_kept": 160,
+    "trades": 0,
+    "kept_over_raw": 0.01411183630269889,
+    "trades_over_kept": 0.0,
+    "trades_over_raw": 0.0
   },
   "rejection_breakdown": [
     {

@@ -1,11 +1,11 @@
 {
   "artifact_version": "phase1_training_runtime_v1",
-  "generated_at_utc": "2026-03-07T05:49:24Z",
+  "generated_at_utc": "2026-03-07T07:23:29Z",
   "runtime_status_key": "RUNTIME_STALLED",
   "phase_key": "PHASE_WAITING",
   "run_id": "iter_r1_35249b06bafb",
   "started_at_utc": "2026-03-06T21:06:52Z",
-  "elapsed_sec": 31352,
+  "elapsed_sec": 36997,
   "remaining_sec": null,
   "eta_utc": null,
   "eta_confidence": "low",
@@ -40,6 +40,19 @@
   "next_profile_key": "PROFILE_EVENT_EXPANSION",
   "next_profile_route_reason_key": "ROUTE_TRADE_DENSITY_LOW",
   "early_gate_hit": false,
+  "flow_gate_phase_key": "FLOW_GATE_A1_PENDING",
+  "flow_gate_a1_hit": false,
+  "flow_gate_a2_hit": false,
+  "zero_trade_streak": 0,
+  "flow_funnel": {
+    "raw_signals": 11338,
+    "barrier_labeled": 11338,
+    "meta_kept": 160,
+    "trades": 0,
+    "kept_over_raw": 0.01411183630269889,
+    "trades_over_kept": 0.0,
+    "trades_over_raw": 0.0
+  },
   "flow_gate_thresholds": {
     "max_veto_rate": 0.93,
     "max_failsafe_veto_all_rate": 0.4,
@@ -47,7 +60,7 @@
     "required_streak": 2
   },
   "last_event_at_utc": "2026-03-06T21:11:04Z",
-  "last_sync_at_utc": "2026-03-07T05:49:24Z",
+  "last_sync_at_utc": "2026-03-07T07:23:29Z",
   "notify_event_key": "",
   "notify_seq": 27
 }

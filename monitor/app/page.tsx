@@ -348,6 +348,64 @@ export default function HomePage() {
   const profileComparisonRows = useMemo(() => roadmap?.profile_comparison?.rows || [], [roadmap?.profile_comparison?.rows]);
   const profileEffectivenessRows = useMemo(() => roadmap?.profile_effectiveness || [], [roadmap?.profile_effectiveness]);
   const batchHeatmapRows = useMemo(() => roadmap?.batch_param_heatmap || [], [roadmap?.batch_param_heatmap]);
+  const flowFunnel = useMemo(() => {
+    if (runtime?.flow_funnel) {
+      return runtime.flow_funnel;
+    }
+    if (roadmap?.latest_funnel) {
+      return roadmap.latest_funnel;
+    }
+    if (visualState?.flow_funnel) {
+      return visualState.flow_funnel;
+    }
+    return {
+      raw_signals: 0,
+      barrier_labeled: 0,
+      meta_kept: 0,
+      trades: 0,
+      kept_over_raw: 0,
+      trades_over_kept: 0,
+      trades_over_raw: 0
+    };
+  }, [roadmap?.latest_funnel, runtime?.flow_funnel, visualState?.flow_funnel]);
+  const funnelStages = useMemo(() => {
+    const raw = Math.max(0, Number(flowFunnel.raw_signals || 0));
+    const base = raw > 0 ? raw : 1;
+    return [
+      {
+        id: "RAW",
+        count: Math.max(0, Number(flowFunnel.raw_signals || 0)),
+        widthPct: clamp((Number(flowFunnel.raw_signals || 0) / base) * 100, 0, 100)
+      },
+      {
+        id: "BARRIER",
+        count: Math.max(0, Number(flowFunnel.barrier_labeled || 0)),
+        widthPct: clamp((Number(flowFunnel.barrier_labeled || 0) / base) * 100, 0, 100)
+      },
+      {
+        id: "META",
+        count: Math.max(0, Number(flowFunnel.meta_kept || 0)),
+        widthPct: clamp((Number(flowFunnel.meta_kept || 0) / base) * 100, 0, 100)
+      },
+      {
+        id: "TRADES",
+        count: Math.max(0, Number(flowFunnel.trades || 0)),
+        widthPct: clamp((Number(flowFunnel.trades || 0) / base) * 100, 0, 100)
+      }
+    ];
+  }, [flowFunnel.barrier_labeled, flowFunnel.meta_kept, flowFunnel.raw_signals, flowFunnel.trades]);
+  const rejectionTimelineRows = useMemo(
+    () =>
+      (roadmap?.rounds || [])
+        .slice(-16)
+        .map((row) => ({
+          round: row.round_index,
+          reasonKey: row.rejection_top_reason_key || "REASON_UNKNOWN",
+          gateHit: Boolean(row.gate_hit)
+        }))
+        .reverse(),
+    [roadmap?.rounds]
+  );
 
   return (
     <main className="dashboard">
@@ -487,10 +545,11 @@ export default function HomePage() {
         </div>
 
         <div className="missionGateRule">
-          {t(locale, "earlyGateStatus")}: veto ≤ {formatPct(runtime?.flow_gate_thresholds?.max_veto_rate ?? Number.NaN)} | failsafe ≤{" "}
-          {formatPct(runtime?.flow_gate_thresholds?.max_failsafe_veto_all_rate ?? Number.NaN)} | trades ≥{" "}
-          {runtime?.flow_gate_thresholds?.min_trades_total_all_window ?? "--"} | {t(locale, "flowStageReason")}:{" "}
-          {t(locale, runtime?.flow_stage_reason_key || roadmap?.flow_stage_reason_key || "FLOW_REASON_NEED_TRADES")}
+          {t(locale, "earlyGateStatus")}: {t(locale, runtime?.flow_gate_phase_key || "FLOW_GATE_A1_PENDING")} | veto &lt;=
+          {formatPct(runtime?.flow_gate_thresholds?.max_veto_rate ?? Number.NaN)} | failsafe &lt;=
+          {formatPct(runtime?.flow_gate_thresholds?.max_failsafe_veto_all_rate ?? Number.NaN)} | trades &gt;=
+          {runtime?.flow_gate_thresholds?.min_trades_total_all_window ?? "--"} | dry_streak={runtime?.zero_trade_streak ?? 0} |{" "}
+          {t(locale, "flowStageReason")}: {t(locale, runtime?.flow_stage_reason_key || roadmap?.flow_stage_reason_key || "FLOW_REASON_NEED_TRADES")}
         </div>
 
         {gateBlocked ? (
@@ -822,6 +881,48 @@ export default function HomePage() {
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <div className="empty">{t(locale, "na")}</div>
+            )}
+          </article>
+
+          <article className="card profileTableCard">
+            <div className="cardHeader">{t(locale, "flowFunnelTitle")}</div>
+            <div className="analysisHint">{t(locale, "flowFunnelHint")}</div>
+            <div className="funnelGrid">
+              {funnelStages.map((stage) => (
+                <div className="funnelRow" key={stage.id}>
+                  <div className="funnelHead">
+                    <span className="funnelLabel">{stage.id}</span>
+                    <span className="funnelCount">{Math.floor(stage.count)}</span>
+                  </div>
+                  <div className="funnelBar">
+                    <span style={{ width: `${stage.widthPct}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="funnelRatios">
+              kept/raw={formatPct(Number(flowFunnel.kept_over_raw || 0))} | trades/meta=
+              {formatPct(Number(flowFunnel.trades_over_kept || 0))} | trades/raw={formatPct(Number(flowFunnel.trades_over_raw || 0))}
+            </div>
+          </article>
+
+          <article className="card profileTableCard">
+            <div className="cardHeader">{t(locale, "rejectionTimelineTitle")}</div>
+            <div className="analysisHint">{t(locale, "rejectionTimelineHint")}</div>
+            {rejectionTimelineRows.length ? (
+              <ul className="timelineList">
+                {rejectionTimelineRows.map((row) => (
+                  <li key={`timeline-${row.round}`} className={`timelineItem ${row.gateHit ? "ok" : "bad"}`}>
+                    <span className="timelineRound">R{row.round}</span>
+                    <span className="timelineReason">{t(locale, row.reasonKey)}</span>
+                    <span className={`timelineGate ${row.gateHit ? "ok" : "bad"}`}>
+                      {row.gateHit ? t(locale, "gateHit") : t(locale, "gateMiss")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : (
               <div className="empty">{t(locale, "na")}</div>
             )}

@@ -74,7 +74,10 @@ export type BatchReasonKey =
   | "BATCH_REASON_STAGNATION_LIMIT"
   | "BATCH_REASON_HARD_CAP_REACHED"
   | "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR"
+  | "BATCH_REASON_EVENT_GENERATOR_DRY"
   | string;
+
+export type FlowGatePhaseKey = "FLOW_GATE_A1_PENDING" | "FLOW_GATE_A2_PENDING" | "FLOW_GATE_A2_PASSED" | string;
 
 export type ProfileKey =
   | "PROFILE_BASELINE"
@@ -114,6 +117,13 @@ export interface EvolutionValidation {
     failsafe_veto_all_rate: number;
     veto_rate: number;
     threshold_selected: number;
+    entry_signals_raw_all_window: number;
+    barrier_events_all_window: number;
+    entry_signals_meta_all_window: number;
+    trades_total_all_window: number;
+    funnel_kept_over_raw: number;
+    funnel_trades_over_kept: number;
+    funnel_trades_over_raw: number;
   };
   rejection_breakdown: Array<{
     reason_key: RejectionReason | string;
@@ -137,6 +147,15 @@ export interface VisualState {
     veto_rate: number;
     threshold_selected: number;
   };
+  flow_funnel?: {
+    raw_signals: number;
+    barrier_labeled: number;
+    meta_kept: number;
+    trades: number;
+    kept_over_raw: number;
+    trades_over_kept: number;
+    trades_over_raw: number;
+  };
   rejection_breakdown: Array<{
     reason_key: RejectionReason | string;
     count: number;
@@ -156,6 +175,12 @@ export interface TrainingRound {
   deploy_rules: number;
   trades_total_all_window: number;
   trades_avg_all_window: number;
+  entry_signals_raw_all_window: number;
+  barrier_events_all_window: number;
+  entry_signals_meta_all_window: number;
+  funnel_kept_over_raw: number;
+  funnel_trades_over_kept: number;
+  funnel_trades_over_raw: number;
   pbo: number;
   dsr: number;
   precision: number;
@@ -204,6 +229,10 @@ export interface TrainingRoadmap {
     flow_gate_streak: number;
     flow_gate_required_streak: number;
     flow_gate_achieved: boolean;
+    flow_gate_phase_key: FlowGatePhaseKey | string;
+    flow_gate_a1_hit: boolean;
+    flow_gate_a2_hit: boolean;
+    zero_trade_streak: number;
     last_flow_score: number;
     last_objective_score: number;
   };
@@ -232,6 +261,15 @@ export interface TrainingRoadmap {
   next_profile_name?: string;
   next_profile_route_reason_key?: RouteReasonKey | string;
   early_gate_hit?: boolean;
+  latest_funnel?: {
+    raw_signals: number;
+    barrier_labeled: number;
+    meta_kept: number;
+    trades: number;
+    kept_over_raw: number;
+    trades_over_kept: number;
+    trades_over_raw: number;
+  };
   diagnosis?: {
     objective_key: DiagnosisObjectiveKey;
     recommended_profile_key: ProfileKey;
@@ -332,6 +370,19 @@ export interface TrainingRuntime {
   next_profile_key: ProfileKey | string;
   next_profile_route_reason_key: RouteReasonKey | string;
   early_gate_hit: boolean;
+  flow_gate_phase_key: FlowGatePhaseKey | string;
+  flow_gate_a1_hit: boolean;
+  flow_gate_a2_hit: boolean;
+  zero_trade_streak: number;
+  flow_funnel: {
+    raw_signals: number;
+    barrier_labeled: number;
+    meta_kept: number;
+    trades: number;
+    kept_over_raw: number;
+    trades_over_kept: number;
+    trades_over_raw: number;
+  };
   flow_gate_thresholds: {
     max_veto_rate: number;
     max_failsafe_veto_all_rate: number;

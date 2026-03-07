@@ -20,6 +20,11 @@ STAGE_FLOW_RECOVERY = "STAGE_FLOW_RECOVERY"
 STAGE_ALPHA_RECOVERY = "STAGE_ALPHA_RECOVERY"
 BATCH_FLOW_UNLOCK = "BATCH_FLOW_UNLOCK"
 BATCH_QUALITY_RECOVERY = "BATCH_QUALITY_RECOVERY"
+BATCH_REASON_EVENT_GENERATOR_DRY = "BATCH_REASON_EVENT_GENERATOR_DRY"
+
+FLOW_GATE_A1_PENDING = "FLOW_GATE_A1_PENDING"
+FLOW_GATE_A2_PENDING = "FLOW_GATE_A2_PENDING"
+FLOW_GATE_A2_PASSED = "FLOW_GATE_A2_PASSED"
 
 STATUS_FLOW_LOCK = "TRAINING_STATUS_STAGNATED_FLOW_LOCK"
 OBJECTIVE_FLOW_UNLOCK = "OBJECTIVE_FLOW_UNLOCK"
@@ -143,6 +148,60 @@ def extract_signal_density(validation: dict[str, Any]) -> tuple[int, int]:
     return raw_total, meta_total
 
 
+def extract_flow_funnel(validation: dict[str, Any]) -> dict[str, float | int]:
+    rows = validation.get("rows", [])
+    if not isinstance(rows, list):
+        return {
+            "funnel_raw_signals": 0,
+            "funnel_barrier_labeled": 0,
+            "funnel_meta_kept": 0,
+            "funnel_trades": 0,
+            "funnel_kept_over_raw": 0.0,
+            "funnel_trades_over_kept": 0.0,
+            "funnel_trades_over_raw": 0.0,
+        }
+
+    selected = [row for row in rows if isinstance(row, dict) and str(row.get("window")) == "all"]
+    if not selected:
+        return {
+            "funnel_raw_signals": 0,
+            "funnel_barrier_labeled": 0,
+            "funnel_meta_kept": 0,
+            "funnel_trades": 0,
+            "funnel_kept_over_raw": 0.0,
+            "funnel_trades_over_kept": 0.0,
+            "funnel_trades_over_raw": 0.0,
+        }
+
+    raw_total = int(sum(safe_int(row.get("entry_signals_raw"), 0) for row in selected))
+    meta_total = int(sum(safe_int(row.get("entry_signals_meta"), 0) for row in selected))
+    trades_total = int(sum(safe_int(row.get("trades"), 0) for row in selected))
+
+    barrier_total = 0
+    for row in selected:
+        meta = row.get("meta_label")
+        if not isinstance(meta, dict):
+            continue
+        barrier_total += safe_int(meta.get("events_total"), 0)
+    if barrier_total <= 0:
+        barrier_total = raw_total
+
+    def _ratio(num: int, den: int) -> float:
+        if den <= 0:
+            return 0.0
+        return max(0.0, min(1.0, float(num / den)))
+
+    return {
+        "funnel_raw_signals": raw_total,
+        "funnel_barrier_labeled": barrier_total,
+        "funnel_meta_kept": meta_total,
+        "funnel_trades": trades_total,
+        "funnel_kept_over_raw": _ratio(meta_total, raw_total),
+        "funnel_trades_over_kept": _ratio(trades_total, meta_total),
+        "funnel_trades_over_raw": _ratio(trades_total, raw_total),
+    }
+
+
 def extract_meta_metrics(validation: dict[str, Any]) -> dict[str, float]:
     meta_summary = validation.get("meta_label_summary", {})
     meta_summary = meta_summary if isinstance(meta_summary, dict) else {}
@@ -204,6 +263,7 @@ def collect_latest_metrics() -> dict[str, Any]:
     all_alpha = extract_all_window_alpha(validation)
     trades_total, trades_avg = extract_trade_stats(validation)
     entry_signals_raw_all, entry_signals_meta_all = extract_signal_density(validation)
+    funnel = extract_flow_funnel(validation)
     meta_metrics = extract_meta_metrics(validation)
     pbo, dsr = extract_pbo_dsr(validation)
     deploy_ready = bool(failure.get("deploy_ready", False))
@@ -224,9 +284,11 @@ def collect_latest_metrics() -> dict[str, Any]:
         "trades_avg_all_window": trades_avg,
         "entry_signals_raw_all_window": entry_signals_raw_all,
         "entry_signals_meta_all_window": entry_signals_meta_all,
+        "barrier_events_all_window": safe_int(funnel.get("funnel_barrier_labeled"), 0),
         "pbo": pbo,
         "dsr": dsr,
         "veto_rate": veto_rate,
+        **funnel,
         **meta_metrics,
     }
 
@@ -507,6 +569,18 @@ def _flow_gate_hit(metrics: dict[str, Any], flow_gate: dict[str, Any]) -> bool:
     )
 
 
+def _flow_gate_a1_hit(metrics: dict[str, Any]) -> bool:
+    return safe_int(metrics.get("trades_total_all_window"), 0) > 0
+
+
+def _flow_gate_phase_key(*, a1_hit: bool, a2_hit: bool) -> str:
+    if not a1_hit:
+        return FLOW_GATE_A1_PENDING
+    if a2_hit:
+        return FLOW_GATE_A2_PASSED
+    return FLOW_GATE_A2_PENDING
+
+
 def choose_meta_overrides(
     *,
     last_metrics: dict[str, Any] | None,
@@ -700,6 +774,10 @@ def main() -> int:
         "recovery_milestone_key": MILESTONE_M1_TRADES,
         "flow_gate_streak": 0,
         "flow_gate_achieved": False,
+        "flow_gate_phase_key": FLOW_GATE_A1_PENDING,
+        "flow_gate_a1_hit": False,
+        "flow_gate_a2_hit": False,
+        "zero_trade_streak": 0,
         "next_profile_name": "r2_event_expansion",
         "next_profile_route_reason_key": ROUTE_TRADE_DENSITY_LOW,
         "hard_cap": default_hard_cap,
@@ -757,6 +835,7 @@ def main() -> int:
     current_streak = safe_int(state.get("current_streak"), 0)
     stagnation_count = safe_int(state.get("stagnation_count"), 0)
     loop_runs = safe_int(state.get("loop_runs"), 0)
+    zero_trade_streak = max(0, safe_int(state.get("zero_trade_streak"), 0))
     flow_unlock_rounds_run = safe_int(state.get("flow_unlock_rounds_run"), 0)
     quality_recovery_rounds_run = safe_int(state.get("quality_recovery_rounds_run"), 0)
     if flow_unlock_rounds_run <= 0 or quality_recovery_rounds_run <= 0:
@@ -810,6 +889,7 @@ def main() -> int:
                         "batch_round_cap": batch_round_cap,
                         "flow_unlock_rounds_run": flow_unlock_rounds_run,
                         "quality_recovery_rounds_run": quality_recovery_rounds_run,
+                        "zero_trade_streak": zero_trade_streak,
                     }
                 )
                 write_json(STATE_PATH, state)
@@ -864,12 +944,18 @@ def main() -> int:
                 metrics,
                 flow_gate=flow_gate,
             )
-            this_flow_gate_hit = _flow_gate_hit(metrics=metrics, flow_gate=flow_gate)
-            flow_gate_streak = (flow_gate_streak + 1) if this_flow_gate_hit else 0
+            this_flow_gate_a1_hit = _flow_gate_a1_hit(metrics=metrics)
+            this_flow_gate_a2_hit = _flow_gate_hit(metrics=metrics, flow_gate=flow_gate)
+            flow_gate_phase_key = _flow_gate_phase_key(a1_hit=this_flow_gate_a1_hit, a2_hit=this_flow_gate_a2_hit)
+            flow_gate_streak = (flow_gate_streak + 1) if this_flow_gate_a2_hit else 0
             if flow_gate_streak >= safe_int(flow_gate.get("required_streak"), 1):
                 flow_gate_achieved = True
             next_stage_key = STAGE_ALPHA_RECOVERY if flow_gate_achieved else STAGE_FLOW_RECOVERY
             objective_score = q_score if active_objective_key == OBJECTIVE_ALPHA_RECOVERY else f_score
+            if safe_int(metrics.get("trades_total_all_window"), 0) <= 0:
+                zero_trade_streak += 1
+            else:
+                zero_trade_streak = 0
             batch_round_index += 1
             if batch_key == BATCH_QUALITY_RECOVERY:
                 quality_recovery_rounds_run = batch_round_index
@@ -897,7 +983,10 @@ def main() -> int:
             if no_threshold_meets_floor:
                 batch_status_key = "STATUS_VETO_ALL"
                 batch_outcome_reason_key = "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR"
-            elif stage_key == STAGE_FLOW_RECOVERY and this_flow_gate_hit:
+            elif zero_trade_streak >= 3:
+                batch_status_key = "STATUS_STALLED"
+                batch_outcome_reason_key = BATCH_REASON_EVENT_GENERATOR_DRY
+            elif stage_key == STAGE_FLOW_RECOVERY and this_flow_gate_a2_hit:
                 batch_status_key = "STATUS_STABLE"
                 batch_outcome_reason_key = "BATCH_REASON_FLOW_GATE_HIT"
             elif stage_key == STAGE_ALPHA_RECOVERY and this_gate_hit:
@@ -930,9 +1019,13 @@ def main() -> int:
                 "flow_stage_reason_key": flow_stage_reason_key,
                 "recovery_milestone_key": recovery_milestone_key,
                 "flow_milestone_hit": this_flow_milestone_hit,
-                "flow_gate_hit": this_flow_gate_hit,
+                "flow_gate_hit": this_flow_gate_a2_hit,
+                "flow_gate_a1_hit": this_flow_gate_a1_hit,
+                "flow_gate_a2_hit": this_flow_gate_a2_hit,
+                "flow_gate_phase_key": flow_gate_phase_key,
                 "flow_gate_streak": flow_gate_streak,
                 "flow_gate_achieved": flow_gate_achieved,
+                "zero_trade_streak": zero_trade_streak,
                 "quality_score": q_score,
                 "flow_score": f_score,
                 "objective_score": objective_score,
@@ -980,6 +1073,10 @@ def main() -> int:
                     "recovery_milestone_key": recovery_milestone_key,
                     "flow_gate_streak": flow_gate_streak,
                     "flow_gate_achieved": flow_gate_achieved,
+                    "flow_gate_phase_key": flow_gate_phase_key,
+                    "flow_gate_a1_hit": this_flow_gate_a1_hit,
+                    "flow_gate_a2_hit": this_flow_gate_a2_hit,
+                    "zero_trade_streak": zero_trade_streak,
                     "next_profile_name": next_profile_name,
                     "next_profile_route_reason_key": next_profile_route_reason_key,
                     "last_profile_name": profile_name,

@@ -423,6 +423,49 @@ def _extract_validation_trades(validation: dict[str, Any], window_name: str = "a
     return total, avg
 
 
+def _extract_validation_funnel(validation: dict[str, Any], window_name: str = "all") -> dict[str, float | int]:
+    rows = validation.get("rows", [])
+    rows = rows if isinstance(rows, list) else []
+    selected = [row for row in rows if isinstance(row, dict) and str(row.get("window")) == window_name]
+    if not selected:
+        return {
+            "entry_signals_raw_all_window": 0,
+            "barrier_events_all_window": 0,
+            "entry_signals_meta_all_window": 0,
+            "trades_total_all_window": 0,
+            "funnel_kept_over_raw": 0.0,
+            "funnel_trades_over_kept": 0.0,
+            "funnel_trades_over_raw": 0.0,
+        }
+
+    raw_total = int(sum(safe_int(row.get("entry_signals_raw"), 0) for row in selected))
+    meta_total = int(sum(safe_int(row.get("entry_signals_meta"), 0) for row in selected))
+    trades_total = int(sum(safe_int(row.get("trades"), 0) for row in selected))
+    barrier_total = 0
+    for row in selected:
+        meta = row.get("meta_label")
+        if not isinstance(meta, dict):
+            continue
+        barrier_total += safe_int(meta.get("events_total"), 0)
+    if barrier_total <= 0:
+        barrier_total = raw_total
+
+    def _ratio(num: int, den: int) -> float:
+        if den <= 0:
+            return 0.0
+        return max(0.0, min(1.0, float(num / den)))
+
+    return {
+        "entry_signals_raw_all_window": raw_total,
+        "barrier_events_all_window": barrier_total,
+        "entry_signals_meta_all_window": meta_total,
+        "trades_total_all_window": trades_total,
+        "funnel_kept_over_raw": _ratio(meta_total, raw_total),
+        "funnel_trades_over_kept": _ratio(trades_total, meta_total),
+        "funnel_trades_over_raw": _ratio(trades_total, raw_total),
+    }
+
+
 def _round_quality_score(row: dict[str, Any]) -> float:
     objective = safe_float(row.get("objective_balance_score"), 0.0)
     if objective > 0.0:
@@ -486,6 +529,7 @@ def _collect_iteration_rounds(*, max_rounds: int, gate: dict[str, Any]) -> list[
         rejection_breakdown = map_rejection_breakdown(failure)
         top_reason_key = rejection_breakdown[0]["reason_key"] if rejection_breakdown else "REASON_UNKNOWN"
         trades_total_all, trades_avg_all = _extract_validation_trades(validation, window_name="all")
+        funnel = _extract_validation_funnel(validation, window_name="all")
         round_obj = {
             "round_index": idx,
             "ts_utc": str(iteration.get("ts_utc") or ""),
@@ -502,8 +546,14 @@ def _collect_iteration_rounds(*, max_rounds: int, gate: dict[str, Any]) -> list[
             "deploy_ready": deploy_ready,
             "deploy_symbols": deploy_symbols,
             "deploy_rules": deploy_rules,
-            "trades_total_all_window": trades_total_all,
+            "trades_total_all_window": safe_int(funnel.get("trades_total_all_window"), trades_total_all),
             "trades_avg_all_window": trades_avg_all,
+            "entry_signals_raw_all_window": safe_int(funnel.get("entry_signals_raw_all_window"), 0),
+            "barrier_events_all_window": safe_int(funnel.get("barrier_events_all_window"), 0),
+            "entry_signals_meta_all_window": safe_int(funnel.get("entry_signals_meta_all_window"), 0),
+            "funnel_kept_over_raw": safe_float(funnel.get("funnel_kept_over_raw"), 0.0),
+            "funnel_trades_over_kept": safe_float(funnel.get("funnel_trades_over_kept"), 0.0),
+            "funnel_trades_over_raw": safe_float(funnel.get("funnel_trades_over_raw"), 0.0),
             "pbo": metrics["pbo"],
             "dsr": metrics["dsr"],
             "precision": metrics["precision"],
@@ -642,10 +692,23 @@ def _normalize_batch_reason(raw: Any) -> str:
         "BATCH_REASON_STAGNATION_LIMIT",
         "BATCH_REASON_HARD_CAP_REACHED",
         "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR",
+        "BATCH_REASON_EVENT_GENERATOR_DRY",
     }
     if text in allowed:
         return text
     return "BATCH_REASON_IN_PROGRESS"
+
+
+def _normalize_flow_gate_phase_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    allowed = {
+        "FLOW_GATE_A1_PENDING",
+        "FLOW_GATE_A2_PENDING",
+        "FLOW_GATE_A2_PASSED",
+    }
+    if text in allowed:
+        return text
+    return "FLOW_GATE_A1_PENDING"
 
 
 def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1006,6 +1069,10 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
     loop_runs = safe_int(loop_state.get("loop_runs"), 0)
     flow_gate_streak = safe_int(loop_state.get("flow_gate_streak"), 0)
     flow_gate_achieved = bool(loop_state.get("flow_gate_achieved", False))
+    flow_gate_phase_key = _normalize_flow_gate_phase_key(loop_state.get("flow_gate_phase_key"))
+    flow_gate_a1_hit = bool(loop_state.get("flow_gate_a1_hit", False))
+    flow_gate_a2_hit = bool(loop_state.get("flow_gate_a2_hit", False))
+    zero_trade_streak = max(0, safe_int(loop_state.get("zero_trade_streak"), 0))
     stage_key = _normalize_stage_key(loop_state.get("stage_key"))
     if flow_gate_achieved:
         stage_key = "STAGE_ALPHA_RECOVERY"
@@ -1035,6 +1102,15 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
     last_loop_profile = _latest_loop_profile_override(loop_state)
     last_flow_score = safe_float(loop_state.get("last_flow_score"), 0.0)
     last_objective_score = safe_float(loop_state.get("last_objective_score"), 0.0)
+    latest_funnel = {
+        "raw_signals": safe_int((latest_round or {}).get("entry_signals_raw_all_window"), 0),
+        "barrier_labeled": safe_int((latest_round or {}).get("barrier_events_all_window"), 0),
+        "meta_kept": safe_int((latest_round or {}).get("entry_signals_meta_all_window"), 0),
+        "trades": safe_int((latest_round or {}).get("trades_total_all_window"), 0),
+        "kept_over_raw": safe_float((latest_round or {}).get("funnel_kept_over_raw"), 0.0),
+        "trades_over_kept": safe_float((latest_round or {}).get("funnel_trades_over_kept"), 0.0),
+        "trades_over_raw": safe_float((latest_round or {}).get("funnel_trades_over_raw"), 0.0),
+    }
 
     return {
         "artifact_version": "phase1_training_roadmap_v1",
@@ -1053,6 +1129,10 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
             "flow_gate_streak": flow_gate_streak,
             "flow_gate_required_streak": safe_int(flow_gate.get("required_streak"), 1),
             "flow_gate_achieved": flow_gate_achieved,
+            "flow_gate_phase_key": flow_gate_phase_key,
+            "flow_gate_a1_hit": flow_gate_a1_hit,
+            "flow_gate_a2_hit": flow_gate_a2_hit,
+            "zero_trade_streak": zero_trade_streak,
             "last_flow_score": last_flow_score,
             "last_objective_score": last_objective_score,
         },
@@ -1076,6 +1156,7 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
         "next_profile_name": next_profile_name,
         "next_profile_route_reason_key": next_profile_route_reason_key,
         "early_gate_hit": flow_gate_achieved,
+        "latest_funnel": latest_funnel,
         "diagnosis": diagnosis,
         "profile_comparison": profile_comparison,
         "profile_effectiveness": profile_effectiveness,
@@ -1295,6 +1376,23 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
     early_gate_hit = bool(training_roadmap.get("early_gate_hit", False))
     flow_gate = training_roadmap.get("flow_gate")
     flow_gate = flow_gate if isinstance(flow_gate, dict) else dict(FLOW_GATE_DEFAULTS)
+    summary_payload = training_roadmap.get("summary")
+    summary_payload = summary_payload if isinstance(summary_payload, dict) else {}
+    flow_gate_phase_key = _normalize_flow_gate_phase_key(summary_payload.get("flow_gate_phase_key"))
+    flow_gate_a1_hit = bool(summary_payload.get("flow_gate_a1_hit", False))
+    flow_gate_a2_hit = bool(summary_payload.get("flow_gate_a2_hit", False))
+    zero_trade_streak = max(0, safe_int(summary_payload.get("zero_trade_streak"), 0))
+    latest_funnel = training_roadmap.get("latest_funnel")
+    latest_funnel = latest_funnel if isinstance(latest_funnel, dict) else {}
+    flow_funnel = {
+        "raw_signals": max(0, safe_int(latest_funnel.get("raw_signals"), 0)),
+        "barrier_labeled": max(0, safe_int(latest_funnel.get("barrier_labeled"), 0)),
+        "meta_kept": max(0, safe_int(latest_funnel.get("meta_kept"), 0)),
+        "trades": max(0, safe_int(latest_funnel.get("trades"), 0)),
+        "kept_over_raw": max(0.0, min(1.0, safe_float(latest_funnel.get("kept_over_raw"), 0.0))),
+        "trades_over_kept": max(0.0, min(1.0, safe_float(latest_funnel.get("trades_over_kept"), 0.0))),
+        "trades_over_raw": max(0.0, min(1.0, safe_float(latest_funnel.get("trades_over_raw"), 0.0))),
+    }
     flow_gate_thresholds = {
         "max_veto_rate": safe_float(flow_gate.get("max_veto_rate"), FLOW_GATE_DEFAULTS["max_veto_rate"]),
         "max_failsafe_veto_all_rate": safe_float(
@@ -1357,6 +1455,11 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "next_profile_key": next_profile_key,
         "next_profile_route_reason_key": next_profile_route_reason_key,
         "early_gate_hit": early_gate_hit,
+        "flow_gate_phase_key": flow_gate_phase_key,
+        "flow_gate_a1_hit": flow_gate_a1_hit,
+        "flow_gate_a2_hit": flow_gate_a2_hit,
+        "zero_trade_streak": zero_trade_streak,
+        "flow_funnel": flow_funnel,
         "flow_gate_thresholds": flow_gate_thresholds,
         "last_event_at_utc": last_event_at_utc or None,
         "last_sync_at_utc": str(visual_state.get("last_synced_at") or latest_synced),
@@ -1391,6 +1494,7 @@ def build_payload(validation: dict[str, Any], failure_breakdown: dict[str, Any])
     pass_rate = safe_float(validation.get("pass_rate"), 0.0)
     alpha_all = all_window_alpha(validation)
     max_dd = compute_max_drawdown(rows)
+    funnel = _extract_validation_funnel(validation, window_name="all")
 
     meta_summary = validation.get("meta_label_summary", {})
     meta_summary = meta_summary if isinstance(meta_summary, dict) else {}
@@ -1447,6 +1551,13 @@ def build_payload(validation: dict[str, Any], failure_breakdown: dict[str, Any])
             "failsafe_veto_all_rate": failsafe_rate,
             "veto_rate": veto_rate,
             "threshold_selected": median_or_default(threshold_values, 0.0),
+            "entry_signals_raw_all_window": safe_int(funnel.get("entry_signals_raw_all_window"), 0),
+            "barrier_events_all_window": safe_int(funnel.get("barrier_events_all_window"), 0),
+            "entry_signals_meta_all_window": safe_int(funnel.get("entry_signals_meta_all_window"), 0),
+            "trades_total_all_window": safe_int(funnel.get("trades_total_all_window"), 0),
+            "funnel_kept_over_raw": safe_float(funnel.get("funnel_kept_over_raw"), 0.0),
+            "funnel_trades_over_kept": safe_float(funnel.get("funnel_trades_over_kept"), 0.0),
+            "funnel_trades_over_raw": safe_float(funnel.get("funnel_trades_over_raw"), 0.0),
         },
         "rejection_breakdown": rejection_breakdown,
     }
@@ -1466,6 +1577,15 @@ def build_payload(validation: dict[str, Any], failure_breakdown: dict[str, Any])
             "failsafe_veto_all_rate": failsafe_rate,
             "veto_rate": veto_rate,
             "threshold_selected": median_or_default(threshold_values, 0.0),
+        },
+        "flow_funnel": {
+            "raw_signals": safe_int(funnel.get("entry_signals_raw_all_window"), 0),
+            "barrier_labeled": safe_int(funnel.get("barrier_events_all_window"), 0),
+            "meta_kept": safe_int(funnel.get("entry_signals_meta_all_window"), 0),
+            "trades": safe_int(funnel.get("trades_total_all_window"), 0),
+            "kept_over_raw": safe_float(funnel.get("funnel_kept_over_raw"), 0.0),
+            "trades_over_kept": safe_float(funnel.get("funnel_trades_over_kept"), 0.0),
+            "trades_over_raw": safe_float(funnel.get("funnel_trades_over_raw"), 0.0),
         },
         "rejection_breakdown": rejection_breakdown,
     }

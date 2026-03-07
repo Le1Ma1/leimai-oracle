@@ -1,6 +1,6 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "generated_at_utc": "2026-03-07T05:49:24Z",
+  "generated_at_utc": "2026-03-07T07:23:29Z",
   "source_generated_at_utc": "2026-03-07T05:31:24.075239+00:00",
   "run_id": "iter_r1_35249b06bafb",
   "status_key": "STATUS_STALLED",
@@ -17,7 +17,14 @@
     "precision_floor_compliance_rate": 0.6,
     "failsafe_veto_all_rate": 0.5833333333333334,
     "veto_rate": 0.983895493502903,
-    "threshold_selected": 0.5950000000000002
+    "threshold_selected": 0.5950000000000002,
+    "entry_signals_raw_all_window": 11338,
+    "barrier_events_all_window": 11338,
+    "entry_signals_meta_all_window": 160,
+    "trades_total_all_window": 0,
+    "funnel_kept_over_raw": 0.01411183630269889,
+    "funnel_trades_over_kept": 0.0,
+    "funnel_trades_over_raw": 0.0
   },
   "rejection_breakdown": [
     {
