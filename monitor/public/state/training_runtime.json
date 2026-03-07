@@ -1,11 +1,11 @@
 {
   "artifact_version": "phase1_training_runtime_v1",
-  "generated_at_utc": "2026-03-07T05:40:20Z",
+  "generated_at_utc": "2026-03-07T05:49:24Z",
   "runtime_status_key": "RUNTIME_STALLED",
   "phase_key": "PHASE_WAITING",
   "run_id": "iter_r1_35249b06bafb",
   "started_at_utc": "2026-03-06T21:06:52Z",
-  "elapsed_sec": 30808,
+  "elapsed_sec": 31352,
   "remaining_sec": null,
   "eta_utc": null,
   "eta_confidence": "low",
@@ -29,7 +29,7 @@
   "candidate_tier": "CANDIDATE_TIER_EXPLORATORY",
   "current_batch_key": "BATCH_FLOW_UNLOCK",
   "batch_status_key": "STATUS_STALLED",
-  "batch_outcome_reason_key": "BATCH_REASON_STAGE_CAP_REACHED",
+  "batch_outcome_reason_key": "BATCH_REASON_IN_PROGRESS",
   "batch_round_index": 1,
   "batch_round_cap": 30,
   "flow_unlock_rounds_run": 1,
@@ -47,7 +47,7 @@
     "required_streak": 2
   },
   "last_event_at_utc": "2026-03-06T21:11:04Z",
-  "last_sync_at_utc": "2026-03-07T05:40:20Z",
+  "last_sync_at_utc": "2026-03-07T05:49:24Z",
   "notify_event_key": "",
   "notify_seq": 27
 }

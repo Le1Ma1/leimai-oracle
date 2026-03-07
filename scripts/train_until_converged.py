@@ -727,6 +727,14 @@ def main() -> int:
             state["quality_recovery_cap"] = quality_recovery_cap_cli
             current_batch = str(state.get("current_batch_key") or BATCH_FLOW_UNLOCK)
             state["batch_round_cap"] = quality_recovery_cap_cli if current_batch == BATCH_QUALITY_RECOVERY else flow_unlock_cap_cli
+            batch_round_index_loaded = max(0, safe_int(state.get("batch_round_index"), 0))
+            batch_round_cap_loaded = max(1, safe_int(state.get("batch_round_cap"), 1))
+            if (
+                str(state.get("batch_outcome_reason_key") or "") == "BATCH_REASON_STAGE_CAP_REACHED"
+                and batch_round_index_loaded < batch_round_cap_loaded
+            ):
+                state["batch_outcome_reason_key"] = "BATCH_REASON_IN_PROGRESS"
+                state["batch_status_key"] = "STATUS_STALLED"
 
     last_metrics: dict[str, Any] | None = None
     if isinstance(state.get("rounds"), list) and state["rounds"]:

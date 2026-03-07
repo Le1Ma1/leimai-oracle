@@ -1,6 +1,6 @@
 {
   "artifact_version": "phase1_training_roadmap_v1",
-  "generated_at_utc": "2026-03-07T05:40:20Z",
+  "generated_at_utc": "2026-03-07T05:49:24Z",
   "status_key": "TRAINING_STATUS_STAGNATED_FLOW_LOCK",
   "gate": {
     "min_validation_pass_rate": 0.2,
@@ -34,7 +34,7 @@
   "candidate_tier": "CANDIDATE_TIER_EXPLORATORY",
   "current_batch_key": "BATCH_FLOW_UNLOCK",
   "batch_status_key": "STATUS_STALLED",
-  "batch_outcome_reason_key": "BATCH_REASON_STAGE_CAP_REACHED",
+  "batch_outcome_reason_key": "BATCH_REASON_IN_PROGRESS",
   "batch_round_index": 1,
   "batch_round_cap": 30,
   "flow_unlock_cap": 30,
