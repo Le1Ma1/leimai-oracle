@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "updated_at": "2026-03-07T04:10:01Z",
+  "variant_id": "control_v1",
+  "copy_overrides": {
+    "en": {},
+    "zh-tw": {},
+    "es": {},
+    "ja": {}
+  },
+  "meta": {
+    "owner": "growth-agent",
+    "reason": "bootstrap"
+  }
+}
