@@ -611,6 +611,7 @@ def _normalize_route_reason_key(raw: Any) -> str:
         "ROUTE_ALPHA_NEGATIVE",
         "ROUTE_STABILITY_SCAN",
         "ROUTE_PROFILE_EFFECTIVENESS_OVERRIDE",
+        "ROUTE_BATCH_EXPLORATION",
     }
     if text in allowed:
         return text
@@ -622,6 +623,29 @@ def _normalize_candidate_tier(raw: Any) -> str:
     if text == "CANDIDATE_TIER_STRICT":
         return "CANDIDATE_TIER_STRICT"
     return "CANDIDATE_TIER_EXPLORATORY"
+
+
+def _normalize_batch_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if text == "BATCH_QUALITY_RECOVERY":
+        return "BATCH_QUALITY_RECOVERY"
+    return "BATCH_FLOW_UNLOCK"
+
+
+def _normalize_batch_reason(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    allowed = {
+        "BATCH_REASON_IN_PROGRESS",
+        "BATCH_REASON_STAGE_CAP_REACHED",
+        "BATCH_REASON_FLOW_GATE_HIT",
+        "BATCH_REASON_QUALITY_GATE_HIT",
+        "BATCH_REASON_STAGNATION_LIMIT",
+        "BATCH_REASON_HARD_CAP_REACHED",
+        "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR",
+    }
+    if text in allowed:
+        return text
+    return "BATCH_REASON_IN_PROGRESS"
 
 
 def _build_profile_comparison(rounds: list[dict[str, Any]]) -> dict[str, Any]:
@@ -750,6 +774,35 @@ def _build_profile_effectiveness(loop_state: dict[str, Any], *, window: int = 8)
 
     rows.sort(key=lambda item: safe_float(item.get("score"), 0.0), reverse=True)
     return rows
+
+
+def _build_batch_param_heatmap(loop_state: dict[str, Any], *, window: int = 10) -> list[dict[str, Any]]:
+    rounds = loop_state.get("rounds", [])
+    if not isinstance(rounds, list) or not rounds:
+        return []
+    recent = rounds[-max(1, int(window)) :]
+    out: list[dict[str, Any]] = []
+    for row in recent:
+        if not isinstance(row, dict):
+            continue
+        snap = row.get("override_snapshot")
+        snap = snap if isinstance(snap, dict) else {}
+        out.append(
+            {
+                "loop_index": safe_int(row.get("loop_index"), 0),
+                "batch_key": _normalize_batch_key(row.get("batch_key")),
+                "threshold_min": safe_float(snap.get("threshold_min"), 0.0),
+                "vertical_horizon_bars": safe_float(snap.get("vertical_horizon_bars"), 0.0),
+                "tp_mult": safe_float(snap.get("tp_mult"), 0.0),
+                "sl_mult": safe_float(snap.get("sl_mult"), 0.0),
+                "min_events": safe_float(snap.get("min_events"), 0.0),
+                "veto_rate": safe_float((row.get("metrics") or {}).get("veto_rate"), 1.0),
+                "failsafe_veto_all_rate": safe_float((row.get("metrics") or {}).get("failsafe_veto_all_rate"), 1.0),
+                "trades_total_all_window": safe_int((row.get("metrics") or {}).get("trades_total_all_window"), 0),
+                "all_window_alpha": safe_float((row.get("metrics") or {}).get("all_window_alpha"), 0.0),
+            }
+        )
+    return out
 
 
 def _diagnose_latest_round(*, latest_round: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
@@ -958,6 +1011,15 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
         stage_key = "STAGE_ALPHA_RECOVERY"
     active_objective_key = _normalize_objective_key(loop_state.get("active_objective_key"))
     candidate_tier = _normalize_candidate_tier(loop_state.get("candidate_tier"))
+    current_batch_key = _normalize_batch_key(loop_state.get("current_batch_key"))
+    batch_status_key = str(loop_state.get("batch_status_key") or "STATUS_STALLED")
+    batch_outcome_reason_key = _normalize_batch_reason(loop_state.get("batch_outcome_reason_key"))
+    batch_round_index = max(0, safe_int(loop_state.get("batch_round_index"), 0))
+    batch_round_cap = max(1, safe_int(loop_state.get("batch_round_cap"), 1))
+    flow_unlock_cap = max(1, safe_int(loop_state.get("flow_unlock_cap"), 30))
+    quality_recovery_cap = max(1, safe_int(loop_state.get("quality_recovery_cap"), 20))
+    flow_unlock_rounds_run = max(0, safe_int(loop_state.get("flow_unlock_rounds_run"), 0))
+    quality_recovery_rounds_run = max(0, safe_int(loop_state.get("quality_recovery_rounds_run"), 0))
     flow_stage_progress = max(0, min(3, safe_int(loop_state.get("flow_stage_progress"), 0)))
     flow_stage_reason_key = _normalize_flow_reason_key(loop_state.get("flow_stage_reason_key"))
     recovery_milestone_key = _normalize_milestone_key(loop_state.get("recovery_milestone_key"))
@@ -969,6 +1031,7 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
         next_profile_key = str(diagnosis.get("recommended_profile_key") or "PROFILE_BASELINE")
     profile_comparison = _build_profile_comparison(rounds)
     profile_effectiveness = _build_profile_effectiveness(loop_state, window=8)
+    batch_param_heatmap = _build_batch_param_heatmap(loop_state, window=10)
     last_loop_profile = _latest_loop_profile_override(loop_state)
     last_flow_score = safe_float(loop_state.get("last_flow_score"), 0.0)
     last_objective_score = safe_float(loop_state.get("last_objective_score"), 0.0)
@@ -997,6 +1060,15 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
         "recovery_stage_key": stage_key,
         "active_objective_key": active_objective_key,
         "candidate_tier": candidate_tier,
+        "current_batch_key": current_batch_key,
+        "batch_status_key": batch_status_key,
+        "batch_outcome_reason_key": batch_outcome_reason_key,
+        "batch_round_index": batch_round_index,
+        "batch_round_cap": batch_round_cap,
+        "flow_unlock_cap": flow_unlock_cap,
+        "quality_recovery_cap": quality_recovery_cap,
+        "flow_unlock_rounds_run": flow_unlock_rounds_run,
+        "quality_recovery_rounds_run": quality_recovery_rounds_run,
         "flow_stage_progress": flow_stage_progress,
         "flow_stage_reason_key": flow_stage_reason_key,
         "recovery_milestone_key": recovery_milestone_key,
@@ -1007,6 +1079,7 @@ def build_training_roadmap(*, latest_synced: str) -> dict[str, Any]:
         "diagnosis": diagnosis,
         "profile_comparison": profile_comparison,
         "profile_effectiveness": profile_effectiveness,
+        "batch_param_heatmap": batch_param_heatmap,
         "latest_loop_profile": last_loop_profile,
         "latest_round": latest_round,
         "best_round": best_round,
@@ -1207,6 +1280,13 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
     recovery_stage_key = _normalize_stage_key(training_roadmap.get("recovery_stage_key"))
     active_objective_key = _normalize_objective_key(training_roadmap.get("active_objective_key"))
     candidate_tier = _normalize_candidate_tier(training_roadmap.get("candidate_tier"))
+    current_batch_key = _normalize_batch_key(training_roadmap.get("current_batch_key"))
+    batch_status_key = str(training_roadmap.get("batch_status_key") or "STATUS_STALLED")
+    batch_outcome_reason_key = _normalize_batch_reason(training_roadmap.get("batch_outcome_reason_key"))
+    batch_round_index = max(0, safe_int(training_roadmap.get("batch_round_index"), 0))
+    batch_round_cap = max(1, safe_int(training_roadmap.get("batch_round_cap"), 1))
+    flow_unlock_rounds_run = max(0, safe_int(training_roadmap.get("flow_unlock_rounds_run"), 0))
+    quality_recovery_rounds_run = max(0, safe_int(training_roadmap.get("quality_recovery_rounds_run"), 0))
     flow_stage_progress = max(0, min(3, safe_int(training_roadmap.get("flow_stage_progress"), 0)))
     flow_stage_reason_key = _normalize_flow_reason_key(training_roadmap.get("flow_stage_reason_key"))
     recovery_milestone_key = _normalize_milestone_key(training_roadmap.get("recovery_milestone_key"))
@@ -1264,6 +1344,13 @@ def build_training_runtime(*, latest_synced: str, training_roadmap: dict[str, An
         "recovery_stage_key": recovery_stage_key,
         "active_objective_key": active_objective_key,
         "candidate_tier": candidate_tier,
+        "current_batch_key": current_batch_key,
+        "batch_status_key": batch_status_key,
+        "batch_outcome_reason_key": batch_outcome_reason_key,
+        "batch_round_index": batch_round_index,
+        "batch_round_cap": batch_round_cap,
+        "flow_unlock_rounds_run": flow_unlock_rounds_run,
+        "quality_recovery_rounds_run": quality_recovery_rounds_run,
         "flow_stage_progress": flow_stage_progress,
         "flow_stage_reason_key": flow_stage_reason_key,
         "recovery_milestone_key": recovery_milestone_key,

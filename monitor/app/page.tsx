@@ -347,6 +347,7 @@ export default function HomePage() {
   const diagnosis = roadmap?.diagnosis || null;
   const profileComparisonRows = useMemo(() => roadmap?.profile_comparison?.rows || [], [roadmap?.profile_comparison?.rows]);
   const profileEffectivenessRows = useMemo(() => roadmap?.profile_effectiveness || [], [roadmap?.profile_effectiveness]);
+  const batchHeatmapRows = useMemo(() => roadmap?.batch_param_heatmap || [], [roadmap?.batch_param_heatmap]);
 
   return (
     <main className="dashboard">
@@ -446,6 +447,28 @@ export default function HomePage() {
             <span className="label">{t(locale, "earlyGateStatus")}</span>
             <strong className="value">{runtime?.early_gate_hit ? t(locale, "earlyGateHit") : t(locale, "earlyGateMiss")}</strong>
           </article>
+          <article className="card">
+            <span className="label">{t(locale, "currentBatch")}</span>
+            <strong className="value">
+              {t(locale, runtime?.current_batch_key || roadmap?.current_batch_key || "BATCH_FLOW_UNLOCK")}
+            </strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "batchProgress")}</span>
+            <strong className="value">
+              {runtime?.batch_round_index ?? roadmap?.batch_round_index ?? 0}/{runtime?.batch_round_cap ?? roadmap?.batch_round_cap ?? 0}
+            </strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "batchStatus")}</span>
+            <strong className="value">{t(locale, runtime?.batch_status_key || roadmap?.batch_status_key || "STATUS_STALLED")}</strong>
+          </article>
+          <article className="card">
+            <span className="label">{t(locale, "batchOutcome")}</span>
+            <strong className="value">
+              {t(locale, runtime?.batch_outcome_reason_key || roadmap?.batch_outcome_reason_key || "BATCH_REASON_IN_PROGRESS")}
+            </strong>
+          </article>
         </div>
 
         <div className="missionProgress">
@@ -490,6 +513,13 @@ export default function HomePage() {
             <strong>{t(locale, "objective")}:</strong> {t(locale, diagnosis.objective_key || "OBJECTIVE_STABILIZE_GENERALIZATION")} |{" "}
             <strong>{t(locale, "recommendedProfile")}:</strong> {t(locale, diagnosis.recommended_profile_key || "PROFILE_BASELINE")} |{" "}
             <strong>{t(locale, "confidenceScore")}:</strong> {formatPct(Number(diagnosis.confidence || 0))}
+          </div>
+        ) : null}
+        {String(runtime?.batch_outcome_reason_key || roadmap?.batch_outcome_reason_key || "") ===
+        "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR" ? (
+          <div className="missionAlert warn">
+            <strong>{t(locale, "batchOutcome")}:</strong>{" "}
+            {t(locale, runtime?.batch_outcome_reason_key || roadmap?.batch_outcome_reason_key || "BATCH_REASON_IN_PROGRESS")}
           </div>
         ) : null}
       </section>
@@ -743,6 +773,52 @@ export default function HomePage() {
                         <td>{formatSigned(row.delta_alpha)}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty">{t(locale, "na")}</div>
+            )}
+          </article>
+
+          <article className="card profileTableCard">
+            <div className="cardHeader">{t(locale, "batchHeatmapTitle")}</div>
+            <div className="analysisHint">{t(locale, "batchHeatmapHint")}</div>
+            {batchHeatmapRows.length ? (
+              <div className="profileTableWrap">
+                <table className="profileTable">
+                  <thead>
+                    <tr>
+                      <th>R</th>
+                      <th>{t(locale, "currentBatch")}</th>
+                      <th>thr</th>
+                      <th>H</th>
+                      <th>TP</th>
+                      <th>SL</th>
+                      <th>E</th>
+                      <th>{t(locale, "vetoRate")}</th>
+                      <th>{t(locale, "alphaAll")}</th>
+                      <th>T</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {batchHeatmapRows
+                      .slice(-10)
+                      .reverse()
+                      .map((row) => (
+                        <tr key={`${row.loop_index}-${row.batch_key}`}>
+                          <td>{row.loop_index}</td>
+                          <td>{t(locale, row.batch_key || "BATCH_FLOW_UNLOCK")}</td>
+                          <td>{formatNumber(row.threshold_min, 2)}</td>
+                          <td>{formatNumber(row.vertical_horizon_bars, 0)}</td>
+                          <td>{formatNumber(row.tp_mult, 2)}</td>
+                          <td>{formatNumber(row.sl_mult, 2)}</td>
+                          <td>{formatNumber(row.min_events, 0)}</td>
+                          <td>{formatPct(row.veto_rate)}</td>
+                          <td>{formatSigned(row.all_window_alpha)}</td>
+                          <td>{row.trades_total_all_window}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>

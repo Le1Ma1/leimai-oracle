@@ -1,11 +1,11 @@
 {
   "artifact_version": "phase1_training_runtime_v1",
-  "generated_at_utc": "2026-03-06T23:48:28Z",
+  "generated_at_utc": "2026-03-07T05:40:20Z",
   "runtime_status_key": "RUNTIME_STALLED",
   "phase_key": "PHASE_WAITING",
-  "run_id": "iter_r2_264c6bccdb00",
+  "run_id": "iter_r1_35249b06bafb",
   "started_at_utc": "2026-03-06T21:06:52Z",
-  "elapsed_sec": 9696,
+  "elapsed_sec": 30808,
   "remaining_sec": null,
   "eta_utc": null,
   "eta_confidence": "low",
@@ -27,6 +27,13 @@
   "recovery_stage_key": "STAGE_FLOW_RECOVERY",
   "active_objective_key": "OBJECTIVE_FLOW_UNLOCK",
   "candidate_tier": "CANDIDATE_TIER_EXPLORATORY",
+  "current_batch_key": "BATCH_FLOW_UNLOCK",
+  "batch_status_key": "STATUS_STALLED",
+  "batch_outcome_reason_key": "BATCH_REASON_STAGE_CAP_REACHED",
+  "batch_round_index": 1,
+  "batch_round_cap": 30,
+  "flow_unlock_rounds_run": 1,
+  "quality_recovery_rounds_run": 0,
   "flow_stage_progress": 0,
   "flow_stage_reason_key": "FLOW_REASON_NEED_TRADES",
   "recovery_milestone_key": "M1_TRADES",
@@ -34,13 +41,13 @@
   "next_profile_route_reason_key": "ROUTE_TRADE_DENSITY_LOW",
   "early_gate_hit": false,
   "flow_gate_thresholds": {
-    "max_veto_rate": 0.85,
+    "max_veto_rate": 0.93,
     "max_failsafe_veto_all_rate": 0.4,
-    "min_trades_total_all_window": 1,
-    "required_streak": 1
+    "min_trades_total_all_window": 12,
+    "required_streak": 2
   },
   "last_event_at_utc": "2026-03-06T21:11:04Z",
-  "last_sync_at_utc": "2026-03-06T23:48:28Z",
+  "last_sync_at_utc": "2026-03-07T05:40:20Z",
   "notify_event_key": "",
-  "notify_seq": 24
+  "notify_seq": 27
 }

@@ -1,23 +1,23 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "generated_at_utc": "2026-03-06T23:48:28Z",
-  "source_generated_at_utc": "2026-03-06T23:40:32.414943+00:00",
-  "run_id": "iter_r2_264c6bccdb00",
+  "generated_at_utc": "2026-03-07T05:40:20Z",
+  "source_generated_at_utc": "2026-03-07T05:31:24.075239+00:00",
+  "run_id": "iter_r1_35249b06bafb",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
   "metrics": {
     "all_window_alpha": -8.350314790341695,
-    "max_drawdown": 0.38314789068133115,
-    "pbo": 0.5,
+    "max_drawdown": 0.52182298427806,
+    "pbo": 0.41666666666666663,
     "dsr": -2.2293078072747154,
     "precision": 0.0,
     "f1": 0.0,
-    "pr_auc": 0.41347556945944436,
+    "pr_auc": 0.45232512722040574,
     "precision_floor": 0.6,
-    "precision_floor_compliance_rate": 0.5714285714285714,
+    "precision_floor_compliance_rate": 0.6,
     "failsafe_veto_all_rate": 0.5833333333333334,
-    "veto_rate": 0.9952999723527786,
-    "threshold_selected": 0.6050000000000001
+    "veto_rate": 0.983895493502903,
+    "threshold_selected": 0.5950000000000002
   },
   "rejection_breakdown": [
     {
@@ -38,11 +38,11 @@
     },
     {
       "reason_key": "REASON_HIGH_PBO",
-      "count": 7
+      "count": 6
     },
     {
       "reason_key": "REASON_WF_FAIL",
-      "count": 7
+      "count": 6
     }
   ]
 }

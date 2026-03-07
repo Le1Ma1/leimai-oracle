@@ -1,6 +1,6 @@
 {
   "artifact_version": "phase1_training_roadmap_v1",
-  "generated_at_utc": "2026-03-06T23:48:28Z",
+  "generated_at_utc": "2026-03-07T05:40:20Z",
   "status_key": "TRAINING_STATUS_STAGNATED_FLOW_LOCK",
   "gate": {
     "min_validation_pass_rate": 0.2,
@@ -9,29 +9,38 @@
     "required_streak": 2
   },
   "summary": {
-    "rounds_total": 29,
+    "rounds_total": 30,
     "current_streak": 0,
     "required_streak": 2,
     "best_quality_score": 0.715879282021521,
     "stagnation_count": 0,
-    "stagnation_rounds": 30,
-    "hard_cap": 11,
-    "loop_runs": 11,
+    "stagnation_rounds": 6,
+    "hard_cap": 50,
+    "loop_runs": 1,
     "flow_gate_streak": 0,
-    "flow_gate_required_streak": 1,
+    "flow_gate_required_streak": 2,
     "flow_gate_achieved": false,
-    "last_flow_score": 0.08559005180566169,
-    "last_objective_score": 0.08559005180566169
+    "last_flow_score": 0.10509888884570112,
+    "last_objective_score": 0.10509888884570112
   },
   "flow_gate": {
-    "max_veto_rate": 0.85,
+    "max_veto_rate": 0.93,
     "max_failsafe_veto_all_rate": 0.4,
-    "min_trades_total_all_window": 1,
-    "required_streak": 1
+    "min_trades_total_all_window": 12,
+    "required_streak": 2
   },
   "recovery_stage_key": "STAGE_FLOW_RECOVERY",
   "active_objective_key": "OBJECTIVE_FLOW_UNLOCK",
   "candidate_tier": "CANDIDATE_TIER_EXPLORATORY",
+  "current_batch_key": "BATCH_FLOW_UNLOCK",
+  "batch_status_key": "STATUS_STALLED",
+  "batch_outcome_reason_key": "BATCH_REASON_STAGE_CAP_REACHED",
+  "batch_round_index": 1,
+  "batch_round_cap": 30,
+  "flow_unlock_cap": 30,
+  "quality_recovery_cap": 20,
+  "flow_unlock_rounds_run": 1,
+  "quality_recovery_rounds_run": 0,
   "flow_stage_progress": 0,
   "flow_stage_reason_key": "FLOW_REASON_NEED_TRADES",
   "recovery_milestone_key": "M1_TRADES",
@@ -68,7 +77,7 @@
       },
       {
         "reason_key": "REASON_TRADE_DENSITY_LOW",
-        "severity": 0.9952999723527786,
+        "severity": 0.983895493502903,
         "observed": 0.0,
         "target": 1.0
       }
@@ -79,11 +88,11 @@
     "rows": [
       {
         "profile_key": "PROFILE_BASELINE",
-        "rounds": 10,
-        "avg_pass_rate": 0.2946428571428571,
-        "avg_all_window_alpha": -1.7553098189600689,
-        "avg_veto_pressure": 0.09952999723527786,
-        "avg_quality_score": 0.26908792820215216,
+        "rounds": 11,
+        "avg_pass_rate": 0.26785714285714285,
+        "avg_all_window_alpha": -2.354855725449308,
+        "avg_veto_pressure": 0.17992686053233467,
+        "avg_quality_score": 0.2514435710928656,
         "gate_hit_rate": 0.0
       },
       {
@@ -96,64 +105,46 @@
         "gate_hit_rate": 0.0
       }
     ],
-    "sampled_rounds": 29
+    "sampled_rounds": 30
   },
-  "profile_effectiveness": [
+  "profile_effectiveness": [],
+  "batch_param_heatmap": [
     {
-      "profile_key": "PROFILE_EVENT_EXPANSION",
-      "recent_rounds": 1,
-      "delta_veto": 0.023154547967929262,
-      "delta_trades": 0.0,
-      "delta_alpha": 0.0,
-      "score": 0.011577273983964631
-    },
-    {
-      "profile_key": "PROFILE_UNKNOWN",
-      "recent_rounds": 4,
-      "delta_veto": 0.0,
-      "delta_trades": 0.0,
-      "delta_alpha": 0.0,
-      "score": 0.0
-    },
-    {
-      "profile_key": "PROFILE_ALPHA_RESCUE",
-      "recent_rounds": 1,
-      "delta_veto": 0.0,
-      "delta_trades": 0.0,
-      "delta_alpha": 0.0,
-      "score": 0.0
-    },
-    {
-      "profile_key": "PROFILE_PRECISION_RECOVERY",
-      "recent_rounds": 1,
-      "delta_veto": -0.018454520320707823,
-      "delta_trades": 0.0,
-      "delta_alpha": 0.0,
-      "score": -0.009227260160353912
+      "loop_index": 1,
+      "batch_key": "BATCH_FLOW_UNLOCK",
+      "threshold_min": 0.44,
+      "vertical_horizon_bars": 24.0,
+      "tp_mult": 1.2,
+      "sl_mult": 1.05,
+      "min_events": 40.0,
+      "veto_rate": 0.983895493502903,
+      "failsafe_veto_all_rate": 0.5833333333333334,
+      "trades_total_all_window": 0,
+      "all_window_alpha": -8.350314790341695
     }
   ],
   "latest_loop_profile": {
-    "profile_name": "r3_precision_recovery",
-    "profile_key": "PROFILE_PRECISION_RECOVERY",
-    "profile_route_reason_key": "ROUTE_STABILITY_SCAN",
+    "profile_name": "r2_event_expansion",
+    "profile_key": "PROFILE_EVENT_EXPANSION",
+    "profile_route_reason_key": "ROUTE_BATCH_EXPLORATION",
     "candidate_tier": "CANDIDATE_TIER_EXPLORATORY",
     "overrides": {
       "ENGINE_META_LABEL_THRESHOLD_STEP": "0.005",
       "ENGINE_META_LABEL_PROB_THRESHOLD_FALLBACK": "0.55",
-      "ENGINE_META_LABEL_TP_MULT": "1.28",
-      "ENGINE_META_LABEL_SL_MULT": "0.92",
-      "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "20",
-      "ENGINE_META_LABEL_VOL_WINDOW": "20",
-      "ENGINE_META_LABEL_THRESHOLD_MIN": "0.50",
-      "ENGINE_META_LABEL_MIN_EVENTS": "55",
-      "ENGINE_META_LABEL_CPCV_SPLITS": "6",
-      "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "2"
+      "ENGINE_META_LABEL_TP_MULT": "1.20",
+      "ENGINE_META_LABEL_SL_MULT": "1.05",
+      "ENGINE_META_LABEL_VERTICAL_HORIZON_BARS": "24",
+      "ENGINE_META_LABEL_VOL_WINDOW": "18",
+      "ENGINE_META_LABEL_THRESHOLD_MIN": "0.44",
+      "ENGINE_META_LABEL_MIN_EVENTS": "40",
+      "ENGINE_META_LABEL_CPCV_SPLITS": "5",
+      "ENGINE_META_LABEL_CPCV_TEST_GROUPS": "1"
     }
   },
   "latest_round": {
-    "round_index": 29,
-    "ts_utc": "2026-03-06T23:41:44.632779+00:00",
-    "run_id": "iter_r1_11e13845ab5a",
+    "round_index": 30,
+    "ts_utc": "2026-03-07T05:38:23.977779+00:00",
+    "run_id": "iter_r1_35249b06bafb",
     "status_key": "STATUS_STALLED",
     "regime_key": "REGIME_VETO_HOLD",
     "validation_pass_rate": 0.0,
@@ -163,22 +154,22 @@
     "deploy_rules": 0,
     "trades_total_all_window": 0,
     "trades_avg_all_window": 0.0,
-    "pbo": 0.5,
+    "pbo": 0.41666666666666663,
     "dsr": -2.2293078072747154,
     "precision": 0.0,
     "f1": 0.0,
-    "pr_auc": 0.41347556945944436,
+    "pr_auc": 0.45232512722040574,
     "precision_floor": 0.6,
-    "precision_floor_compliance_rate": 0.5714285714285714,
+    "precision_floor_compliance_rate": 0.6,
     "failsafe_veto_all_rate": 0.5833333333333334,
-    "veto_rate": 0.9952999723527786,
-    "threshold_selected": 0.6050000000000001,
+    "veto_rate": 0.983895493502903,
+    "threshold_selected": 0.5950000000000002,
     "primary_bottleneck": "validation_quality",
     "recommended_action": "strengthen_robustness_and_reduce_overfit",
     "decision_rationale": "validation_pass_rate=0.0000, median_final_score=0.4254 below convergence target",
-    "round_profile": "r2_trade_floor_90",
+    "round_profile": "r1_baseline",
     "config_snapshot": {
-      "trade_floor": 90,
+      "trade_floor": 100,
       "rsi_windows": [
         14,
         21
@@ -213,14 +204,14 @@
       },
       {
         "reason_key": "REASON_HIGH_PBO",
-        "count": 7
+        "count": 6
       },
       {
         "reason_key": "REASON_WF_FAIL",
-        "count": 7
+        "count": 6
       }
     ],
-    "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T234144Z_37c066ce.json",
+    "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-07\\iteration_20260307T053823Z_93b8c123.json",
     "gate_hit": false,
     "quality_score": 0.075
   },
@@ -2067,6 +2058,80 @@
         }
       ],
       "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-06\\iteration_20260306T234144Z_37c066ce.json",
+      "gate_hit": false,
+      "quality_score": 0.075
+    },
+    {
+      "round_index": 30,
+      "ts_utc": "2026-03-07T05:38:23.977779+00:00",
+      "run_id": "iter_r1_35249b06bafb",
+      "status_key": "STATUS_STALLED",
+      "regime_key": "REGIME_VETO_HOLD",
+      "validation_pass_rate": 0.0,
+      "all_window_alpha": -8.350314790341695,
+      "deploy_ready": false,
+      "deploy_symbols": 0,
+      "deploy_rules": 0,
+      "trades_total_all_window": 0,
+      "trades_avg_all_window": 0.0,
+      "pbo": 0.41666666666666663,
+      "dsr": -2.2293078072747154,
+      "precision": 0.0,
+      "f1": 0.0,
+      "pr_auc": 0.45232512722040574,
+      "precision_floor": 0.6,
+      "precision_floor_compliance_rate": 0.6,
+      "failsafe_veto_all_rate": 0.5833333333333334,
+      "veto_rate": 0.983895493502903,
+      "threshold_selected": 0.5950000000000002,
+      "primary_bottleneck": "validation_quality",
+      "recommended_action": "strengthen_robustness_and_reduce_overfit",
+      "decision_rationale": "validation_pass_rate=0.0000, median_final_score=0.4254 below convergence target",
+      "round_profile": "r1_baseline",
+      "config_snapshot": {
+        "trade_floor": 100,
+        "rsi_windows": [
+          14,
+          21
+        ],
+        "rsi_lower_bounds": [
+          30,
+          35
+        ],
+        "rsi_upper_bounds": [
+          65,
+          70
+        ]
+      },
+      "objective_balance_score": 0.075,
+      "rejection_top_reason_key": "REASON_DSR_BELOW_MIN",
+      "rejection_breakdown": [
+        {
+          "reason_key": "REASON_DSR_BELOW_MIN",
+          "count": 12
+        },
+        {
+          "reason_key": "REASON_CV_FAIL",
+          "count": 8
+        },
+        {
+          "reason_key": "REASON_FINAL_SCORE_LOW",
+          "count": 8
+        },
+        {
+          "reason_key": "REASON_LOW_PRECISION",
+          "count": 7
+        },
+        {
+          "reason_key": "REASON_HIGH_PBO",
+          "count": 6
+        },
+        {
+          "reason_key": "REASON_WF_FAIL",
+          "count": 6
+        }
+      ],
+      "iteration_file": "C:\\Users\\leimai\\Desktop\\leimai-oracle\\engine\\artifacts\\optimization\\single\\iterations\\2026-03-07\\iteration_20260307T053823Z_93b8c123.json",
       "gate_hit": false,
       "quality_score": 0.075
     }

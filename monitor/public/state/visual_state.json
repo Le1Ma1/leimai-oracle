@@ -1,18 +1,18 @@
 {
   "artifact_version": "phase1_meta_label_v2",
-  "last_synced_at": "2026-03-06T23:48:28Z",
-  "run_id": "iter_r2_264c6bccdb00",
+  "last_synced_at": "2026-03-07T05:40:20Z",
+  "run_id": "iter_r1_35249b06bafb",
   "status_key": "STATUS_STALLED",
   "regime_key": "REGIME_VETO_HOLD",
   "heartbeat_ok": true,
   "live_alpha_vs_spot": -8.350314790341695,
-  "max_drawdown": 0.38314789068133115,
+  "max_drawdown": 0.52182298427806,
   "meta_diagnostics": {
     "precision_floor": 0.6,
-    "precision_floor_compliance_rate": 0.5714285714285714,
+    "precision_floor_compliance_rate": 0.6,
     "failsafe_veto_all_rate": 0.5833333333333334,
-    "veto_rate": 0.9952999723527786,
-    "threshold_selected": 0.6050000000000001
+    "veto_rate": 0.983895493502903,
+    "threshold_selected": 0.5950000000000002
   },
   "rejection_breakdown": [
     {
@@ -33,11 +33,11 @@
     },
     {
       "reason_key": "REASON_HIGH_PBO",
-      "count": 7
+      "count": 6
     },
     {
       "reason_key": "REASON_WF_FAIL",
-      "count": 7
+      "count": 6
     }
   ]
 }

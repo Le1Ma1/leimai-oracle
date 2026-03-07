@@ -62,6 +62,18 @@ export type RouteReasonKey =
   | "ROUTE_ALPHA_NEGATIVE"
   | "ROUTE_STABILITY_SCAN"
   | "ROUTE_PROFILE_EFFECTIVENESS_OVERRIDE"
+  | "ROUTE_BATCH_EXPLORATION"
+  | string;
+
+export type BatchKey = "BATCH_FLOW_UNLOCK" | "BATCH_QUALITY_RECOVERY" | string;
+export type BatchReasonKey =
+  | "BATCH_REASON_IN_PROGRESS"
+  | "BATCH_REASON_STAGE_CAP_REACHED"
+  | "BATCH_REASON_FLOW_GATE_HIT"
+  | "BATCH_REASON_QUALITY_GATE_HIT"
+  | "BATCH_REASON_STAGNATION_LIMIT"
+  | "BATCH_REASON_HARD_CAP_REACHED"
+  | "BATCH_REASON_NO_THRESHOLD_MEETS_PRECISION_FLOOR"
   | string;
 
 export type ProfileKey =
@@ -204,6 +216,15 @@ export interface TrainingRoadmap {
   recovery_stage_key?: RecoveryStageKey | string;
   active_objective_key?: DiagnosisObjectiveKey | string;
   candidate_tier?: CandidateTierKey | string;
+  current_batch_key?: BatchKey | string;
+  batch_status_key?: StatusKey | string;
+  batch_outcome_reason_key?: BatchReasonKey | string;
+  batch_round_index?: number;
+  batch_round_cap?: number;
+  flow_unlock_cap?: number;
+  quality_recovery_cap?: number;
+  flow_unlock_rounds_run?: number;
+  quality_recovery_rounds_run?: number;
   flow_stage_progress?: number;
   flow_stage_reason_key?: FlowStageReasonKey | string;
   recovery_milestone_key?: RecoveryMilestoneKey | string;
@@ -243,6 +264,19 @@ export interface TrainingRoadmap {
     delta_trades: number;
     delta_alpha: number;
     score: number;
+  }>;
+  batch_param_heatmap?: Array<{
+    loop_index: number;
+    batch_key: BatchKey | string;
+    threshold_min: number;
+    vertical_horizon_bars: number;
+    tp_mult: number;
+    sl_mult: number;
+    min_events: number;
+    veto_rate: number;
+    failsafe_veto_all_rate: number;
+    trades_total_all_window: number;
+    all_window_alpha: number;
   }>;
   latest_loop_profile?: {
     profile_name: string;
@@ -285,6 +319,13 @@ export interface TrainingRuntime {
   recovery_stage_key: RecoveryStageKey | string;
   active_objective_key: DiagnosisObjectiveKey | string;
   candidate_tier: CandidateTierKey | string;
+  current_batch_key: BatchKey | string;
+  batch_status_key: StatusKey | string;
+  batch_outcome_reason_key: BatchReasonKey | string;
+  batch_round_index: number;
+  batch_round_cap: number;
+  flow_unlock_rounds_run: number;
+  quality_recovery_rounds_run: number;
   flow_stage_progress: number;
   flow_stage_reason_key: FlowStageReasonKey | string;
   recovery_milestone_key: RecoveryMilestoneKey | string;
